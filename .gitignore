@@ -1,0 +1,8 @@
+# завантажується start.bat автоматично — у репозиторій не потрібно
+python/
+ffmpeg/
+ffmpeg.exe
+ffprobe.exe
+.no-ffmpeg
+__pycache__/
+*.pyc

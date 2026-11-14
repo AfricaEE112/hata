@@ -1,0 +1,6 @@
+* text=auto
+# start.bat має бути з віндовськими кінцями рядків, інакше cmd може плутатися в мітках
+*.bat text eol=crlf
+*.woff binary
+*.png binary
+*.jpg binary
