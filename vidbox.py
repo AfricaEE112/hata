@@ -38,11 +38,12 @@ import traceback
 import urllib.parse
 import webbrowser
 import zlib
+import platform
 import string
 from concurrent.futures import ThreadPoolExecutor
 
 APP = 'VidBox'
-VERSION = '0.3'
+VERSION = '0.4'
 
 VIDEO_EXT = {
     '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
@@ -775,7 +776,7 @@ def library_json():
     return {'videos': vids, 'folders': folders, 'ffmpeg': bool(C.ffmpeg), 'pending': pending,
             'spritesPending': sprites if C.cfg.get('sprites', True) else 0, 'spriteN': SPRITE_N,
             'weekSec': round(st['week_sec']),
-            'cfg': {k: C.cfg[k] for k in ('autoplay_next', 'next_delay', 'resume', 'ui')}}
+            'cfg': {k: C.cfg[k] for k in ('autoplay_next', 'next_delay', 'resume', 'ui', 'theme')}}
 
 
 def on_ping(d):
@@ -821,8 +822,12 @@ DEFAULTS = {
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},
+    'theme': 'cinema',
     'password_hash': '', 'secret': '',
 }
+THEMES = {'cinema', 'nord', 'sweet', 'exodia', 'projector'}
+STARTED = time.time()
+_ffmpeg_ver = []
 SORT_KEYS = {'score', 'added', 'name', 'size', 'dur', 'res', 'views', 'last', 'folder', 'random'}
 CFG_LOCK = threading.RLock()
 
@@ -901,6 +906,8 @@ def apply_settings(d):
         for k in ('autoplay_next', 'resume', 'sprites', 'open_browser'):
             if k in d:
                 cfg[k] = bool(d[k])
+        if d.get('theme') in THEMES:
+            cfg['theme'] = d['theme']
         num('next_delay', 3, 60, int)
         num('rescan_min', 1, 1440, int)
         num('port', 1024, 65535, int)
@@ -1005,7 +1012,27 @@ def settings_json():
         orphans=len(orphan_ids()), hasPassword=bool(cfg['password_hash']),
         ffmpeg=C.ffmpeg, data=C.data, version=VERSION, portNow=C.port,
         urls=['http://%s:%d' % (ip, C.port) for ip in lan_ips()])
+    # для блоку «Про програму» у стилі neofetch
+    t = DB.one('SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS size, COALESCE(SUM(duration), 0) AS dur '
+               'FROM videos WHERE missing=0')
+    out.update(host=socket.gethostname(), uptime=round(time.time() - STARTED),
+               totals={'videos': t['n'], 'size': t['size'], 'dur': t['dur']},
+               python=platform.python_version(), os='%s %s' % (platform.system(), platform.release()),
+               ffmpegVersion=ffmpeg_version())
     return out
+
+
+def ffmpeg_version():
+    if not _ffmpeg_ver:
+        v = ''
+        if C.ffmpeg:
+            try:
+                first = run([C.ffmpeg, '-version'], 10).stdout.decode('utf-8', 'replace').splitlines()[0]
+                v = first.split(' version ')[1].split(' ')[0] if ' version ' in first else first
+            except Exception:
+                v = ''
+        _ffmpeg_ver.append(v)
+    return _ffmpeg_ver[0]
 
 
 def list_dirs(path):

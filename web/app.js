@@ -35,6 +35,11 @@ const I = {
   folder: svg('<path d="M3.5 7a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>'),
   plus: svg('<path d="M12 5v14M5 12h14"/>'),
   trash: svg('<path d="M4.5 7h15M10 11v6M14 11v6M6 7l.9 11.2a2 2 0 0 0 2 1.8h6.2a2 2 0 0 0 2-1.8L18 7M9 7V4.5h6V7"/>'),
+  rew: svg('<path d="M11 18 4.5 12 11 6zM19.5 18 13 12l6.5-6z"/>', 'solid'),
+  ff: svg('<path d="M13 6l6.5 6-6.5 6zM4.5 6 11 12l-6.5 6z"/>', 'solid'),
+  back10: svg('<path d="M4.6 13a7.5 7.5 0 1 0 2.1-6.4M4.5 3.8v4h4"/><text x="12.3" y="15.6" text-anchor="middle" font-size="7.2" font-weight="700" fill="currentColor" stroke="none" font-family="system-ui,sans-serif">10</text>'),
+  fwd10: svg('<path d="M19.4 13a7.5 7.5 0 1 1-2.1-6.4M19.5 3.8v4h-4"/><text x="11.7" y="15.6" text-anchor="middle" font-size="7.2" font-weight="700" fill="currentColor" stroke="none" font-family="system-ui,sans-serif">10</text>'),
+  pip: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11.5" width="7" height="5.5" rx="1" fill="currentColor" stroke="none"/>'),
 };
 
 // ── утиліти ──
@@ -50,7 +55,7 @@ function fmtLen(s) {
   const h = Math.floor(s / 3600), m = Math.round(s % 3600 / 60);
   return h ? `${h} год ${m} хв` : (m ? `${m} хв` : `${Math.round(s)} с`);
 }
-const fmtSize = b => !b ? '' : b >= 1073741824 ? (b / 1073741824).toFixed(1).replace('.', ',') + ' ГБ' : Math.round(b / 1048576) + ' МБ';
+const fmtSize = b => !b ? '' : b >= 1099511627776 ? (b / 1099511627776).toFixed(2).replace('.', ',') + ' ТБ' : b >= 1073741824 ? (b / 1073741824).toFixed(1).replace('.', ',') + ' ГБ' : Math.round(b / 1048576) + ' МБ';
 const fmtDate = ts => ts ? new Date(ts * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'long', year: 'numeric'}) : '';
 function ago(ts) {
   if (!ts) return 'ніколи';
@@ -97,7 +102,10 @@ async function load() {
   S.videos = d.videos;
   S.by = Object.fromEntries(d.videos.map(v => [v.id, v]));
   Object.assign(S, {folders: d.folders, ffmpeg: d.ffmpeg, pending: d.pending, spritesPending: d.spritesPending, N: d.spriteN || 20, weekSec: d.weekSec, loaded: true});
-  if (d.cfg) S.cfg = d.cfg;
+  if (d.cfg) {
+    S.cfg = d.cfg;
+    if (d.cfg.theme && d.cfg.theme !== document.documentElement.dataset.theme) applyTheme(d.cfg.theme);
+  }
 }
 let toastT;
 function toast(msg, btn, fn) {
@@ -108,6 +116,37 @@ function toast(msg, btn, fn) {
   clearTimeout(toastT);
   toastT = setTimeout(() => t.classList.remove('show'), btn ? 6000 : 2600);
 }
+
+// ── теми, атмосфера, годинник ──
+// Щоб додати тему: блок змінних у style.css + запис тут + назва в THEMES у vidbox.py.
+const THEMES = [
+  {id: 'cinema', name: 'Cinema', hint: 'Глибокий синій, як зал кінотеатру', bg: '#070b14', p: '#0e1524', a: '#2ea8ff', a2: '#8a6bff'},
+  {id: 'nord', name: 'Nord', hint: 'Спокійний сіро-блакитний', bg: '#21262f', p: '#2b313c', a: '#88c0d0', a2: '#b48ead'},
+  {id: 'sweet', name: 'Sweet', hint: 'Неоновий рожевий і бірюза', bg: '#100e1a', p: '#1a1729', a: '#ff4fd8', a2: '#38d9f5'},
+  {id: 'exodia', name: 'Exodia', hint: 'Фіолетовий з кислотно-зеленим', bg: '#09060f', p: '#130e1e', a: '#b56bff', a2: '#46f59a'},
+  {id: 'projector', name: 'Проєктор', hint: 'Тепле бурштинове світло', bg: '#0f1420', p: '#161d2b', a: '#f2b544', a2: '#ff7a59'},
+];
+function applyTheme(id) {
+  const t = THEMES.find(x => x.id === id) || THEMES[0];
+  document.documentElement.dataset.theme = t.id;
+  LS.set('theme', t.id);
+  const m = $('meta[name=theme-color]');
+  if (m) m.content = t.bg;
+}
+let atmoUrl = '';
+function setAtmo(v) {
+  // розмитий кадр поточного відео як «шпалери» під усім сайтом
+  const url = !v ? '' : v.thumb ? `/thumb/${v.id}?v=${v.thumb}` : hasSprite(v) ? hdUrl(v, 6) : '';
+  if (url === atmoUrl) return;
+  atmoUrl = url;
+  $('#atmo').style.backgroundImage = url ? `url(${url})` : '';
+}
+function tick() {
+  const d = new Date(), el = $('#clock');
+  if (el) el.innerHTML = `${esc(d.toLocaleDateString('uk-UA', {weekday: 'short', day: 'numeric', month: 'short'}))} <b>${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}</b>`;
+}
+tick();
+setInterval(tick, 15000);
 
 // ── обкладинки й картки ──
 function hue(id) { return parseInt(id.slice(0, 4), 16) % 360; }
@@ -310,32 +349,103 @@ function weekRange(w) {
   const mon = d => d.toLocaleDateString('uk-UA', {day: 'numeric', month: 'long'});
   return a.getMonth() === b.getMonth() ? `${a.getDate()}–${mon(b)}` : `${mon(a)} – ${mon(b)}`;
 }
-function heroHTML(v) {
-  const has = hasSprite(v);
+// Прожектор: відео тижня + решта підбірки, гортаються самі кожні 8 секунд
+function spotList(week) {
+  const ids = [week.hero].concat(...week.sections.map(s => s.ids));
+  return ids.filter((id, i) => id && ids.indexOf(id) === i && S.by[id]).slice(0, 6).map(id => S.by[id]);
+}
+function spotBg(v) {
+  if (hasSprite(v)) return `background-image:url(${hdUrl(v, 6)})`;
+  if (v.thumb) return `background-image:url(/thumb/${v.id}?v=${v.thumb})`;
+  return `background-image:linear-gradient(135deg,hsl(${hue(v.id)} 35% 24%),transparent)`;
+}
+function cardBg(v) {
+  if (v.thumb) return `background-image:url(/thumb/${v.id}?v=${v.thumb})`;
+  return hasSprite(v) ? frameBg(v, 3) : `background-image:linear-gradient(135deg,hsl(${hue(v.id)} 35% 26%),hsl(${(hue(v.id) + 50) % 360} 35% 12%))`;
+}
+function spotDesc(v) {
+  const where = `З папки «${shortFolder(v.folder)}».`;
+  if (S.cfg.resume && v.pos > 15 && v.dur && v.pos < v.dur * 0.95) return `${where} Ти зупинився на ${fmtDur(v.pos)}, залишилось ${fmtLen(v.dur - v.pos)}.`;
+  if (v.views) return `${where} Переглянуто ${v.views} ${plural(v.views, 'раз', 'рази', 'разів')}, востаннє ${ago(v.last)}. Рейтинг ${Math.round(v.score)} зі 100.`;
+  return `${where} Ти його ще не дивився, додано ${ago(v.added)}.`;
+}
+function spotCopy(v, i) {
   const resume = S.cfg.resume && v.pos > 15 && v.dur && v.pos < v.dur * 0.95;
-  const contact = has ? `<div class="contact" id="heroStrip">${Array.from({length: S.N}, (_, i) =>
-    `<button data-i="${i}" style="${frameBg(v, i)}" aria-label="Дивитися з ${fmtDur(frameT(v, i))}"></button>`).join('')}</div>` : '';
-  const bg = v.thumb ? `/thumb/${v.id}?v=${v.thumb}` : '';
-  return `<section class="hero"><div class="hero-bg" style="${bg ? `background-image:url(${bg})` : ''}"></div>
-    <div class="hero-copy"><p class="kicker">Відео тижня</p><h1 class="title">${esc(v.title)}</h1>
-      <div class="meta">${metaHTML(v)}</div>
-      <div class="acts"><a class="btn primary" href="#/v/${v.id}">${I.play}${resume ? 'Продовжити' : 'Дивитися'}</a>
-        <a class="btn ghost" href="#/i/${v.id}">${I.info}Детальніше</a></div></div>
-    <div class="hero-media"><a class="screen" id="heroScreen" href="#/i/${v.id}" aria-label="Детальніше">${has ? screenLayers : `<div class="cv">${cover(v)}</div>`}</a>${contact}</div></section>`;
+  const rated = v.views || v.vote;
+  const chips = [v.dur ? `<span>${fmtLen(v.dur)}</span>` : '', resLabel(v) ? `<span>${resLabel(v)}</span>` : '', `<span>${esc(v.ext.toUpperCase())}</span>`,
+    rated ? `<span${v.score >= 70 ? ' class="hl"' : ''}>★ ${Math.round(v.score)}</span>` : '<span class="hl">нове для тебе</span>'].join('');
+  return `<div class="spot-copy" id="spotCopy"><p class="spot-kicker">#${i + 1} ${i ? 'у підбірці тижня' : 'відео тижня'}</p>
+    <h1 class="spot-title">${esc(v.title)}</h1><div class="chipset">${chips}</div><p class="spot-desc">${esc(spotDesc(v))}</p>
+    <div class="acts"><a class="btn primary" href="#/v/${v.id}">${I.play}${resume ? 'Продовжити' : 'Дивитися'}</a><a class="btn" href="#/i/${v.id}">${I.info}Детальніше</a></div></div>`;
+}
+function spotHTML(list) {
+  const many = list.length > 1, nn = k => String(k).padStart(2, '0');
+  return `<section class="spot" id="spot" aria-label="Підбірка тижня">
+    ${list.map((v, i) => `<div class="spot-bg${i ? '' : ' on'}" style="${spotBg(v)}"></div>`).join('')}<div class="spot-shade"></div>
+    <div class="spot-body">${spotCopy(list[0], 0)}
+      ${many ? `<div class="spot-side"><p>У підбірці тижня</p><div class="spot-cards" id="spotCards">${list.map((v, i) =>
+        `<button class="spot-card${i ? '' : ' on'}" data-i="${i}" style="${cardBg(v)}" aria-label="${esc(v.title)}"><small class="n">${nn(i + 1)}</small><span>${esc(v.title)}</span></button>`).join('')}</div></div>` : ''}
+    </div>
+    ${many ? `<div class="spot-nav"><button class="btn icon round" data-spot="-1" aria-label="Попереднє відео">${I.left}</button><span class="count"><b id="spotN">01</b> / ${nn(list.length)}</span>` +
+      `<button class="btn icon round" data-spot="1" aria-label="Наступне відео">${I.right}</button></div><div class="spot-timer"><b id="spotT"></b></div>` : ''}
+  </section>`;
+}
+function mountSpot(list) {
+  const root = $('#spot');
+  if (!root) return;
+  setAtmo(list[0]);
+  if (list.length < 2) return;
+  const bar = $('#spotT'), cards = $('#spotCards');
+  let i = 0;
+  function goTo(n) {
+    i = (n + list.length) % list.length;
+    $$('.spot-bg', root).forEach((el, k) => el.classList.toggle('on', k === i));
+    $$('.spot-card', root).forEach((el, k) => el.classList.toggle('on', k === i));
+    const c = cards.children[i];
+    if (c.offsetLeft < cards.scrollLeft || c.offsetLeft + c.offsetWidth > cards.scrollLeft + cards.clientWidth) cards.scrollTo({left: c.offsetLeft - 4, behavior: 'smooth'});
+    const tmp = document.createElement('div');
+    tmp.innerHTML = spotCopy(list[i], i);
+    $('#spotCopy').replaceWith(tmp.firstElementChild);
+    $('#spotN').textContent = String(i + 1).padStart(2, '0');
+    setAtmo(list[i]);
+    restart();
+  }
+  function restart() {
+    if (RM.matches) return;
+    bar.classList.remove('run');
+    void bar.offsetWidth;
+    bar.classList.add('run');
+  }
+  bar.addEventListener('animationend', () => goTo(i + 1));   // смужка внизу добігла — наступне
+  root.addEventListener('mouseenter', () => root.classList.add('hold'));
+  root.addEventListener('mouseleave', () => root.classList.remove('hold'));
+  root.addEventListener('focusin', () => root.classList.add('hold'));
+  root.addEventListener('focusout', () => root.classList.remove('hold'));
+  root.addEventListener('click', e => {
+    const s = e.target.closest('[data-spot]');
+    if (s) return goTo(i + +s.dataset.spot);
+    const c = e.target.closest('.spot-card');
+    if (c) goTo(+c.dataset.i);
+  });
+  let sx = null;   // свайп по банеру на телефоні
+  root.addEventListener('pointerdown', e => { sx = e.pointerType === 'touch' && !e.target.closest('.spot-cards') ? e.clientX : null; });
+  root.addEventListener('pointerup', e => { if (sx != null && Math.abs(e.clientX - sx) > 60) goTo(i + (e.clientX < sx ? 1 : -1)); sx = null; });
+  restart();
 }
 async function renderHome() {
   const [, week] = await Promise.all([load(), api('/api/week')]);
   S.week = week;
   const vs = S.videos;
   if (!vs.length) {
-    app.innerHTML = `<div class="empty"><h1 class="title">Тут поки порожньо</h1>VidBox не знайшов відео у вибраній папці. Підходять mp4, mkv, webm, mov, avi та інші.<br><br><button class="btn" id="rs">${I.refresh}Пересканувати папку</button></div>`;
+    setAtmo(null);
+    app.innerHTML = `<div class="empty"><h1 class="title">Тут поки порожньо</h1>VidBox не знайшов відео у вибраних папках. Підходять mp4, mkv, webm, mov, avi та інші.<br><br>` +
+      `<a class="btn primary" href="#/settings">${I.folder}Додати папку</a> <button class="btn" id="rs">${I.refresh}Пересканувати</button></div>`;
     $('#rs').onclick = rescan;
     return;
   }
-  let html = '';
-  const hero = S.by[week.hero];
-  if (hero) html += heroHTML(hero);
-  const cont = vs.filter(v => v.pos > 15 && v.dur && v.pos < v.dur * 0.95).sort((a, b) => b.posAt - a.posAt).slice(0, 12);
+  const list = spotList(week);
+  let html = list.length ? spotHTML(list) : '';
+  const cont = vs.filter(v => S.cfg.resume && v.pos > 15 && v.dur && v.pos < v.dur * 0.95).sort((a, b) => b.posAt - a.posAt).slice(0, 12);
   html += shelf('Продовжити перегляд', '', cont, {meta: v => [shortFolder(v.folder), 'ще ' + fmtLen(v.dur - v.pos)]});
   const weekShelves = week.sections.map(s => shelf(s.title, s.sub, s.ids.map(i => S.by[i]).filter(Boolean), {small: true})).join('');
   html += `<div class="week"><div class="week-head"><h2 class="title">Підбірка тижня</h2><span class="dates">${weekRange(week)}</span>` +
@@ -353,10 +463,7 @@ async function renderHome() {
     await renderBase(baseHash, true);
     toast('Зібрав нову підбірку');
   };
-  if (hero && hasSprite(hero)) {
-    const vw = frameViewer($('#heroScreen'), hero, $('#heroStrip'), i => go(`#/v/${hero.id}/${Math.floor(frameT(hero, i))}`));
-    cleanup = () => vw.stop();
-  }
+  mountSpot(list);
 }
 
 // ── Бібліотека ──
@@ -507,6 +614,11 @@ async function renderSettings() {
   app.innerHTML = `<div class="page-head"><h1 class="title">Налаштування</h1></div>
   <p class="lead">Зміни зберігаються одразу на комп’ютері, у файлі config.json, і діють після наступного запуску теж.</p>
   <div class="settings">
+  <section class="set"><h2>Тема</h2>
+    <p class="note" style="margin-top:0">Кольори всього сайту. Зберігається на ПК, тож тема однакова на всіх пристроях.</p>
+    <div class="themes">${THEMES.map(t => `<button class="theme${st.theme === t.id ? ' on' : ''}" data-theme-pick="${t.id}" aria-pressed="${st.theme === t.id}" ` +
+      `style="--t-bg:${t.bg};--t-p:${t.p};--t-a:${t.a};--t-a2:${t.a2}"><span class="tp"><i></i><i></i><i></i></span><b>${t.name}</b><small>${t.hint}</small></button>`).join('')}</div>
+  </section>
   <section class="set"><h2>Папки з відео</h2>
     <div class="flist">${st.folders.map((f, i) => `<div class="frow">${I.folder}<div><b>${esc(f.path)}</b><small>${f.exists ? f.count + ' відео' : 'Папку не знайдено. Можливо, диск від’єднано.'}</small></div>` +
       `<button class="btn ghost icon" data-rm="${i}" title="Прибрати папку" aria-label="Прибрати папку ${esc(f.path)}"${st.folders.length < 2 ? ' disabled' : ''}>${I.trash}</button></div>`).join('')}</div>
@@ -536,10 +648,13 @@ async function renderSettings() {
     ${row('Відкривати сайт на ПК при запуску', '', sw('open_browser', st.open_browser))}
     ${row('Адреса для телефону', 'Телефон має бути в тій самій Wi-Fi мережі.', st.urls.length ? st.urls.map(u => `<code>${esc(u)}</code>`).join('') : '<span class="note">Не вдалося визначити</span>')}
   </section>
-  <section class="set"><h2>Про програму</h2>
-    <dl class="file"><dt>Версія</dt><dd>VidBox ${esc(st.version)}</dd><dt>Дані</dt><dd>${esc(st.data)}</dd><dt>ffmpeg</dt><dd>${esc(st.ffmpeg || 'не знайдено')}</dd></dl>
-  </section></div>`;
+  <section class="set"><h2>Про програму</h2>${fetchHTML(st)}</section></div>`;
 
+  $$('[data-theme-pick]').forEach(b => b.onclick = () => {
+    applyTheme(b.dataset.themePick);
+    $$('[data-theme-pick]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+    save({theme: b.dataset.themePick}, 'Тему збережено');
+  });
   const save = async (d, msg) => {
     const r = await api('/api/settings', {method: 'POST', body: JSON.stringify(d)});
     if (!r.ok) { const e = $('#ferr'); e.textContent = r.error || 'Не вдалося зберегти'; e.hidden = false; return r; }
@@ -574,6 +689,28 @@ async function renderSettings() {
   };
   $('#pwset').onclick = () => { const pw = $('#pw').value; if (pw.length < 3) return toast('Пароль має бути щонайменше з 3 символів'); setPw(pw); };
   const off = $('#pwoff'); if (off) off.onclick = () => setPw('');
+}
+
+// «Про програму» у стилі neofetch — привіт райсам Linux
+function fetchHTML(st) {
+  const logo = ['███', '██████', '█████████', '████████████', '███████████████', '████████████', '█████████', '██████', '███'].join('\n');
+  const t = st.totals || {}, theme = (THEMES.find(x => x.id === st.theme) || THEMES[0]).name;
+  const rows = [
+    ['Версія', 'VidBox ' + st.version],
+    ['Бібліотека', `${t.videos || 0} відео, ${fmtSize(t.size) || '0 МБ'}, ${fmtLen(t.dur) || '0 хв'}`],
+    ['Папки', String(st.folders.length)],
+    ['Тема', theme],
+    ['ffmpeg', st.ffmpegVersion || (st.ffmpeg ? 'є' : 'не знайдено')],
+    ['Python', st.python || ''],
+    ['Система', st.os || ''],
+    ['Працює', fmtLen(st.uptime) || 'щойно'],
+    ['Адреса', (st.urls || [])[0] || ''],
+    ['Дані', st.data],
+  ].filter(r => r[1]);
+  const head = 'vidbox@' + (st.host || 'pc');
+  return `<div class="fetch"><pre aria-hidden="true">${logo}</pre><div><div class="u">vidbox<em>@</em>${esc(st.host || 'pc')}</div><div class="hr">${'-'.repeat(head.length)}</div>
+    <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+    <div class="blocks">${['--bg', '--bg2', '--bg3', '--line', '--mute', '--fg', '--acc', '--acc2'].map(c => `<i style="background:var(${c})"></i>`).join('')}</div></div></div>`;
 }
 
 // ── Огляд папок на ПК (для «Додати папку») ──
@@ -726,6 +863,374 @@ function closeSheet() {
 }
 
 // ── Плеєр ──
+// Власний плеєр замість стандартного: кадри над смугою перемотки, жести, гарячі клавіші,
+// швидкість, картинка в картинці, екран «далі», керування з шторки телефона (Media Session).
+const RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const PI = {
+  play: '<path d="M7 4.5v15l12.5-7.5z"/>',
+  pause: '<path d="M6.5 4.5h4v15h-4zM13.5 4.5h4v15h-4z"/>',
+  vol: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+  volOff: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="m16 9.5 5 5M21 9.5l-5 5"/>',
+  fs: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  fsExit: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
+};
+const rateLabel = r => (r === 1 ? '1' : String(r).replace('.', ',')) + '×';
+let wantFs = false;   // наступне відео відкрити теж на весь екран
+
+function playerHTML(v, next) {
+  const pp = `${svg(PI.play, 'solid ic-play')}${svg(PI.pause, 'solid ic-pause')}`;
+  return `<div class="vp paused" id="vp" tabindex="-1" aria-label="Відеоплеєр">
+  <video id="pv" playsinline preload="metadata"${v.thumb ? ` poster="/thumb/${v.id}?v=${v.thumb}"` : ''}></video>
+  <div class="vp-hit"></div>
+  <div class="vp-ui">
+    <div class="vp-fade vp-top"><div class="vp-title"><b>${esc(v.title)}</b><span>${esc(shortFolder(v.folder))}</span></div></div>
+    <div class="vp-fade vp-center">
+      <button class="vp-cskip" data-a="back" aria-label="Назад на 10 секунд">${I.back10}</button>
+      <button class="vp-big" data-a="play" aria-label="Відтворити або пауза">${pp}</button>
+      <button class="vp-cskip" data-a="fwd" aria-label="Вперед на 10 секунд">${I.fwd10}</button>
+    </div>
+    <div class="vp-spin"></div>
+    <div class="vp-tap l"><span>${I.rew}10 с</span></div><div class="vp-tap r"><span>10 с${I.ff}</span></div>
+    <div class="vp-badge"></div>
+    <div class="vp-toast"></div>
+    <div class="vp-fade vp-bottom">
+      <div class="vp-seek" role="slider" tabindex="0" aria-label="Перемотування" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="vp-rail"><i class="vp-buf"></i><i class="vp-hov"></i><i class="vp-fill"></i><b class="vp-knob"></b></div>
+        <div class="vp-pv${hasSprite(v) ? '' : ' notime-img'}"><div class="vp-pv-img"></div><span></span></div>
+      </div>
+      <div class="vp-row">
+        <button class="vp-b" data-a="play" title="Пауза (Пробіл)" aria-label="Відтворити або пауза">${pp}</button>
+        <button class="vp-b" data-a="back" title="Назад 10 с (J)" aria-label="Назад на 10 секунд">${I.back10}</button>
+        <button class="vp-b" data-a="fwd" title="Вперед 10 с (L)" aria-label="Вперед на 10 секунд">${I.fwd10}</button>
+        ${next ? `<button class="vp-b" data-a="next" title="Наступне відео (N)" aria-label="Наступне відео">${I.next}</button>` : ''}
+        <div class="vp-vol"><button class="vp-b" data-a="mute" title="Звук (M)" aria-label="Увімкнути або вимкнути звук">${svg(PI.vol, 'ic-vol')}${svg(PI.volOff, 'ic-vol-off')}</button>
+          <input type="range" min="0" max="1" step="0.02" aria-label="Гучність"></div>
+        <span class="vp-time"><span class="vp-cur">0:00</span> <span class="sep">/</span> <span class="vp-dur">${fmtDur(v.dur)}</span></span>
+        <span class="vp-grow"></span>
+        <button class="vp-b vp-txt" data-a="speed" title="Швидкість (Shift + &lt; &gt;)" aria-label="Швидкість відтворення">1×</button>
+        <button class="vp-b" data-a="pip" title="Картинка в картинці (P)" aria-label="Картинка в картинці">${I.pip}</button>
+        <button class="vp-b" data-a="fs" title="На весь екран (F)" aria-label="На весь екран">${svg(PI.fs, 'ic-fs')}${svg(PI.fsExit, 'ic-fs-exit')}</button>
+      </div>
+    </div>
+    <div class="vp-menu" hidden></div>
+    <div class="vp-end" hidden></div>
+    <div class="vp-msg" hidden></div>
+  </div></div>`;
+}
+
+function mountPlayer(vp, v, o) {
+  const q = s => vp.querySelector(s);
+  const video = q('video'), seek = q('.vp-seek'), rail = q('.vp-rail');
+  const fill = q('.vp-fill'), buf = q('.vp-buf'), hov = q('.vp-hov'), knob = q('.vp-knob');
+  const pvBox = q('.vp-pv'), pvImg = q('.vp-pv-img'), pvTime = q('.vp-pv span');
+  const curEl = q('.vp-cur'), durEl = q('.vp-dur'), volIn = q('.vp-vol input'), speedBtn = q('[data-a=speed]');
+  const menu = q('.vp-menu'), endBox = q('.vp-end'), msg = q('.vp-msg'), badge = q('.vp-badge'), vtoast = q('.vp-toast'), hit = q('.vp-hit');
+  const touch = matchMedia('(hover: none)').matches;
+  let idleT = 0, raf = 0, dragging = false, dead = false, badgeT = 0, toastT2 = 0, endT = 0, holding = false;
+  const D = () => (isFinite(video.duration) && video.duration > 0) ? video.duration : (v.dur || 0);
+  video.volume = LS.get('vol', 1);
+  video.muted = LS.get('muted', false);
+  video.defaultPlaybackRate = video.playbackRate = LS.get('rate', 1);
+
+  // ── малювання ──
+  const setPos = f => { fill.style.transform = `scaleX(${f})`; knob.style.left = (f * 100) + '%'; };
+  function draw() {
+    if (dragging) return;
+    const d = D(), f = d ? Math.min(1, video.currentTime / d) : 0;
+    setPos(f);
+    curEl.textContent = fmtDur(video.currentTime);
+    seek.setAttribute('aria-valuenow', Math.round(f * 100));
+    if (o.onTime) o.onTime(video.currentTime);
+  }
+  function drawBuf() {
+    const d = D(), b = video.buffered;
+    let end = 0;
+    for (let i = 0; i < b.length; i++) if (b.start(i) <= video.currentTime + 1) end = Math.max(end, b.end(i));
+    if (d) buf.style.transform = `scaleX(${Math.min(1, end / d)})`;
+  }
+  function loop() { draw(); if (!video.paused && !dead) raf = requestAnimationFrame(loop); }
+  const stateUI = () => { vp.classList.toggle('playing', !video.paused); vp.classList.toggle('paused', video.paused); };
+  const drawVol = () => { vp.classList.toggle('muted', video.muted || video.volume === 0); volIn.value = video.muted ? 0 : video.volume; };
+  const drawRate = () => { speedBtn.textContent = rateLabel(video.playbackRate); };
+
+  // ── показ і приховування керування ──
+  function poke() {
+    vp.classList.remove('idle');
+    clearTimeout(idleT);
+    if (!video.paused && !dragging && menu.hidden) idleT = setTimeout(() => vp.classList.add('idle'), touch ? 3200 : 2400);
+  }
+  const hideUI = () => { if (!video.paused) { clearTimeout(idleT); vp.classList.add('idle'); } };
+  function showBadge(html, ms) {
+    badge.innerHTML = html;
+    badge.classList.add('show');
+    clearTimeout(badgeT);
+    if (ms) badgeT = setTimeout(() => badge.classList.remove('show'), ms);
+  }
+  function vpToast(text, btn, fn) {
+    vtoast.innerHTML = '<span>' + esc(text) + '</span>' + (btn ? `<button>${esc(btn)}</button>` : '');
+    if (btn) vtoast.querySelector('button').onclick = e => { e.stopPropagation(); fn(); vtoast.classList.remove('show'); };
+    vtoast.classList.add('show');
+    clearTimeout(toastT2);
+    toastT2 = setTimeout(() => vtoast.classList.remove('show'), btn ? 6000 : 1800);
+  }
+
+  // ── дії ──
+  const play = () => { if (video.paused) { endBox.hidden = true; video.play().catch(() => {}); } else video.pause(); };
+  function skip(s) { video.currentTime = Math.max(0, Math.min(Math.max(0, D() - 0.25), video.currentTime + s)); draw(); }
+  function setVol(x) {
+    video.volume = Math.max(0, Math.min(1, x));
+    video.muted = video.volume === 0;
+    showBadge(`${svg(video.muted ? PI.volOff : PI.vol)}${Math.round(video.volume * 100)}%`, 900);
+  }
+  function setRate(r) { video.playbackRate = video.defaultPlaybackRate = r; LS.set('rate', r); drawRate(); showBadge(rateLabel(r), 800); }
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+  function toggleFs() {
+    if (fsEl()) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+    const req = vp.requestFullscreen || vp.webkitRequestFullscreen;
+    if (!req) return iosFs();
+    try {
+      const p = req.call(vp);
+      if (p && p.then) p.then(lockLand).catch(iosFs); else lockLand();
+    } catch (e) { iosFs(); }
+  }
+  function lockLand() { if (touch && screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); }
+  function iosFs() { if (video.webkitEnterFullscreen) video.webkitEnterFullscreen(); }   // iPhone: системний повноекранний режим
+  function onFs() {
+    vp.classList.toggle('fs', fsEl() === vp);
+    if (!fsEl() && screen.orientation && screen.orientation.unlock) { try { screen.orientation.unlock(); } catch (e) {} }
+  }
+  const pipOk = (document.pictureInPictureEnabled && video.requestPictureInPicture) ||
+    (video.webkitSupportsPresentationMode && video.webkitSupportsPresentationMode('picture-in-picture'));
+  if (!pipOk) q('[data-a=pip]').hidden = true;
+  function togglePip() {
+    if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+    else if (video.requestPictureInPicture && document.pictureInPictureEnabled) video.requestPictureInPicture().catch(() => vpToast('Картинка в картинці зараз недоступна'));
+    else if (video.webkitSetPresentationMode) video.webkitSetPresentationMode(video.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
+  }
+  function openMenu() {
+    menu.innerHTML = '<p>Швидкість</p>' + RATES.map(r => `<button data-rate="${r}" class="${r === video.playbackRate ? 'on' : ''}">${r === 1 ? 'Звичайна' : rateLabel(r)}</button>`).join('');
+    menu.hidden = false;
+    clearTimeout(idleT);
+    vp.classList.remove('idle');
+  }
+  const closeMenu = () => { if (!menu.hidden) { menu.hidden = true; poke(); } };
+  function flash(side) { const el = q('.vp-tap.' + side); el.classList.remove('go'); void el.offsetWidth; el.classList.add('go'); }
+  const act = {
+    play, back: () => skip(-10), fwd: () => skip(10),
+    mute: () => { video.muted = !video.muted; if (!video.muted && video.volume === 0) video.volume = 0.6; },
+    speed: () => (menu.hidden ? openMenu() : closeMenu()),
+    pip: togglePip, fs: toggleFs, next: () => { if (o.onNext) { wantFs = !!fsEl(); o.onNext(); } },
+  };
+
+  vp.addEventListener('click', e => {
+    const r = e.target.closest('[data-rate]');
+    if (r) { setRate(+r.dataset.rate); closeMenu(); return; }
+    const b = e.target.closest('[data-a]');
+    if (b && act[b.dataset.a]) { act[b.dataset.a](); poke(); return; }
+    if (!menu.hidden && !e.target.closest('.vp-menu')) closeMenu();
+  });
+  vp.addEventListener('mousemove', poke);
+  vp.addEventListener('mouseleave', () => { if (!video.paused && !dragging) { clearTimeout(idleT); vp.classList.add('idle'); } });
+
+  // ── клік і жести по самому відео ──
+  // Мишка: клік — пауза, подвійний клік — весь екран.
+  // Палець: тап — показати/сховати керування, подвійний тап зліва/справа — ±10 с, утримання — 2×.
+  let lastTap = 0, tapT = 0, holdT = 0, downX = 0, downY = 0;
+  hit.addEventListener('pointerdown', e => {
+    downX = e.clientX; downY = e.clientY;
+    if (!menu.hidden) return;
+    if (e.pointerType === 'mouse') return;
+    holdT = setTimeout(() => {
+      if (video.paused) return;
+      holding = true;
+      video.playbackRate = 2;
+      showBadge(`2×${I.ff}`);
+    }, 480);
+  });
+  hit.addEventListener('pointermove', e => { if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 16) clearTimeout(holdT); });
+  const endHold = () => {
+    clearTimeout(holdT);
+    if (!holding) return false;
+    holding = false;
+    video.playbackRate = LS.get('rate', 1);
+    badge.classList.remove('show');
+    return true;
+  };
+  hit.addEventListener('pointercancel', endHold);
+  hit.addEventListener('contextmenu', e => e.preventDefault());
+  hit.addEventListener('pointerup', e => {
+    if (!menu.hidden) { closeMenu(); return; }
+    const now = Date.now();
+    if (e.pointerType === 'mouse') {
+      if (e.button !== 0) return;
+      if (now - lastTap < 280) { lastTap = 0; play(); toggleFs(); } else { lastTap = now; play(); }
+      poke();
+      return;
+    }
+    if (endHold()) return;
+    const r = vp.getBoundingClientRect(), x = (e.clientX - r.left) / r.width;
+    const side = x < 0.35 ? 'l' : x > 0.65 ? 'r' : '';
+    clearTimeout(tapT);
+    if (side && now - lastTap < 320) {
+      lastTap = now;
+      skip(side === 'l' ? -10 : 10);
+      flash(side);
+      return;
+    }
+    lastTap = now;
+    const toggle = () => { if (vp.classList.contains('idle') || video.paused) poke(); else hideUI(); };
+    if (side) tapT = setTimeout(toggle, 300); else toggle();
+  });
+
+  // ── смуга перемотки з кадрами ──
+  const frac = e => { const r = rail.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
+  function preview(f) {
+    const d = D();
+    if (!d) return;
+    const r = seek.getBoundingClientRect();
+    pvTime.textContent = fmtDur(f * d);
+    if (hasSprite(v)) pvImg.style.cssText = frameBg(v, Math.max(0, Math.min(S.N - 1, Math.round((f - 0.03) / 0.94 * (S.N - 1)))));
+    const half = hasSprite(v) ? 110 : 34;
+    pvBox.style.left = Math.max(half, Math.min(r.width - half, f * r.width)) + 'px';
+    pvBox.classList.add('show');
+    hov.style.transform = `scaleX(${f})`;
+  }
+  seek.addEventListener('pointerdown', e => {
+    dragging = true;
+    try { seek.setPointerCapture(e.pointerId); } catch (err) {}
+    vp.classList.add('scrubbing');
+    clearTimeout(idleT);
+    const f = frac(e);
+    preview(f); setPos(f); curEl.textContent = fmtDur(f * D());
+  });
+  seek.addEventListener('pointermove', e => {
+    const f = frac(e);
+    if (dragging || e.pointerType === 'mouse') preview(f);
+    if (dragging) { setPos(f); curEl.textContent = fmtDur(f * D()); }
+  });
+  const endDrag = (e, apply) => {
+    if (!dragging) return;
+    dragging = false;
+    vp.classList.remove('scrubbing');
+    if (apply) { video.currentTime = frac(e) * D(); endBox.hidden = true; }
+    if (e.pointerType !== 'mouse') pvBox.classList.remove('show');
+    draw(); poke();
+  };
+  seek.addEventListener('pointerup', e => endDrag(e, true));
+  seek.addEventListener('pointercancel', e => endDrag(e, false));
+  seek.addEventListener('pointerleave', () => { if (!dragging) pvBox.classList.remove('show'); });
+  volIn.addEventListener('input', () => { video.volume = +volIn.value; video.muted = +volIn.value === 0; });
+
+  // ── події відео ──
+  video.addEventListener('play', () => { stateUI(); cancelAnimationFrame(raf); loop(); poke(); endBox.hidden = true; clearTimeout(endT); });
+  video.addEventListener('pause', () => { stateUI(); draw(); poke(); });
+  video.addEventListener('timeupdate', () => { if (video.paused) draw(); });
+  video.addEventListener('seeked', () => { draw(); drawBuf(); });
+  video.addEventListener('progress', drawBuf);
+  video.addEventListener('durationchange', () => { durEl.textContent = fmtDur(D()); });
+  video.addEventListener('waiting', () => vp.classList.add('loading'));
+  ['playing', 'canplay', 'seeked', 'pause', 'error'].forEach(ev => video.addEventListener(ev, () => vp.classList.remove('loading')));
+  video.addEventListener('volumechange', () => { drawVol(); LS.set('vol', video.volume); LS.set('muted', video.muted); });
+  video.addEventListener('ratechange', () => { if (!holding) drawRate(); });
+  video.addEventListener('ended', () => { stateUI(); vp.classList.remove('idle'); showEnd(); });
+  video.addEventListener('error', () => { if (video.error && video.getAttribute('src') && o.onError) o.onError(video.error.code); });
+  document.addEventListener('fullscreenchange', onFs);
+  document.addEventListener('webkitfullscreenchange', onFs);
+
+  // ── гарячі клавіші (працюють і в українській розкладці) ──
+  function onKey(e) {
+    if (dead || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (t.closest && t.closest('input, textarea, select, [contenteditable]') && t !== volIn) return;
+    if ((e.code === 'Space' || e.code === 'Enter') && t.closest && t.closest('button, a')) return;
+    if (sheetId || !picker.hidden) return;
+    let ok = true;
+    if (e.shiftKey && (e.code === 'Period' || e.code === 'Comma')) {
+      const i = RATES.indexOf(video.playbackRate), n = RATES[Math.max(0, Math.min(RATES.length - 1, (i < 0 ? 2 : i) + (e.code === 'Period' ? 1 : -1)))];
+      setRate(n);
+    } else switch (e.code) {
+      case 'Space': case 'KeyK': play(); break;
+      case 'ArrowLeft': skip(-5); showBadge(`${I.rew}5 с`, 600); break;
+      case 'ArrowRight': skip(5); showBadge(`5 с${I.ff}`, 600); break;
+      case 'KeyJ': skip(-10); showBadge(`${I.rew}10 с`, 600); break;
+      case 'KeyL': skip(10); showBadge(`10 с${I.ff}`, 600); break;
+      case 'ArrowUp': setVol(video.volume + 0.05); break;
+      case 'ArrowDown': setVol(video.volume - 0.05); break;
+      case 'KeyM': act.mute(); showBadge(video.muted ? `${svg(PI.volOff)}Без звуку` : `${svg(PI.vol)}${Math.round(video.volume * 100)}%`, 900); break;
+      case 'KeyF': toggleFs(); break;
+      case 'KeyP': togglePip(); break;
+      case 'KeyN': if (o.onNext) act.next(); else ok = false; break;
+      case 'Comma': if (video.paused) { video.currentTime = Math.max(0, video.currentTime - 1 / 25); draw(); } break;
+      case 'Period': if (video.paused) { video.currentTime += 1 / 25; draw(); } break;
+      default:
+        if (/^(Digit|Numpad)[0-9]$/.test(e.code)) { video.currentTime = D() * (+e.code.slice(-1)) / 10; draw(); }
+        else ok = false;
+    }
+    if (ok) { e.preventDefault(); poke(); }
+  }
+  document.addEventListener('keydown', onKey);
+
+  // ── шторка телефона / мультимедійні клавіші ──
+  const ms = 'mediaSession' in navigator ? navigator.mediaSession : null;
+  const msh = (a, f) => { try { ms.setActionHandler(a, f); } catch (e) {} };
+  if (ms) {
+    try {
+      ms.metadata = new MediaMetadata({title: v.title, artist: shortFolder(v.folder), album: 'VidBox',
+        artwork: v.thumb ? [{src: `${location.origin}/thumb/${v.id}?v=${v.thumb}`, sizes: '480x270', type: 'image/jpeg'}] : []});
+    } catch (e) {}
+    msh('play', () => video.play()); msh('pause', () => video.pause());
+    msh('seekbackward', d => skip(-((d && d.seekOffset) || 10))); msh('seekforward', d => skip((d && d.seekOffset) || 10));
+    msh('seekto', d => { video.currentTime = d.seekTime; draw(); });
+    msh('nexttrack', o.onNext ? () => act.next() : null);
+  }
+
+  // ── кінець відео: «далі» з таймером ──
+  function showEnd() {
+    const n = o.next;
+    if (!n) {
+      endBox.innerHTML = `<div class="vp-end-card"><div class="vp-end-info"><p>Відео закінчилось</p><b>${esc(v.title)}</b>` +
+        `<div class="acts"><button class="btn primary" data-end="replay">${I.restart}Переглянути ще раз</button></div></div></div>`;
+    } else {
+      const auto = S.cfg.autoplay_next, t = S.cfg.next_delay || 8;
+      const bg = n.thumb ? `background-image:url(/thumb/${n.id}?v=${n.thumb})` : (hasSprite(n) ? frameBg(n, 3) : '');
+      endBox.innerHTML = `<div class="vp-end-card"><div class="vp-end-th" style="${bg}">${auto ? `<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" class="run" style="--t:${t}s"/></svg>` : ''}</div>
+        <div class="vp-end-info"><p>${auto ? `Далі через ${t} с` : 'Далі'}</p><b>${esc(n.title)}</b><div class="acts">
+          <button class="btn primary" data-end="next">${I.play}Дивитися</button>${auto ? '<button class="btn" data-end="cancel">Скасувати</button>' : ''}
+          <button class="btn ghost" data-end="replay">${I.restart}Ще раз</button></div></div></div>`;
+      if (auto) endT = setTimeout(() => { if (!dead) act.next(); }, t * 1000);
+    }
+    endBox.hidden = false;
+  }
+  endBox.addEventListener('click', e => {
+    const b = e.target.closest('[data-end]');
+    if (!b) return;
+    e.stopPropagation();
+    clearTimeout(endT);
+    const a = b.dataset.end;
+    if (a === 'next') act.next();
+    else if (a === 'replay') { endBox.hidden = true; video.currentTime = 0; video.play().catch(() => {}); }
+    else { const ring = q('.vp-end circle'); if (ring) ring.classList.remove('run'); q('.vp-end-info p').textContent = 'Далі'; b.remove(); }
+  });
+
+  drawVol(); drawRate(); draw();
+  return {
+    video, toast: vpToast, poke,
+    msg(html) { msg.innerHTML = html; msg.hidden = false; vp.classList.remove('loading'); },
+    hideMsg() { msg.hidden = true; msg.innerHTML = ''; },
+    msgEl: msg,
+    enterFs() { const req = vp.requestFullscreen || vp.webkitRequestFullscreen; if (req) { try { const p = req.call(vp); if (p && p.catch) p.catch(() => {}); } catch (e) {} } },
+    destroy() {
+      dead = true;
+      cancelAnimationFrame(raf); clearTimeout(idleT); clearTimeout(endT); clearTimeout(tapT); clearTimeout(holdT);
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('fullscreenchange', onFs);
+      document.removeEventListener('webkitfullscreenchange', onFs);
+      if (document.pictureInPictureElement === video) document.exitPictureInPicture().catch(() => {});
+      if (ms) { ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'nexttrack'].forEach(a => msh(a, null)); try { ms.metadata = null; } catch (e) {} }
+    },
+  };
+}
+
 function nextOf(v) {
   const sib = S.videos.filter(x => x.folder === v.folder).sort(byName);
   const i = sib.findIndex(x => x.id === v.id);
@@ -737,11 +1242,12 @@ async function renderPlayer(id, startAt) {
   const v = S.by[id];
   if (!v) { app.innerHTML = `<div class="empty"><h1 class="title">Відео не знайдено</h1>Можливо, файл перемістили або видалили.<br><br><a class="btn" href="#/">На головну</a></div>`; return; }
   window.scrollTo(0, 0);
+  setAtmo(v);
   const next = nextOf(v), has = hasSprite(v), fmt = v.ext.toUpperCase();
   const sib = S.videos.filter(x => x.folder === v.folder).sort(byName);
   const k = sib.findIndex(x => x.id === v.id);
   const more = sib.slice(k + 1).concat(sib.slice(0, k)).filter(x => x.id !== v.id).slice(0, 14);
-  app.innerHTML = `<div class="theatre"><video id="pv" controls playsinline preload="metadata"${v.thumb ? ` poster="/thumb/${v.id}?v=${v.thumb}"` : ''}></video><div id="prep" class="prep" hidden></div></div>
+  app.innerHTML = `<div class="theatre">${playerHTML(v, next)}</div>
   <div class="pwrap">
     <div class="phead"><div><h1 class="title">${esc(v.title)}</h1><div class="meta">${metaHTML(v)}<span>${esc(shortFolder(v.folder))}</span></div></div>
       <div class="acts">
@@ -749,13 +1255,28 @@ async function renderPlayer(id, startAt) {
         <button class="btn icon${v.vote < 0 ? ' on' : ''}" data-pvote="-1" aria-label="Не подобається">${I.down}</button>
         <a class="btn ghost" href="#/i/${v.id}">${I.info}Інфо</a>
         ${next ? `<a class="btn" href="#/v/${next.id}">${I.next}Далі</a>` : ''}</div></div>
-    <div id="nextslot"></div>
     ${has ? `<section><h2>Кадри</h2><div class="frames compact" id="pvFrames">${Array.from({length: S.N}, (_, i) =>
       `<button class="fcell" data-i="${i}" aria-label="Перейти до ${fmtDur(frameT(v, i))}"><span class="fimg" style="${frameBg(v, i)}"></span>${fmtDur(frameT(v, i))}</button>`).join('')}</div></section>` : ''}
+    <p class="keys"><span><kbd>Пробіл</kbd>пауза</span><span><kbd>←</kbd><kbd>→</kbd>5 с</span><span><kbd>J</kbd><kbd>L</kbd>10 с</span><span><kbd>↑</kbd><kbd>↓</kbd>гучність</span>
+      <span><kbd>F</kbd>весь екран</span><span><kbd>M</kbd>звук</span><span><kbd>Shift</kbd><kbd>&lt;</kbd><kbd>&gt;</kbd>швидкість</span><span><kbd>0</kbd>…<kbd>9</kbd>перейти</span>${next ? '<span><kbd>N</kbd>наступне</span>' : ''}</p>
     ${shelf('Ще з цієї папки', '', more)}
   </div>`;
 
-  const pv = $('#pv'), prep = $('#prep');
+  const vp = $('#vp');
+  const strip = $('#pvFrames');
+  let litFrame = -1;
+  function lightFrame(t) {   // підсвічує кадр у смужці під плеєром, який зараз грає
+    if (!strip || !v.dur) return;
+    let n = 0;
+    for (let i = 0; i < S.N; i++) if (frameT(v, i) <= t + 0.5) n = i;
+    if (n === litFrame) return;
+    litFrame = n;
+    $$('.on', strip).forEach(x => x.classList.remove('on'));
+    strip.children[n].classList.add('on');
+  }
+  const player = mountPlayer(vp, v, {next, onNext: next ? () => go('#/v/' + next.id, true) : null, onError: onPlayError, onTime: lightFrame});
+  const pv = player.video;
+  if (wantFs) { wantFs = false; player.enterFs(); }
   const sid = Math.random().toString(36).slice(2) + Date.now().toString(36);
   let watched = 0, lastT = null, startPos = null, timer = null, ended = false, dead = false, rawMode = false, captured = !!v.thumb;
   const dur = () => (isFinite(pv.duration) && pv.duration > 0) ? pv.duration : (v.dur || 0);
@@ -767,22 +1288,12 @@ async function renderPlayer(id, startAt) {
     const r = await api('/api/vote', {method: 'POST', body: JSON.stringify({id: v.id, vote: v.vote})});
     if (r.ok) Object.assign(v, {score: r.score, views: r.views, avg: r.avg, cmp: r.cmp, pop: r.pop, last: r.last});
   });
-  const strip = $('#pvFrames');
   if (strip) strip.onclick = e => {
     const b = e.target.closest('[data-i]'); if (!b) return;
-    if (pv.src) { pv.currentTime = frameT(v, +b.dataset.i); pv.play().catch(() => {}); window.scrollTo({top: 0, behavior: 'smooth'}); }
+    if (pv.getAttribute('src')) { pv.currentTime = frameT(v, +b.dataset.i); pv.play().catch(() => {}); window.scrollTo({top: 0, behavior: 'smooth'}); }
   };
-  let litFrame = -1;
-  function lightFrame(t) {
-    if (!strip || !v.dur) return;
-    let n = 0;
-    for (let i = 0; i < S.N; i++) if (frameT(v, i) <= t + 0.5) n = i;
-    if (n === litFrame) return;
-    litFrame = n;
-    $$('.on', strip).forEach(x => x.classList.remove('on'));
-    strip.children[n].classList.add('on');
-  }
 
+  // ── облік перегляду (для рейтингу й «продовжити») ──
   function ping(isEnd) {
     if (startPos == null || (watched < 1 && !isEnd)) return;
     const d = dur();
@@ -806,42 +1317,30 @@ async function renderPlayer(id, startAt) {
       }, 'image/jpeg', 0.8);
     } catch (e) {}
   }
-  function showNext() {
-    if (!next || dead || !S.cfg.autoplay_next) return;
-    let n = S.cfg.next_delay || 8;
-    const slot = $('#nextslot');
-    slot.innerHTML = `<div class="nextbox"><span>Далі: <b>${esc(next.title)}</b>, через <span id="cd">${n}</span> с</span><button class="btn ghost" id="cn">Скасувати</button><a class="btn primary" href="#/v/${next.id}">${I.play}Зараз</a></div>`;
-    const it = setInterval(() => {
-      if (dead) return clearInterval(it);
-      n--; const cd = $('#cd'); if (cd) cd.textContent = n;
-      if (n <= 0) { clearInterval(it); go('#/v/' + next.id, true); }
-    }, 1000);
-    $('#cn').onclick = () => { clearInterval(it); slot.innerHTML = ''; };
-  }
   function start(src) {
-    prep.hidden = true; pv.hidden = false;
+    player.hideMsg();
     pv.addEventListener('loadedmetadata', () => {
       const d = dur();
-      if (startAt != null) { pv.currentTime = startAt; }
+      if (startAt != null) pv.currentTime = startAt;
       else if (S.cfg.resume && v.pos > 15 && d && v.pos < d * 0.95) {
         pv.currentTime = v.pos;
-        toast('Продовжую з ' + fmtDur(v.pos), 'З початку', () => { pv.currentTime = 0; if (watched < 30) startPos = 0; });
+        player.toast('Продовжую з ' + fmtDur(v.pos), 'З початку', () => { pv.currentTime = 0; if (watched < 30) startPos = 0; });
       }
     }, {once: true});
     pv.src = src;
-    pv.play().catch(() => {});
+    vp.classList.add('loading');
+    pv.play().catch(() => { vp.classList.remove('loading'); player.poke(); });
   }
   pv.addEventListener('playing', () => { if (startPos == null) startPos = pv.currentTime; lastT = pv.currentTime; });
   pv.addEventListener('timeupdate', () => {
     const t = pv.currentTime;
     if (lastT != null && !pv.seeking && !pv.paused) { const d = t - lastT; if (d > 0 && d < 3) watched += d; }
     lastT = t;
-    lightFrame(t);
     if (!captured && pv.videoWidth && t > Math.min(5, dur() * 0.1)) { captured = true; capture(); }
   });
   pv.addEventListener('seeking', () => { lastT = null; });
   pv.addEventListener('pause', () => ping(false));
-  pv.addEventListener('ended', () => { ended = true; ping(true); showNext(); });
+  pv.addEventListener('ended', () => { ended = true; ping(true); });
   timer = setInterval(() => { if (!pv.paused) ping(false); }, 10000);
   const onHide = () => { if (document.visibilityState === 'hidden') ping(false); };
   document.addEventListener('visibilitychange', onHide);
@@ -849,36 +1348,51 @@ async function renderPlayer(id, startAt) {
     dead = true; clearInterval(timer);
     document.removeEventListener('visibilitychange', onHide);
     if (!ended) ping(false);
+    player.destroy();
     pv.pause(); pv.removeAttribute('src'); pv.load();
   };
 
-  if (v.prep && !v.ready) {
-    pv.hidden = true; prep.hidden = false;
-    if (S.ffmpeg) {
-      prep.innerHTML = `<p>Готую копію ${esc(fmt)} у форматі MP4, щоб телефон точно відкрив відео.<small>Зазвичай це хвилина-дві. Наступного разу відео відкриється одразу.</small></p>` +
-        `<div class="prog"><i id="pg"></i></div><span class="note" id="pgt">В черзі</span><button class="btn ghost" id="raw">Відкрити без конвертації</button>`;
-      let first = true;
-      const poll = async () => {
-        if (dead || rawMode) return;
-        try {
-          const st = await api('/api/prepare/' + v.id, first ? {method: 'POST'} : undefined);
-          first = false;
-          if (dead || rawMode) return;
-          if (st.state === 'ready') { v.ready = true; start('/stream/' + v.id + '?r=' + Date.now()); return; }
-          if (st.state === 'error') { $('#pgt').textContent = 'Не вдалося конвертувати: ' + (st.error || 'невідома помилка'); return; }
-          $('#pg').style.width = (st.progress * 100).toFixed(1) + '%';
-          $('#pgt').textContent = st.state === 'queued' ? 'В черзі' : Math.round(st.progress * 100) + '%';
-        } catch (e) {}
-        setTimeout(poll, 1200);
-      };
-      poll();
-    } else {
-      prep.innerHTML = `<p>Формат ${esc(fmt)} браузер телефону може не відкрити.<small>Поклади ffmpeg.exe поруч з vidbox.py, і VidBox сам конвертуватиме такі файли.</small></p><button class="btn primary" id="raw">Спробувати відкрити</button>`;
+  // ── формати, які телефон не відкриває: копія MP4 через ffmpeg ──
+  player.msgEl.addEventListener('click', e => {
+    const b = e.target.closest('[data-m]');
+    if (!b) return;
+    e.stopPropagation();
+    if (b.dataset.m === 'raw') { rawMode = true; start('/stream/' + v.id + '?raw=1'); }
+    else prepareFlow();
+  });
+  function prepareFlow() {
+    if (!S.ffmpeg) {
+      player.msg(`<p>Формат ${esc(fmt)} браузер може не відкрити.<small>Поклади ffmpeg.exe поруч з vidbox.py, і VidBox сам конвертуватиме такі файли.</small></p><button class="btn primary" data-m="raw">Спробувати відкрити</button>`);
+      return;
     }
-    $('#raw').onclick = () => { rawMode = true; start('/stream/' + v.id + '?raw=1'); };
-  } else {
-    start('/stream/' + v.id);
+    rawMode = false;
+    player.msg(`<p>Готую копію у форматі MP4, щоб відео точно відкрилось.<small>Зазвичай це хвилина-дві. Наступного разу відкриється одразу.</small></p>` +
+      `<div class="prog"><i id="pg"></i></div><span class="note" id="pgt">В черзі</span><button class="btn ghost" data-m="raw">Відкрити без конвертації</button>`);
+    let first = true;
+    const poll = async () => {
+      if (dead || rawMode) return;
+      try {
+        const st = await api('/api/prepare/' + v.id, first ? {method: 'POST'} : undefined);
+        first = false;
+        if (dead || rawMode) return;
+        if (st.state === 'ready') { v.ready = true; start('/stream/' + v.id + '?r=' + Date.now()); return; }
+        if (st.state === 'error') { $('#pgt').textContent = 'Не вдалося конвертувати: ' + (st.error || 'невідома помилка'); return; }
+        $('#pg').style.width = (st.progress * 100).toFixed(1) + '%';
+        $('#pgt').textContent = st.state === 'queued' ? 'В черзі' : Math.round(st.progress * 100) + '%';
+      } catch (e) {}
+      setTimeout(poll, 1200);
+    };
+    poll();
   }
+  function onPlayError() {
+    if (S.ffmpeg && !v.ready) {
+      player.msg(`<p>Браузер не зміг відтворити цей файл.<small>VidBox може зробити сумісну копію MP4 через ffmpeg.</small></p><button class="btn primary" data-m="prep">Зробити сумісну копію</button>`);
+    } else {
+      player.msg(`<p>Браузер не зміг відтворити цей файл.<small>${S.ffmpeg ? 'Спробуй відкрити його на комп’ютері або в іншому браузері.' : 'Поклади ffmpeg.exe поруч з vidbox.py, і VidBox зможе робити сумісні копії.'}</small></p>`);
+    }
+  }
+  if (v.prep && !v.ready) prepareFlow();
+  else start('/stream/' + v.id);
 }
 
 // обкладинки й нарізки, які ще готуються на ПК, підтягуються самі
