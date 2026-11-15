@@ -22,6 +22,11 @@ class Prefs(ctx: Context) {
         get() = str("theme", "arch")
         set(v) = put("theme", v)
 
+    /** Якість відео: auto, orig, 1080, 720, 480. */
+    var quality: String
+        get() = str("quality", "auto")
+        set(v) = put("quality", v)
+
     var seekStep: Int
         get() = p.getInt("seek_step", 10)
         set(v) = p.edit().putInt("seek_step", v).apply()

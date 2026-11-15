@@ -39,6 +39,7 @@ class Api(private val prefs: Prefs) {
     fun spriteUrl(v: Video) = url("/sprite/${v.id}?v=${v.sprite}")
     fun frameUrl(v: Video, i: Int) = url("/frame/${v.id}/$i?v=${v.sprite}")
     fun streamUrl(v: Video, raw: Boolean) = url("/stream/${v.id}" + if (raw) "?raw=1" else "")
+    fun liveUrl(v: Video, h: Int, t: Double) = url("/live/${v.id}?h=$h&t=" + String.format(java.util.Locale.US, "%.2f", t))
 
     private fun call(c: OkHttpClient, req: Request): JSONObject = c.newCall(req).execute().use { r ->
         if (r.code == 401) {

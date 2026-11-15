@@ -147,7 +147,12 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
     val q = remember(route.id) { vm.queueFor(v) }
     val step = vm.prefs.seekStep
 
-    var raw by remember { mutableStateOf(true) }
+    // джерело: raw — оригінал файлу, copy — MP4-копія з ПК, live — перекодування на льоту
+    var source by remember { mutableStateOf("raw") }
+    var liveH by remember { mutableIntStateOf(0) }
+    var offset by remember { mutableLongStateOf(0L) }     // з якої мілісекунди почався потік live
+    var quality by remember { mutableStateOf(vm.prefs.quality) }
+    var picker by remember { mutableStateOf(false) }
     var prep by remember { mutableStateOf<Prep?>(null) }
     var failed by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
@@ -169,19 +174,23 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
     var scrubbing by remember { mutableStateOf(false) }
     val sid = remember { UUID.randomUUID().toString().replace("-", "").take(20) }
     val watch = remember { Watch() }
+    val ffmpeg = vm.lib?.ffmpeg == true
 
     fun poke() {
         controls = true
         touched = System.currentTimeMillis()
     }
 
-    fun durSec(): Double = if (player.duration > 0) player.duration / 1000.0 else v.dur
+    /** Позиція у відео (для live — від початку файлу, а не потоку). */
+    fun absPos(): Long = (if (source == "live") offset else 0L) + player.currentPosition
+
+    fun durSec(): Double = if (source != "live" && player.duration > 0) player.duration / 1000.0 else v.dur
 
     fun ping(isEnd: Boolean) {
         val st = watch.start ?: return
         if (watch.watched < 1 && !isEnd) return
         val d = durSec()
-        val at = if (isEnd) d else player.currentPosition / 1000.0
+        val at = if (isEnd) d else absPos() / 1000.0
         val o = JSONObject().put("sid", sid).put("id", v.id).put("pos", at).put("dur", d)
             .put("watched", (watch.watched * 10).roundToInt() / 10.0).put("start", st).put("ended", isEnd)
         vm.localPos(v.id, if (isEnd || (d > 0 && at >= d * 0.95)) 0.0 else at)
@@ -200,14 +209,67 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
         player.playWhenReady = true
     }
 
-    /** Телефон не тягне файл напряму → просимо ПК зробити MP4-копію (відеокарта) і граємо її. */
+    fun playRaw(atMs: Long) {
+        source = "raw"
+        load(vm.api.streamUrl(v, raw = true), atMs)
+    }
+
+    fun playCopy(atMs: Long) {
+        source = "copy"
+        load(vm.api.streamUrl(v, raw = false), atMs)
+    }
+
+    /** Потік з потрібною висотою кадру; перемотка = новий потік з іншого місця. */
+    fun playLive(h: Int, atMs: Long) {
+        source = "live"
+        liveH = h
+        val at = atMs.coerceIn(0L, maxOf(0L, (v.dur * 1000).toLong() - 1000))
+        offset = at
+        load(vm.api.liveUrl(v, h, at / 1000.0), 0)
+    }
+
+    /** Висота для live: не більша за висоту самого відео. */
+    fun fitH(want: Int): Int {
+        val src = v.resKey
+        if (src <= 0) return want
+        return listOf(1080, 720, 480).firstOrNull { it <= want && it <= maxOf(src, 480) } ?: 480
+    }
+
+    /** Що грати: оригінал чи перекодований потік — за вибором якості й можливостями телефона. */
+    fun open(atMs: Long) {
+        val src = v.resKey
+        val pick = when (quality) {
+            "orig" -> 0
+            "1080", "720", "480" -> quality.toInt().takeIf { ffmpeg && (src == 0 || src > it) } ?: 0
+            else -> when {   // авто
+                !ffmpeg -> 0
+                Caps.metered(ctx) && src > 720 -> 720
+                !Caps.hwDecode(v) && src > 1080 -> 1080
+                else -> 0
+            }
+        }
+        if (pick > 0) playLive(fitH(pick), atMs) else playRaw(atMs)
+    }
+
+    fun seekAbs(ms: Long) {
+        val target = ms.coerceIn(0L, maxOf(0L, dur))
+        if (source == "live") playLive(liveH, target) else player.seekTo(target)
+        pos = target
+        ended = false
+    }
+
+    /** Телефон не тягне файл → копія з ПК, якщо вона вже є, інакше потік на льоту, а в крайньому разі — готуємо копію. */
     fun fallback(reason: String) {
-        if (!raw) {
+        val at = absPos()
+        if (source == "raw" && (v.ready || ffmpeg)) {
+            player.stop()
+            if (v.ready) playCopy(at) else playLive(fitH(1080), at)
+            return
+        }
+        if (source == "copy" || prep != null) {
             failed = reason
             return
         }
-        raw = false
-        val at = player.currentPosition
         player.stop()
         scope.launch {
             try {
@@ -220,7 +282,7 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
                     prep = st
                 }
                 prep = null
-                load(vm.api.streamUrl(v, raw = false), at)
+                playCopy(at)
             } catch (e: Exception) {
                 prep = null
                 failed = e.message ?: "Не вдалося підготувати відео"
@@ -238,11 +300,21 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
         }
         if (route.startAt == null && resumeAt > 0) {
             notice = Triple("Продовжую з ${Fmt.dur(resumeAt)}", "З початку") {
-                player.seekTo(0)
+                seekAbs(0)
                 if (watch.watched < 30) watch.start = 0.0
             }
         }
-        load(vm.api.streamUrl(v, raw = true), (resumeAt * 1000).toLong())
+        open((resumeAt * 1000).toLong())
+    }
+
+    fun setQuality(qv: String) {
+        quality = qv
+        vm.prefs.quality = qv
+        val at = absPos()
+        player.stop()
+        failed = null
+        open(at)
+        notice = Triple("Якість: " + qualityName(qv), null, null)
     }
 
     fun goNext() {
@@ -253,8 +325,7 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
     }
 
     fun seekBy(sec: Int) {
-        val target = (player.currentPosition + sec * 1000L).coerceIn(0L, if (player.duration > 0) player.duration else Long.MAX_VALUE)
-        player.seekTo(target)
+        seekAbs(absPos() + sec * 1000L)
         val b = bubble
         val now = System.currentTimeMillis()
         bubble = if (b != null && now - b.second < 900 && (b.first > 0) == (sec > 0)) Pair(b.first + sec, now) else Pair(sec, now)
@@ -263,8 +334,7 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
 
     fun togglePlay() {
         if (ended) {
-            player.seekTo(0)
-            ended = false
+            seekAbs(0)
             countdown = -1
         }
         if (player.isPlaying) player.pause() else player.play()
@@ -277,13 +347,13 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
         val l = object : MPlayer.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playing = isPlaying
-                if (isPlaying && watch.start == null) watch.start = player.currentPosition / 1000.0
+                if (isPlaying && watch.start == null) watch.start = absPos() / 1000.0
                 if (!isPlaying) ping(false)
             }
 
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == MPlayer.STATE_BUFFERING
-                if (state == MPlayer.STATE_READY && player.duration > 0) dur = player.duration
+                if (state == MPlayer.STATE_READY && source != "live" && player.duration > 0) dur = player.duration
                 if (state == MPlayer.STATE_ENDED) {
                     ended = true
                     ping(true)
@@ -292,12 +362,13 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                val network = error.errorCode in 2000..2999
+                val badStatus = error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
+                val network = error.errorCode in 2000..2999 && !(badStatus && source == "live")
                 if (network) failed = "Зв'язок з ПК обірвався (${error.errorCodeName})" else fallback(error.errorCodeName)
             }
 
             override fun onTracksChanged(tracks: Tracks) {
-                if (!raw || tracks.groups.isEmpty()) return
+                if (source != "raw" || tracks.groups.isEmpty()) return
                 val g = tracks.groups
                 val badVideo = g.any { it.type == C.TRACK_TYPE_VIDEO } && g.none { it.type == C.TRACK_TYPE_VIDEO && it.isSupported }
                 val badAudio = g.any { it.type == C.TRACK_TYPE_AUDIO } && g.none { it.type == C.TRACK_TYPE_AUDIO && it.isSupported }
@@ -341,10 +412,10 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
     // позиція, буфер, облік перегляду
     LaunchedEffect(route.id) {
         while (true) {
-            val cur = player.currentPosition
+            val cur = absPos()
             if (!scrubbing) pos = cur
-            buffered = player.bufferedPosition
-            if (player.duration > 0) dur = player.duration
+            buffered = (if (source == "live") offset else 0L) + player.bufferedPosition
+            if (source != "live" && player.duration > 0) dur = player.duration
             val c = cur / 1000.0
             if (player.isPlaying) {
                 val last = watch.last
@@ -510,12 +581,16 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
                     onPlay = { togglePlay() },
                     onSeekBy = { seekBy(it); poke() },
                     onSeek = { ms ->
-                        player.seekTo(ms)
-                        pos = ms
-                        ended = false
+                        seekAbs(ms)
                         countdown = -1
                         poke()
                     },
+                    qualityLabel = when (source) {
+                        "live" -> "${liveH}p"
+                        "copy" -> "MP4"
+                        else -> if (quality == "auto") "Авто" else "Ориг."
+                    },
+                    onQuality = { picker = true; poke() },
                     onScrub = { scrubbing = it; poke() },
                     onSpeed = {
                         speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.size]
@@ -561,14 +636,15 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
                         Text(msg, style = mono(12.sp), color = p.mute)
                         Spacer(Modifier.height(14.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Btn("Ще раз", {
-                                raw = true
-                                start()
-                            }, icon = Ic.refresh, kind = Kind.Primary)
+                            Btn("Ще раз", { start() }, icon = Ic.refresh, kind = Kind.Primary)
                             Btn("Назад", { vm.nav.back() }, icon = Ic.back)
                         }
                     }
                 }
+            }
+
+            if (picker) {
+                QualityPicker(v, quality, if (source == "live") liveH else 0, ffmpeg, onPick = { picker = false; setQuality(it) }, onClose = { picker = false })
             }
 
             if (ended && failed == null) {
@@ -578,11 +654,49 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
                     onGo = { goNext() },
                     onCancel = { countdown = -1 },
                     onAgain = {
-                        ended = false
-                        player.seekTo(0)
+                        seekAbs(0)
                         player.play()
                     },
                 )
+            }
+        }
+    }
+}
+
+private fun qualityName(q: String) = when (q) {
+    "orig" -> "оригінал"
+    "auto" -> "авто"
+    else -> q + "p"
+}
+
+@Composable
+private fun QualityPicker(v: Video, current: String, live: Int, ffmpeg: Boolean, onPick: (String) -> Unit, onClose: () -> Unit) {
+    val p = LocalPal.current
+    val opts = listOf(
+        Triple("auto", "Авто", "Вдома — оригінал, через мобільний інтернет — 720p"),
+        Triple("orig", "Оригінал", listOf(v.res, v.vc.uppercase()).filter { it.isNotEmpty() }.joinToString(", ") + " без перекодування"),
+        Triple("1080", "1080p", "≈ 6 Мбіт/с, перекодовує ПК"),
+        Triple("720", "720p", "≈ 3 Мбіт/с, для мобільного інтернету"),
+        Triple("480", "480p", "≈ 1,5 Мбіт/с, коли зв'язок слабкий"),
+    )
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
+        Win("mpv — ", Modifier.widthIn(max = 420.dp), bold = "quality") {
+            Column(Modifier.padding(vertical = 6.dp)) {
+                opts.forEach { (id, name, hint) ->
+                    val on = id == current
+                    val enabled = ffmpeg || id == "auto" || id == "orig"
+                    Row(
+                        Modifier.fillMaxWidth().clickable(enabled = enabled) { onPick(id) }.padding(horizontal = 16.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(name, style = body(15.sp, if (on) FontWeight.SemiBold else FontWeight.Normal), color = if (on) p.acc else if (enabled) p.fg else p.mute)
+                            Text(if (enabled) hint else "Потрібен ffmpeg на ПК", style = body(12.sp), color = p.mute)
+                        }
+                        if (on) Icon(Ic.check, null, tint = p.acc, modifier = Modifier.size(20.dp))
+                    }
+                }
+                if (live > 0) Text("Зараз ПК перекодовує в ${live}p", style = mono(11.5.sp), color = p.mute, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
         }
     }
@@ -671,6 +785,8 @@ private fun Controls(
     dur: Long,
     buffered: Long,
     speed: Float,
+    qualityLabel: String,
+    onQuality: () -> Unit,
     queueText: String?,
     hasNext: Boolean,
     landscape: Boolean,
@@ -729,6 +845,10 @@ private fun Controls(
                 Text(
                     speedLabel(speed), style = mono(13.sp, FontWeight.Bold), color = if (speed != 1f) p.acc else Color.White,
                     modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onSpeed).padding(horizontal = 10.dp, vertical = 9.dp),
+                )
+                Text(
+                    qualityLabel, style = mono(13.sp, FontWeight.Bold), color = Color.White,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onQuality).padding(horizontal = 10.dp, vertical = 9.dp),
                 )
                 CtlBtn(Ic.fit, "Масштаб", onResize)
                 CtlBtn(Ic.rotate, if (landscape) "Вертикально" else "Горизонтально", onRotate, on = landscape)

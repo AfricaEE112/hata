@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
 
     /** Відкрити екран з ярлика чи команди: route = lib, pl, pl/short, top, settings, i/<id>, v/<id>. */
     private fun handle(i: Intent?) {
+        i?.getStringExtra("quality")?.takeIf { it in listOf("auto", "orig", "1080", "720", "480") }?.let { vm.prefs.quality = it }
         val r = i?.getStringExtra("route") ?: return
         if (!vm.connected) return
         val parts = r.trim('/').split('/')

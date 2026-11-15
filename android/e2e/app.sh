@@ -93,6 +93,15 @@ sleep 7
 shot 15-player-playing
 adb shell input keyevent 4; sleep 2
 
+# якість 480p: ПК перекодовує на льоту
+adb shell am start -n $PKG/.MainActivity --es quality 480 --es route "v/$(id_of 'Захід сонця')" > /dev/null; sleep 2.5
+dismiss_hint; sleep 0.3
+shot 15b-player-live480
+sleep 6
+shot 15c-player-live480-playing
+adb shell input keyevent 4; sleep 2
+adb shell am start -n $PKG/.MainActivity --es quality auto > /dev/null; sleep 1
+
 # HEVC у MKV — телефон грає напряму
 open_route "v/$(id_of 'Фрактал')"; sleep 2; dismiss_hint; sleep 7
 shot 16-player-hevc

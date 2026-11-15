@@ -672,14 +672,16 @@ def prep_worker():
             MEDIA_EVENT.set()
 
 
-def encode_args(enc, src_h, odd):
-    """(параметри входу, параметри відео) для кодувальника. Підібрано під RDNA2 (RX 6000) для AMF."""
-    mh = int(C.cfg.get('max_height') or 0)
+def encode_args(enc, src_h, odd, target_h=None, kbps=None, gop_n=120):
+    """(параметри входу, параметри відео) для кодувальника. Підібрано під RDNA2 (RX 6000) для AMF.
+    target_h і kbps — для перекодування на льоту: висота кадру й межа бітрейту."""
+    mh = int(target_h or C.cfg.get('max_height') or 0)
     scale = bool(mh and src_h and src_h > mh)
     pre, vf = [], []
     if scale:
         vf.append('scale=-2:%d' % mh)
-    gop = ['-g', '120']                    # ключовий кадр кожні ~5 с: швидке перемотування на телефоні
+    gop = ['-g', str(gop_n)]               # ключовий кадр кожні ~5 с: швидке перемотування на телефоні
+    rate = ['-b:v', '%dk' % kbps, '-maxrate', '%dk' % (kbps * 3 // 2), '-bufsize', '%dk' % (kbps * 2)] if kbps else []
     if enc == 'h264_amf':
         dec = HW.get('decode')
         if dec == 'd3d11va' and HW.get('zero_copy') and not scale and not odd:
@@ -688,21 +690,22 @@ def encode_args(enc, src_h, odd):
             if dec == 'd3d11va':
                 pre = ['-hwaccel', 'd3d11va']                                  # декодує GPU, фільтри — процесор
             vf.append('format=nv12')
-        v = ['-c:v', 'h264_amf', '-usage', 'transcoding', '-quality', 'balanced', '-rc', 'cqp',
-             '-qp_i', '20', '-qp_p', '22', '-qp_b', '24', '-profile:v', 'high', *gop]
+        v = ['-c:v', 'h264_amf', '-usage', 'transcoding', '-quality', 'balanced',
+             *(['-rc', 'vbr_peak', *rate] if kbps else ['-rc', 'cqp', '-qp_i', '20', '-qp_p', '22', '-qp_b', '24']),
+             '-profile:v', 'high', *gop]
     elif enc == 'h264_nvenc':
         vf.append('format=yuv420p')
-        v = ['-c:v', 'h264_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', '22', '-b:v', '0', '-profile:v', 'high', *gop]
+        v = ['-c:v', 'h264_nvenc', '-preset', 'p5', '-rc', 'vbr', *(rate or ['-cq', '22', '-b:v', '0']), '-profile:v', 'high', *gop]
     elif enc == 'h264_qsv':
         vf.append('format=nv12')
-        v = ['-c:v', 'h264_qsv', '-preset', 'faster', '-global_quality', '22', *gop]
+        v = ['-c:v', 'h264_qsv', '-preset', 'faster', *(rate or ['-global_quality', '22']), *gop]
     elif enc == 'h264_vaapi':
         pre = ['-vaapi_device', VAAPI_DEV]
         vf += ['format=nv12', 'hwupload']
-        v = ['-c:v', 'h264_vaapi', '-qp', '22', *gop]
+        v = ['-c:v', 'h264_vaapi', *(rate or ['-qp', '22']), *gop]
     else:
         vf.append('format=yuv420p')
-        v = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-profile:v', 'high', *gop]
+        v = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23' if kbps else '22', *rate[2:], '-profile:v', 'high', *gop]
     if vf:
         v = ['-vf', ','.join(vf)] + v
     return pre, v
@@ -774,6 +777,21 @@ def convert(vid, st):
         if enc not in ('copy', 'libx264'):
             print('  ⚠ %s не впорався з «%s», повторюю процесором: %s' % (ENC_LABEL.get(enc, enc), r['title'], last_err[-160:]))
     raise RuntimeError(last_err or 'ffmpeg завершився з помилкою')
+
+
+# ── перекодування на льоту: потрібна якість одразу, без очікування копії ──
+LIVE_KBPS = {1080: 6000, 720: 3000, 480: 1500}
+LIVE_MAX = 2
+LIVE = {}                 # адреса клієнта -> процес ffmpeg
+LIVE_LOCK = threading.Lock()
+
+
+def live_cmd(r, h, t, enc):
+    pre, v = encode_args(enc, r['height'], odd_pixfmt(r['pixfmt']), target_h=h, kbps=LIVE_KBPS[h], gop_n=48)
+    ss = ['-ss', '%.3f' % t] if t > 0 else []
+    return [C.ffmpeg, '-hide_banner', '-v', 'error', '-fflags', '+genpts', *pre, *ss, '-i', r['path'],
+            '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-dn', *v, '-c:a', 'aac', '-b:a', '128k', '-ac', '2',
+            '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-frag_duration', '2000000', 'pipe:1']
 
 
 def trim_cache(keep=None):
@@ -1478,6 +1496,68 @@ class Handler(http.server.BaseHTTPRequestHandler):
             tok = ''
         return hmac.compare_digest(tok, auth_token())
 
+    def send_live(self, r, qs, head):
+        """Потік fragmented MP4 з перекодуванням на льоту (?h=1080|720|480&t=секунди).
+        Довжина невідома, тож відповідь закінчується закриттям з'єднання. Перемотка = новий запит з іншим t."""
+        try:
+            h = int(qs.get('h', ['720'])[0])
+        except ValueError:
+            h = 720
+        h = h if h in LIVE_KBPS else 720
+        try:
+            t = max(0.0, float(qs.get('t', ['0'])[0]))
+        except ValueError:
+            t = 0.0
+        if not C.ffmpeg:
+            return self.send_json({'error': 'no ffmpeg'}, 503)
+        ip = self.client_address[0]
+        with LIVE_LOCK:
+            old = LIVE.pop(ip, None)          # той самий клієнт перемотав — старий потік більше не потрібен
+            if old:
+                old.kill()
+            if len(LIVE) >= LIVE_MAX:
+                return self.send_json({'error': 'busy'}, 503)
+        enc = pick_encoder()
+        p, first = None, b''
+        for e in ([enc, 'libx264'] if enc != 'libx264' else ['libx264']):
+            p = subprocess.Popen(live_cmd(r, h, t, e), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 stdin=subprocess.DEVNULL, creationflags=NOWIN)
+            with LIVE_LOCK:
+                LIVE[ip] = p
+            first = os.read(p.stdout.fileno(), 1 << 16)
+            if first:
+                break
+            p.wait()
+        try:
+            if not first:
+                return self.send_json({'error': 'ffmpeg'}, 500)
+            self.close_connection = True
+            self.send_response(200)
+            self.send_header('Content-Type', 'video/mp4')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Connection', 'close')
+            self.send_header('X-Live-Start', '%.3f' % t)
+            self.end_headers()
+            if head:
+                return
+            self.wfile.write(first)
+            fd = p.stdout.fileno()
+            while True:
+                chunk = os.read(fd, 1 << 16)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            pass
+        finally:
+            if p and p.poll() is None:
+                p.kill()
+            if p:
+                p.wait()
+            with LIVE_LOCK:
+                if LIVE.get(ip) is p:
+                    del LIVE[ip]
+
     def send_file(self, path, ctype, cache='no-cache'):
         try:
             f = open(path, 'rb')
@@ -1559,7 +1639,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 html = LOGIN_HTML.replace('{err}', '<p class="err">Неправильний пароль</p>')
                 return self.send_bytes(html.encode(), 'text/html; charset=utf-8', 401)
             if not self.authed():
-                if path.startswith(('/api/', '/stream/', '/thumb/')):
+                if path.startswith(('/api/', '/stream/', '/thumb/', '/live/')):
                     return self.send_json({'error': 'auth'}, 401)
                 return self.redirect('/login')
 
@@ -1583,6 +1663,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 m = re.fullmatch(r'/sprite/(\w+)', path)
                 if m and ID_RE.fullmatch(m.group(1)):
                     return self.send_file(sprite_path(m.group(1)), 'image/jpeg', 'max-age=604800')
+                m = re.fullmatch(r'/live/(\w+)', path)
+                if m:
+                    r = self.video_row(m.group(1))
+                    if not r:
+                        return self.send_json({'error': 'not found'}, 404)
+                    return self.send_live(r, qs, method == 'HEAD')
                 m = re.fullmatch(r'/stream/(\w+)', path)
                 if m:
                     r = self.video_row(m.group(1))
