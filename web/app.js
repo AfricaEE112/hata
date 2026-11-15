@@ -44,6 +44,8 @@ const I = {
   chip: svg('<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2.5V6M15 2.5V6M9 18v3.5M15 18v3.5M2.5 9H6M2.5 15H6M18 9h3.5M18 15h3.5"/>'),
   disk: svg('<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'),
   queue: svg('<path d="M4 6h16M4 12h16M4 18h10"/>'),
+  clock: svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+  list: svg('<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 5v2M4.5 11v2M4.5 17v2"/>'),
 };
 
 // ── утиліти ──
@@ -107,7 +109,9 @@ async function load() {
   S.by = Object.fromEntries(d.videos.map(v => [v.id, v]));
   Object.assign(S, {folders: d.folders, ffmpeg: d.ffmpeg, pending: d.pending, spritesPending: d.spritesPending, N: d.spriteN || 20, weekSec: d.weekSec, loaded: true});
   if (d.cfg) {
+    const localUi = S.cfg.ui;
     S.cfg = d.cfg;
+    if (localUi && Date.now() - uiSavedAt < 5000) S.cfg.ui = localUi;   // щойно змінене сортування не перетираємо
     if (d.cfg.theme && d.cfg.theme !== document.documentElement.dataset.theme) applyTheme(d.cfg.theme);
   }
 }
@@ -141,6 +145,9 @@ function applyTheme(id) {
   LS.set('theme', t.id);
   const m = $('meta[name=theme-color]');
   if (m) m.content = t.bg;
+  const fav = $('#favicon');   // значок вкладки «▶_» у кольорах теми
+  if (fav) fav.href = 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="${t.p}"/>` +
+    `<rect x="2" y="2" width="60" height="60" rx="12" fill="none" stroke="${t.a}" stroke-opacity=".55" stroke-width="3"/><path d="M13 15v34l25-17z" fill="${t.a}"/><rect x="40" y="43" width="13" height="5" rx="1.5" fill="${t.a2}"/></svg>`);
 }
 let atmoUrl = '';
 function setAtmo(v) {
@@ -174,7 +181,7 @@ function renderMods(st) {
   statusFast = !!(st.conv || st.queue);
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) pollStatus(); });
-// клавіатура як у тайловому WM: 1–4 робочі столи, / пошук, R випадкове
+// клавіатура як у тайловому WM: 1–5 робочі столи, / пошук, R випадкове
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
   const t = e.target;
@@ -183,7 +190,7 @@ document.addEventListener('keydown', e => {
   const onPlayer = (baseHash || '').startsWith('/v/');
   if (e.key === '/' || e.code === 'Slash') { e.preventDefault(); $('#q').focus(); return; }
   if (onPlayer) return;
-  if (/^Digit[1-4]$/.test(e.code)) { e.preventDefault(); go(['#/', '#/lib', '#/top', '#/settings'][+e.code.slice(5) - 1]); }
+  if (/^Digit[1-5]$/.test(e.code)) { e.preventDefault(); go(['#/', '#/lib', '#/pl', '#/top', '#/settings'][+e.code.slice(5) - 1]); }
   else if (e.code === 'KeyR') { e.preventDefault(); randomVideo(false); }
 });
 
@@ -193,6 +200,7 @@ function tick() {
 }
 tick();
 setInterval(tick, 15000);
+applyTheme(document.documentElement.dataset.theme || 'arch');
 
 // ── обкладинки й картки ──
 function hue(id) { return parseInt(id.slice(0, 4), 16) % 360; }
@@ -369,6 +377,7 @@ async function renderBase(h, keep) {
     if (parts[0] === 'v') await renderPlayer(parts[1], parts[2] != null ? +parts[2] : null);
     else if (parts[0] === 'lib') await renderLib();
     else if (parts[0] === 'top') await renderTop();
+    else if (parts[0] === 'pl') await (parts[1] ? renderPlaylist(parts[1]) : renderPlaylists());
     else if (parts[0] === 'settings') await renderSettings();
     else await renderHome();
   } catch (e) {
@@ -493,6 +502,8 @@ async function renderHome() {
   let html = promptLine('~', `vidbox --week ${week.week}`) + (list.length ? spotHTML(list) : '');
   const cont = vs.filter(v => S.cfg.resume && v.pos > 15 && v.dur && v.pos < v.dur * 0.95).sort((a, b) => b.posAt - a.posAt).slice(0, 12);
   html += shelf('Продовжити перегляд', '', cont, {meta: v => [shortFolder(v.folder), 'ще ' + fmtLen(v.dur - v.pos)]});
+  html += `<section class="shelf"><header><div><h2>Плейлисти</h2><p>Збираються самі за тривалістю</p></div><a class="btn ghost" style="margin-left:auto" href="#/pl">${I.list}Усі</a></header>` +
+    `<div class="plgrid home">${LEN_GROUPS.map(plCard).join('')}</div></section>`;
   const weekShelves = week.sections.map(s => shelf(s.title, s.sub, s.ids.map(i => S.by[i]).filter(Boolean), {small: true})).join('');
   html += `<section class="week win">${winBar(`~/підбірка-тижня/<b>${esc(week.week)}</b>`)}<div class="win-body"><div class="week-head"><h2 class="title">Підбірка тижня</h2><span class="dates">${weekRange(week)}</span>` +
     `<button class="btn ghost" id="wkr" aria-label="Зібрати іншу підбірку">${I.refresh}<span>Зібрати іншу</span></button></div>${weekShelves}</div></section>`;
@@ -510,6 +521,7 @@ async function renderHome() {
     toast('Зібрав нову підбірку');
   };
   mountSpot(list);
+  wirePl(app);
 }
 
 // ── Бібліотека ──
@@ -533,7 +545,11 @@ function sorter(k, dir) {
   return (a, b) => m * base(a, b) || byName(a, b);
 }
 const ui = () => S.cfg.ui;
-function saveUi() { api('/api/settings', {method: 'POST', body: JSON.stringify({ui: S.cfg.ui})}).catch(() => {}); }
+let uiSavedAt = 0;
+function saveUi() {
+  uiSavedAt = Date.now();
+  api('/api/settings', {method: 'POST', body: JSON.stringify({ui: S.cfg.ui})}).then(() => { uiSavedAt = Date.now(); }).catch(() => {});
+}
 function filtered() {
   let vs = S.videos;
   if (view.folder) vs = vs.filter(v => v.folder === view.folder || v.folder.startsWith(view.folder + '/'));
@@ -552,7 +568,7 @@ function libMeta(v, grouped) {
 }
 function libCmd() {
   const u = ui();
-  return 'ls --sort=' + u.sort + (u.dir === 'asc' && u.sort !== 'random' ? ' --reverse' : '') + (u.group === 'folders' ? ' --group=folder' : '') +
+  return 'ls --sort=' + u.sort + (u.dir === 'asc' && u.sort !== 'random' ? ' --reverse' : '') + (u.group === 'folders' ? ' --group=folder' : u.group === 'duration' ? ' --group=length' : '') +
     (view.folder ? ` "${shortFolder(view.folder)}"` : '') + (view.q ? ` | grep -i "${view.q}"` : '');
 }
 function drawDir() {
@@ -561,7 +577,7 @@ function drawDir() {
   b.setAttribute('aria-label', u.sort === 'random' ? 'Перемішати ще раз' : 'Напрямок сортування: ' + s[u.dir]);
 }
 function drawGrid() {
-  const vs = filtered(), g = $('#grid');
+  const vs = filtered(), g = $('#grid'), u = ui();
   $('#cnt').textContent = vs.length + ' відео';
   const pr = $('#libPrompt');
   if (pr) pr.outerHTML = promptLine('~/бібліотека', libCmd(), 'libPrompt');
@@ -570,37 +586,43 @@ function drawGrid() {
     g.innerHTML = `<div class="empty" style="grid-column:1/-1">${view.q ? `Нічого не знайшлося за запитом «${esc(view.q)}». Спробуй інше слово або обери «Усі» папки.` : 'У цій папці немає відео.'}</div>`;
     return;
   }
-  if (ui().group !== 'folders') {
+  if (u.group !== 'folders' && u.group !== 'duration') {
     g.className = 'grid';
     g.innerHTML = vs.map(v => card(v, {meta: libMeta(v, false)})).join('');
     return;
   }
-  // вигляд «По папках»: кожна папка окремим блоком, всередині — поточне сортування
-  const groups = new Map();
-  for (const v of vs) { if (!groups.has(v.folder)) groups.set(v.folder, []); groups.get(v.folder).push(v); }
-  const names = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'uk', {numeric: true}));
-  if (ui().sort === 'folder' && ui().dir === 'desc') names.reverse();
+  // групи: «По папках» — кожна папка окремо; «За тривалістю» — до 20 хв, до години, понад годину
+  let groups;
+  if (u.group === 'duration') {
+    groups = LEN_GROUPS.concat([{id: 'unknown', name: 'Тривалість ще невідома', hint: 'VidBox ще не прочитав ці файли', test: v => !(v.dur > 0)}])
+      .map(gr => ({key: 'len:' + gr.id, name: gr.name, sub: gr.hint, list: vs.filter(gr.test), pl: gr.id !== 'unknown' ? gr.id : ''}))
+      .filter(gr => gr.list.length);
+  } else {
+    const m = new Map();
+    for (const v of vs) { if (!m.has(v.folder)) m.set(v.folder, []); m.get(v.folder).push(v); }
+    const names = [...m.keys()].sort((a, b) => a.localeCompare(b, 'uk', {numeric: true}));
+    if (u.sort === 'folder' && u.dir === 'desc') names.reverse();
+    groups = names.map(f => { const parts = f.split('/'); return {key: f, name: parts[parts.length - 1], sub: parts.slice(0, -1).join(' / '), list: m.get(f)}; });
+  }
   const closed = new Set(LS.get('closed', []));
   g.className = 'groups';
-  g.innerHTML = names.map(f => {
-    const list = groups.get(f), parts = f.split('/');
-    const size = list.reduce((a, v) => a + (v.size || 0), 0), dur = list.reduce((a, v) => a + (v.dur || 0), 0);
-    return `<section class="fgroup${closed.has(f) ? ' closed' : ''}" data-folder="${esc(f)}">` +
-      `<button class="fhead" aria-expanded="${!closed.has(f)}">${I.chev}<span class="fname">${esc(parts[parts.length - 1])}</span>` +
-      `<span class="fpath">${esc(parts.slice(0, -1).join(' / '))}</span><span class="fstat">${list.length} відео, ${fmtSize(size)}${dur ? ', ' + fmtLen(dur) : ''}</span></button>` +
-      `<div class="grid">${list.map(v => card(v, {meta: libMeta(v, true)})).join('')}</div></section>`;
+  g.innerHTML = groups.map(gr => {
+    const size = gr.list.reduce((a, v) => a + (v.size || 0), 0), dur = gr.list.reduce((a, v) => a + (v.dur || 0), 0);
+    return `<section class="fgroup${closed.has(gr.key) ? ' closed' : ''}" data-folder="${esc(gr.key)}">` +
+      `<div class="fhead-row"><button class="fhead" aria-expanded="${!closed.has(gr.key)}">${I.chev}<span class="fname">${esc(gr.name)}</span>` +
+      `<span class="fpath">${esc(gr.sub)}</span><span class="fstat">${gr.list.length} відео, ${fmtSize(size)}${dur ? ', ' + fmtLen(dur) : ''}</span></button>` +
+      (gr.pl ? `<button class="btn ghost" data-play-pl="${gr.pl}">${I.play}Відтворити все</button>` : '') + `</div>` +
+      `<div class="grid">${gr.list.map(v => card(v, {meta: libMeta(v, u.group === 'folders')})).join('')}</div></section>`;
   }).join('');
 }
 async function renderLib() {
   await load();
   if (view.folder && !S.folders.includes(view.folder)) view.folder = '';
-  const u = ui();
-  if (!SORTS[u.sort]) u.sort = 'score';
+  if (!SORTS[ui().sort]) ui().sort = 'score';
+  const u = ui(), seg = (id, icon, text) => `<button data-group="${id}" class="${u.group === id || (id === 'all' && !['folders', 'duration'].includes(u.group)) ? 'on' : ''}">${icon}${text}</button>`;
   app.innerHTML = `${promptLine('~/бібліотека', libCmd(), 'libPrompt')}<div class="page-head"><h1 class="title">Бібліотека</h1><span class="count" id="cnt"></span></div>
     <div class="toolbar">
-      <div class="seg" role="group" aria-label="Вигляд бібліотеки">
-        <button data-group="all" class="${u.group !== 'folders' ? 'on' : ''}" aria-pressed="${u.group !== 'folders'}">${I.grid}Усі разом</button>
-        <button data-group="folders" class="${u.group === 'folders' ? 'on' : ''}" aria-pressed="${u.group === 'folders'}">${I.folder}По папках</button></div>
+      <div class="seg" role="group" aria-label="Вигляд бібліотеки">${seg('all', I.grid, 'Усі разом')}${seg('folders', I.folder, 'По папках')}${seg('duration', I.clock, 'За тривалістю')}</div>
       <span class="grow"></span>
       <label class="sel"><select id="sort" aria-label="Сортувати за">${Object.entries(SORTS).map(([k, s]) => `<option value="${k}"${k === u.sort ? ' selected' : ''}>${s.label}</option>`).join('')}</select>${I.chev}</label>
       <button class="btn" id="dir"></button>
@@ -608,26 +630,33 @@ async function renderLib() {
     ${S.folders.length > 1 ? `<div class="chips fl" id="chips"><button class="chip${view.folder ? '' : ' on'}" data-f="">Усі папки</button>` +
       S.folders.map(f => `<button class="chip${f === view.folder ? ' on' : ''}" data-f="${esc(f)}">${esc(shortFolder(f))}</button>`).join('') + `</div>` : ''}
     <div id="grid"></div>`;
+  $$('[data-group]').forEach(b => b.setAttribute('aria-pressed', b.classList.contains('on')));
   drawDir();
+  // Важливо: S.cfg.ui щоразу читаємо заново (ui()), бо фонове оновлення бібліотеки
+  // підміняє S.cfg новим об'єктом. Раніше тут жила стара копія — і сортування «не спрацьовувало».
   $('#sort').onchange = e => {
+    const u = ui();
     u.sort = e.target.value;
     u.dir = SORTS[u.sort].first || 'desc';
     if (u.sort === 'random') S.videos.forEach(v => v._r = Math.random());
     saveUi(); drawDir(); drawGrid();
   };
   $('#dir').onclick = () => {
+    const u = ui();
     if (u.sort === 'random') S.videos.forEach(v => v._r = Math.random());
     else { u.dir = u.dir === 'asc' ? 'desc' : 'asc'; saveUi(); }
     drawDir(); drawGrid();
   };
   $$('[data-group]').forEach(b => b.onclick = () => {
-    u.group = b.dataset.group; saveUi();
+    ui().group = b.dataset.group; saveUi();
     $$('[data-group]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
     drawGrid();
   });
   $('#grid').addEventListener('click', e => {
+    const pl = e.target.closest('[data-play-pl]');
+    if (pl) { playQueue(pl.dataset.playPl); return; }
     const h = e.target.closest('.fhead'); if (!h) return;
-    const sec = h.parentElement, f = sec.dataset.folder, closed = new Set(LS.get('closed', []));
+    const sec = h.closest('.fgroup'), f = sec.dataset.folder, closed = new Set(LS.get('closed', []));
     sec.classList.toggle('closed');
     if (sec.classList.contains('closed')) closed.add(f); else closed.delete(f);
     h.setAttribute('aria-expanded', !sec.classList.contains('closed'));
@@ -780,7 +809,7 @@ function gpuSection(st, h) {
 
 // «Про програму» у стилі neofetch — привіт райсам Linux
 function fetchHTML(st) {
-  const logo = ['███', '██████', '█████████', '████████████', '███████████████', '████████████', '█████████', '██████', '███'].join('\n');
+  const logo = ['███', '██████', '█████████', '████████████', '███████████████', '████████████', '█████████', '██████', '███    ████████'].join('\n');
   const t = st.totals || {}, theme = (THEMES.find(x => x.id === st.theme) || THEMES[0]).name;
   const rows = [
     ['Версія', 'VidBox ' + st.version],
@@ -834,6 +863,94 @@ picker.addEventListener('click', e => {
   if (pk) { if (pickCb) pickCb(pk.dataset.pick); closePicker(); return; }
   if (e.target.closest('[data-pclose]')) closePicker();
 });
+
+// ── Плейлисти ──
+// Збираються самі за тривалістю: нові відео потрапляють у потрібний плейлист автоматично.
+// Черга відтворення живе в sessionStorage: плеєр бере «далі» з неї, а не з папки.
+const LEN_GROUPS = [
+  {id: 'short', name: 'До 20 хвилин', file: 'короткі', hint: 'Коли є кілька вільних хвилин', test: v => v.dur > 0 && v.dur < 1200},
+  {id: 'mid', name: 'До години', file: 'середні', hint: 'Від 20 хвилин до години: серія чи документалка', test: v => v.dur >= 1200 && v.dur < 3600},
+  {id: 'long', name: 'Понад годину', file: 'довгі', hint: 'Фільми й довгі записи на вечір', test: v => v.dur >= 3600},
+];
+const inOrder = (a, b) => a.folder.localeCompare(b.folder, 'uk', {numeric: true}) || byName(a, b);
+function plItems(id) {
+  const g = LEN_GROUPS.find(x => x.id === id);
+  return g ? S.videos.filter(g.test).sort(inOrder) : [];
+}
+function getQueue() { try { return JSON.parse(sessionStorage.getItem('vb_queue')); } catch (e) { return null; } }
+function setQueue(q) { try { if (q) sessionStorage.setItem('vb_queue', JSON.stringify(q)); else sessionStorage.removeItem('vb_queue'); } catch (e) {} }
+function shuffled(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+function playQueue(id, startId, shuffle) {
+  const g = LEN_GROUPS.find(x => x.id === id);
+  let vs = plItems(id);
+  if (!g || !vs.length) return toast('У цьому плейлисті поки немає відео');
+  if (shuffle) vs = shuffled(vs);
+  const ids = vs.map(v => v.id);
+  setQueue({pl: id, name: g.name, ids, shuffle: !!shuffle});
+  go('#/v/' + (startId || ids[0]));
+}
+function queueFor(v) {
+  const q = getQueue();
+  return q && Array.isArray(q.ids) && q.ids.includes(v.id) ? q : null;
+}
+function mosaic(list) {
+  const four = list.slice().sort((a, b) => (b.added || 0) - (a.added || 0)).slice(0, 4);
+  const tiles = four.map(v => cover(v));
+  // якщо відео менше чотирьох — добираємо інші кадри з тих самих відео, щоб обкладинка не була порожньою
+  const withFrames = four.filter(hasSprite);
+  for (let k = 0; tiles.length < 4 && withFrames.length; k++) {
+    const v = withFrames[k % withFrames.length];
+    tiles.push(`<div class="fill" style="${frameBg(v, [9, 15, 6, 18][k % 4])}"></div>`);
+  }
+  while (tiles.length < 4) tiles.push('');
+  return `<div class="mosaic">${tiles.map(t => `<div class="th">${t}</div>`).join('')}</div>`;
+}
+function plCard(g) {
+  const list = plItems(g.id), dur = list.reduce((a, v) => a + (v.dur || 0), 0);
+  return `<article class="plcard win">${winBar(`~/плейлисти/<b>${esc(g.file)}.m3u</b>`)}<a class="plcover" href="#/pl/${g.id}" aria-label="${esc(g.name)}">${mosaic(list)}</a>
+    <div class="plinfo"><a href="#/pl/${g.id}"><h3 class="title">${esc(g.name)}</h3></a><p>${esc(g.hint)}</p>
+      <div class="chipset"><span>${list.length} відео</span>${dur ? `<span>${fmtLen(dur)}</span>` : ''}</div>
+      <div class="acts">${list.length ? `<button class="btn primary" data-play-pl="${g.id}">${I.play}Відтворити</button><button class="btn" data-shuffle-pl="${g.id}">${I.dice}Перемішати</button>` : '<span class="note">Поки порожньо</span>'}</div></div></article>`;
+}
+function wirePl(root) {
+  root.addEventListener('click', e => {
+    const p = e.target.closest('[data-play-pl]');
+    if (p) { e.preventDefault(); playQueue(p.dataset.playPl); return; }
+    const s = e.target.closest('[data-shuffle-pl]');
+    if (s) { e.preventDefault(); playQueue(s.dataset.shufflePl, null, true); return; }
+    const t = e.target.closest('[data-track]');
+    if (t && !e.target.closest('a')) { e.preventDefault(); playQueue(t.dataset.pl, t.dataset.track); }
+  });
+}
+async function renderPlaylists() {
+  await load();
+  app.innerHTML = `${promptLine('~/плейлисти', 'ls *.m3u')}<div class="page-head"><h1 class="title">Плейлисти</h1></div>
+    <p class="lead">Збираються самі за тривалістю відео. Нові файли потрапляють у потрібний плейлист автоматично, а відтворення йде підряд, одне за одним.</p>
+    <div class="plgrid">${LEN_GROUPS.map(plCard).join('')}</div>`;
+  wirePl(app);
+}
+async function renderPlaylist(id) {
+  await load();
+  const g = LEN_GROUPS.find(x => x.id === id);
+  if (!g) { app.innerHTML = `<div class="empty"><h1 class="title">Плейлист не знайдено</h1><a class="btn" href="#/pl">До плейлистів</a></div>`; return; }
+  const list = plItems(id), dur = list.reduce((a, v) => a + (v.dur || 0), 0), unseen = list.filter(v => !v.views).length;
+  app.innerHTML = `${promptLine('~/плейлисти', `cat ${g.file}.m3u`)}
+    <section class="plhead">${mosaic(list)}<div><p class="spot-kicker">Плейлист</p><h1 class="title">${esc(g.name)}</h1><p class="lead">${esc(g.hint)}</p>
+      <div class="chipset"><span>${list.length} відео</span>${dur ? `<span>${fmtLen(dur)}</span>` : ''}${unseen ? `<span class="hl">${unseen} ще не бачив</span>` : ''}</div>
+      <div class="acts">${list.length ? `<button class="btn primary" data-play-pl="${id}">${I.play}Відтворити все</button><button class="btn" data-shuffle-pl="${id}">${I.dice}Перемішати</button>` : ''}
+        <a class="btn ghost" href="#/pl">Усі плейлисти</a></div></div></section>
+    ${list.length ? `<ol class="tracks">${list.map((v, i) => `<li class="track" data-track="${v.id}" data-pl="${id}" tabindex="0" role="button" aria-label="Відтворити ${esc(v.title)}">
+        <span class="tn">${String(i + 1).padStart(2, '0')}</span><div class="th" data-scrub="${v.id}">${cover(v)}${v.pos && v.dur ? `<span class="pbar"><i style="width:${Math.min(100, v.pos / v.dur * 100)}%"></i></span>` : ''}</div>
+        <div class="tt"><div class="ct">${esc(v.title)}</div><div class="cm"><span>${esc(shortFolder(v.folder))}</span>${v.views ? `<span>${views(v.views)}</span>` : ''}</div></div>
+        <span class="td">${fmtDur(v.dur)}</span><a class="btn icon ghost" href="#/i/${v.id}" aria-label="Інфо">${I.info}</a></li>`).join('')}</ol>`
+      : `<div class="empty">Поки немає відео такої довжини. Щойно з'являться, вони потраплять сюди самі.</div>`}`;
+  wirePl(app);
+  app.querySelectorAll('.track').forEach(t => t.addEventListener('keydown', e => { if (e.key === 'Enter') playQueue(id, t.dataset.track); }));
+}
 
 // ── Рейтинг ──
 async function renderTop() {
@@ -1321,6 +1438,8 @@ function mountPlayer(vp, v, o) {
 }
 
 function nextOf(v) {
+  const q = queueFor(v);
+  if (q) { const nid = q.ids[q.ids.indexOf(v.id) + 1]; return (nid && S.by[nid]) || null; }
   const sib = S.videos.filter(x => x.folder === v.folder).sort(byName);
   const i = sib.findIndex(x => x.id === v.id);
   if (i >= 0 && i < sib.length - 1) return sib[i + 1];
@@ -1335,7 +1454,9 @@ async function renderPlayer(id, startAt) {
   const next = nextOf(v), has = hasSprite(v), fmt = v.ext.toUpperCase();
   const sib = S.videos.filter(x => x.folder === v.folder).sort(byName);
   const k = sib.findIndex(x => x.id === v.id);
-  const more = sib.slice(k + 1).concat(sib.slice(0, k)).filter(x => x.id !== v.id).slice(0, 14);
+  const q = queueFor(v), qi = q ? q.ids.indexOf(v.id) : -1;
+  const more = q ? q.ids.slice(qi + 1).map(i => S.by[i]).filter(Boolean).slice(0, 14)
+    : sib.slice(k + 1).concat(sib.slice(0, k)).filter(x => x.id !== v.id).slice(0, 14);
   app.innerHTML = `<div class="theatre">${playerHTML(v, next)}</div>
   <div class="pwrap">${promptLine('~/' + v.folder.split('/').pop(), `mpv "${v.file}"`)}
     <div class="phead"><div><h1 class="title">${esc(v.title)}</h1><div class="meta">${metaHTML(v)}<span>${esc(shortFolder(v.folder))}</span></div></div>
@@ -1348,8 +1469,11 @@ async function renderPlayer(id, startAt) {
       `<button class="fcell" data-i="${i}" aria-label="Перейти до ${fmtDur(frameT(v, i))}"><span class="fimg" style="${frameBg(v, i)}"></span>${fmtDur(frameT(v, i))}</button>`).join('')}</div></section>` : ''}
     <p class="keys"><span><kbd>Пробіл</kbd>пауза</span><span><kbd>←</kbd><kbd>→</kbd>5 с</span><span><kbd>J</kbd><kbd>L</kbd>10 с</span><span><kbd>↑</kbd><kbd>↓</kbd>гучність</span>
       <span><kbd>F</kbd>весь екран</span><span><kbd>M</kbd>звук</span><span><kbd>Shift</kbd><kbd>&lt;</kbd><kbd>&gt;</kbd>швидкість</span><span><kbd>0</kbd>…<kbd>9</kbd>перейти</span>${next ? '<span><kbd>N</kbd>наступне</span>' : ''}</p>
-    ${shelf('Ще з цієї папки', '', more)}
+    ${q ? `<div class="qbar">${I.list}<span>Плейлист <a href="#/pl/${q.pl}">${esc(q.name)}</a>${q.shuffle ? ', перемішаний' : ''}</span><b>${qi + 1} з ${q.ids.length}</b><button class="btn ghost" id="qexit">Вийти з плейлиста</button></div>` : ''}
+    ${shelf(q ? 'Далі в плейлисті' : 'Ще з цієї папки', '', more)}
   </div>`;
+  const qx = $('#qexit');
+  if (qx) qx.onclick = () => { setQueue(null); renderBase(baseHash, true); toast('Плейлист завершено, далі піде наступне з папки'); };
 
   const vp = $('#vp');
   const strip = $('#pvFrames');

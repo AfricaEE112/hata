@@ -43,7 +43,7 @@ import string
 from concurrent.futures import ThreadPoolExecutor
 
 APP = 'VidBox'
-VERSION = '0.5'
+VERSION = '0.6'
 
 VIDEO_EXT = {
     '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
@@ -1154,7 +1154,7 @@ def apply_settings(d):
                 cfg['ui']['sort'] = u['sort']
             if u.get('dir') in ('asc', 'desc'):
                 cfg['ui']['dir'] = u['dir']
-            if u.get('group') in ('all', 'folders'):
+            if u.get('group') in ('all', 'folders', 'duration'):
                 cfg['ui']['group'] = u['group']
         if 'folders' in d:
             folders, err = check_folders(d['folders'] if isinstance(d['folders'], list) else [])
@@ -1344,25 +1344,38 @@ _icons = {}
 
 
 def icon_png(size):
+    """Значок «▶_»: трикутник «play» як промпт терміналу з курсором. Без бібліотек, зі згладжуванням."""
     if size in _icons:
         return _icons[size]
-    tri = [(0.39 * size, 0.29 * size), (0.39 * size, 0.71 * size), (0.75 * size, 0.5 * size)]
+    tri = [(0.22 * size, 0.27 * size), (0.22 * size, 0.73 * size), (0.59 * size, 0.50 * size)]
     edges = []
     for i in range(3):
         (x1, y1), (x2, y2) = tri[i], tri[(i + 1) % 3]
         ln = math.hypot(x2 - x1, y2 - y1)
         edges.append((x1, y1, (x2 - x1) / ln, (y2 - y1) / ln))
-    c1, c2 = (34, 44, 63), (15, 20, 32)
+    cur = (0.62 * size, 0.655 * size, 0.81 * size, 0.73 * size)      # курсор «_»
+    top, bottom = (21, 27, 37), (9, 12, 17)                         # тло як у темі Arch
+    acc, acc2, fg = (23, 147, 209), (86, 197, 242), (225, 230, 239)
     raw = bytearray()
     for y in range(size):
         raw.append(0)
+        k = y / size
+        bg = [top[j] + (bottom[j] - top[j]) * k for j in range(3)]
         for x in range(size):
-            k = (x + y) / (2.0 * size)
-            r, g, b = (int(c1[j] + (c2[j] - c1[j]) * k) for j in range(3))
-            # відстань до найближчого ребра трикутника → м'які (згладжені) краї
-            inside = min(dy * (x + 0.5 - ex) - dx * (y + 0.5 - ey) for ex, ey, dx, dy in edges)
-            a = max(0.0, min(1.0, inside + 0.5))
-            raw += bytes((int(r + (242 - r) * a), int(g + (181 - g) * a), int(b + (68 - b) * a), 255))
+            px, py = x + 0.5, y + 0.5
+            # світіння навколо трикутника
+            d = math.hypot(px - 0.38 * size, py - 0.5 * size) / size
+            glow = max(0.0, 0.22 - d) * 0.9
+            col = [min(255.0, bg[j] + acc[j] * glow) for j in range(3)]
+            a = max(0.0, min(1.0, min(dy * (px - ex) - dx * (py - ey) for ex, ey, dx, dy in edges) + 0.5))
+            if a:
+                t = (py - tri[0][1]) / (tri[1][1] - tri[0][1])
+                c = [acc[j] + (acc2[j] - acc[j]) * (1 - t) * 0.6 for j in range(3)]
+                col = [col[j] + (c[j] - col[j]) * a for j in range(3)]
+            b = max(0.0, min(1.0, min(px - cur[0], cur[2] - px, py - cur[1], cur[3] - py) + 0.5))
+            if b:
+                col = [col[j] + (fg[j] - col[j]) * b for j in range(3)]
+            raw += bytes((int(col[0]), int(col[1]), int(col[2]), 255))
 
     def chunk(t, d):
         return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
@@ -1374,7 +1387,7 @@ def icon_png(size):
 
 MANIFEST = json.dumps({
     'name': APP, 'short_name': APP, 'start_url': '/', 'scope': '/', 'display': 'standalone',
-    'background_color': '#0f1420', 'theme_color': '#0f1420',
+    'background_color': '#0c0f14', 'theme_color': '#0c0f14',
     'icons': [{'src': '/icon-192.png', 'sizes': '192x192', 'type': 'image/png', 'purpose': 'any maskable'},
               {'src': '/icon-512.png', 'sizes': '512x512', 'type': 'image/png', 'purpose': 'any maskable'}],
 }).encode()
@@ -1838,13 +1851,13 @@ def main():
 LOGIN_HTML = '''<!doctype html><html lang="uk"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark">
 <title>VidBox — вхід</title><style>
-@font-face{font-family:'VidBox Serif';src:url(/fonts/vidbox-serif.woff) format('woff');font-weight:400 700}
+@font-face{font-family:'DejaVu Sans Mono';src:url(/fonts/dejavu-sans-mono.woff) format('woff')}
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f1420;color:#ede6d8;
 font:16px "Segoe UI",system-ui,-apple-system,Roboto,sans-serif}form{display:flex;flex-direction:column;gap:12px;width:280px}
-h1{margin:0 0 10px;font:600 30px 'VidBox Serif',Georgia,serif}input,button{font:inherit;padding:12px 14px;border-radius:10px;border:0}
+h1{margin:0 0 10px;font:400 28px 'DejaVu Sans Mono',Consolas,monospace}h1 span{color:#1793d1}input,button{font:inherit;padding:12px 14px;border-radius:10px;border:0}
 input{background:#1f2839;color:#ede6d8;outline:none}input:focus{box-shadow:0 0 0 2px #f2b544}
 button{background:#f2b544;color:#1c1508;font-weight:600;cursor:pointer}.err{color:#ff8a7a;margin:0;font-size:14px}
-</style></head><body><form method="post" action="/login"><h1>VidBox</h1>{err}
+</style></head><body><form method="post" action="/login"><h1><span>▶_</span> vidbox</h1>{err}
 <input type="password" name="p" placeholder="Пароль" autofocus aria-label="Пароль"><button>Увійти</button></form></body></html>'''
 
 WEB_TYPES = {'.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
