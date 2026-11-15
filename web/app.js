@@ -732,6 +732,8 @@ async function renderSettings() {
     ${row('Порт сайту', st.port !== st.portNow ? `Після перезапуску VidBox адреса зміниться на порт ${st.port}.` : 'Змінюй, лише якщо 8800 зайнятий іншою програмою. Діє після перезапуску.', num('port', st.port, 1024, 65535, 1, ''))}
     ${row('Відкривати сайт на ПК при запуску', '', sw('open_browser', st.open_browser))}
     ${row('Адреса для телефону', 'Телефон має бути в тій самій Wi-Fi мережі.', st.urls.length ? st.urls.map(u => `<code>${esc(u)}</code>`).join('') : '<span class="note">Не вдалося визначити</span>')}
+    ${row('Апка для Android', 'Своя апка з плеєром: сама знаходить цей ПК у Wi-Fi, грає MKV, HEVC і AV1 без перекодування, звук у фоні й керування зі шторки.',
+      `<a class="btn" href="https://github.com/AfricaEE112/vidbox/releases/latest" target="_blank" rel="noopener">${I.arrDown}Завантажити APK</a>`)}
   </div></section>
   <section class="set win">${winBar('terminal — <b>vidbox --about</b>')}<div class="win-body"><h2>Про програму</h2>${fetchHTML(st)}</div></section></div>`;
 

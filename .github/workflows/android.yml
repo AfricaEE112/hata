@@ -1,0 +1,177 @@
+# Збирає Android-апку VidBox, перевіряє її на емуляторі зі справжнім сервером
+# і викладає APK у GitHub Releases (лише з гілки main).
+name: Android
+
+on:
+  push:
+    branches: [main, android-wip]
+    paths:
+      - "android/**"
+      - "vidbox.py"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.apk.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build APK
+        working-directory: android
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew assembleRelease --console=plain 2>&1 | tee build.log
+
+      - name: Report build errors
+        if: failure()
+        shell: bash
+        run: |
+          msg=$(grep -E "^e: |error:|What went wrong|Could not|Unresolved|> " android/build.log | head -80 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+          echo "::error title=Gradle build failed::$msg"
+
+      - name: Name the APK
+        id: apk
+        shell: bash
+        run: |
+          v="0.6.${{ github.run_number }}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          cp android/app/build/outputs/apk/release/app-release.apk "VidBox-$v.apk"
+          ls -la VidBox-*.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: VidBox-*.apk
+          retention-days: 14
+
+      - name: Keep the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: android/build.log
+          if-no-files-found: ignore
+
+  # Справжня перевірка: сервер VidBox з тестовими відео + емулятор Android з цією APK
+  e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+
+      - name: Start VidBox server with test videos
+        run: bash android/e2e/server.sh
+
+      - name: Run app on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: bash android/e2e/app.sh
+
+      # емулятор на GitHub іноді падає сам (gfxstream); тоді пробуємо ще раз з іншим рендерером і API 33
+      - name: Retry if the emulator crashed
+        id: retry
+        shell: bash
+        run: |
+          if [ -f ci-out/EMULATOR_DIED ]; then
+            mkdir -p first-try && mv ci-out/* first-try/ && echo "again=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run app on emulator (second try)
+        if: steps.retry.outputs.again == '1'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swangle_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -no-metrics
+          script: bash android/e2e/app.sh
+
+      - name: Publish screenshots and logs
+        if: always()
+        shell: bash
+        run: |
+          set -x
+          mkdir -p ci-out
+          cp /tmp/vidbox-server.log ci-out/ 2>/dev/null || true
+          [ -d first-try ] && cp -r first-try ci-out/ || true
+          cd ci-out
+          git init -q -b ci-report
+          git config user.name "vidbox-ci"
+          git config user.email "vidbox-ci@users.noreply.github.com"
+          echo "run ${{ github.run_number }} (${{ github.sha }})" > RUN.txt
+          git add -A
+          git commit -q -m "CI report for run ${{ github.run_number }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-report
+
+      - name: Fail if the app check failed
+        shell: bash
+        run: |
+          if [ -f ci-out/EMULATOR_DIED ]; then echo "::warning::Емулятор GitHub впав посеред тесту: $(cat ci-out/EMULATOR_DIED)"; fi
+          test -f ci-out/OK
+
+  release:
+    needs: [build, e2e]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.build.outputs.version }}
+        shell: bash
+        run: |
+          notes="Android-апка VidBox $V.
+
+          Як поставити: відкрий цю сторінку на телефоні, натисни VidBox-$V.apk і дозволь встановлення з браузера.
+          Нова версія ставиться поверх старої, налаштування зберігаються.
+          На ПК має бути запущений VidBox 0.6 або новіший: апка знайде його в Wi-Fi сама."
+          gh release create "android-v$V" "VidBox-$V.apk" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+            --title "VidBox для Android $V" --notes "$notes" --latest
+          # лишаємо три останні збірки, старіші прибираємо
+          gh release list --repo "${{ github.repository }}" --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("android-v"))] | sort_by(.createdAt) | reverse | .[3:] | .[].tagName' |
+            while read -r t; do gh release delete "$t" --repo "${{ github.repository }}" --yes --cleanup-tag; done

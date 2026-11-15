@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Тестова бібліотека для перевірки апки: різні формати й тривалості, потім запуск VidBox.
+set -euo pipefail
+V="$HOME/vids"
+mkdir -p "$V/Кліпи" "$V/Серіали" "$V/Фільми"
+gen() { ffmpeg -nostdin -v error -y "$@"; }
+
+gen -f lavfi -i "testsrc2=s=1280x720:r=30" -f lavfi -i "sine=f=440:r=44100" -t 15 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest "$V/Кліпи/Захід сонця.mp4"
+gen -f lavfi -i "smptehdbars=s=1280x720:r=30" -f lavfi -i "sine=f=330:r=44100" -t 12 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest "$V/Кліпи/Кліп 1.mp4"
+gen -f lavfi -i "mandelbrot=s=1280x720:r=25" -f lavfi -i "sine=f=550:r=44100" -t 14 -c:v libx265 -preset fast -pix_fmt yuv420p -c:a aac -shortest "$V/Кліпи/Фрактал HEVC.mkv"
+gen -f lavfi -i "testsrc=s=1280x720:r=25" -f lavfi -i "sine=f=660:r=48000" -t 20 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a ac3 -shortest "$V/Кліпи/Концерт AC3.mkv"
+gen -f lavfi -i "rgbtestsrc=s=640x360:r=25" -f lavfi -i "sine=f=770:r=44100" -t 10 -c:v mpeg4 -q:v 5 -c:a libmp3lame -shortest "$V/Кліпи/old clip.avi"
+gen -f lavfi -i "testsrc2=s=640x360:r=2" -f lavfi -i "sine=f=220:r=22050" -t 1500 -c:v libx264 -preset ultrafast -g 20 -c:a aac -b:a 32k -shortest "$V/Серіали/Серія 01.mp4"
+gen -f lavfi -i "smptebars=s=640x360:r=2" -f lavfi -i "sine=f=250:r=22050" -t 1620 -c:v libx264 -preset ultrafast -g 20 -c:a aac -b:a 32k -shortest "$V/Серіали/Серія 02.mp4"
+gen -f lavfi -i "smptehdbars=s=640x360:r=1" -f lavfi -i "sine=f=200:r=22050" -t 3900 -c:v libx264 -preset ultrafast -g 10 -c:a aac -b:a 32k -shortest "$V/Фільми/Фільм на вечір.mp4"
+ls -laR "$V"
+
+nohup python3 vidbox.py "$V" --data "$HOME/vbdata" --no-browser > /tmp/vidbox-server.log 2>&1 &
+for i in $(seq 1 60); do curl -sf localhost:8800/api/hello && break; sleep 1; done
+echo
+
+# чекаємо, поки сервер прочитає файли й наріже кадри
+python3 - <<'EOF'
+import json, time, urllib.request
+def get(p):
+    return json.load(urllib.request.urlopen('http://localhost:8800' + p, timeout=30))
+def post(p, d):
+    r = urllib.request.Request('http://localhost:8800' + p, json.dumps(d).encode(), {'Content-Type': 'application/json'})
+    return json.load(urllib.request.urlopen(r, timeout=30))
+for i in range(300):
+    lib = get('/api/library')
+    if lib['pending'] == 0 and lib['spritesPending'] == 0:
+        break
+    time.sleep(2)
+print('videos:', len(lib['videos']), 'pending:', lib['pending'], 'sprites pending:', lib['spritesPending'])
+ids = {v['title']: v['id'] for v in lib['videos']}
+print(json.dumps(ids, ensure_ascii=False, indent=1))
+# трохи історії переглядів, щоб були рейтинг і «Продовжити перегляд»
+seed = [('Кліп 1', 12, 12, True), ('Захід сонця', 15, 15, True), ('Серія 01', 420, 400, False), ('Фільм на вечір', 1300, 1200, False)]
+for k, (t, pos, w, end) in enumerate(seed):
+    v = next(x for x in lib['videos'] if x['title'] == t)
+    post('/api/ping', {'sid': 'seed%d' % k, 'id': v['id'], 'pos': pos, 'dur': v['dur'], 'watched': w, 'start': 0, 'ended': end})
+post('/api/vote', {'id': ids['Захід сонця'], 'vote': 1})
+json.dump(ids, open('/tmp/ids.json', 'w'), ensure_ascii=False)
+EOF

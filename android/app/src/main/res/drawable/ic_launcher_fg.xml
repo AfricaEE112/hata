@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- «▶_»: трикутник «play» як промпт терміналу і курсор -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M33.8,37.4 L33.8,70.6 L60.5,54 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="0" android:startY="37.4" android:endX="0" android:endY="70.6"
+                android:startColor="#FF4FB8EA" android:endColor="#FF1793D1" />
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#FFE1E6EF"
+        android:pathData="M63.6,65.2 h11.7 a1,1 0 0 1 1,1 v3.4 a1,1 0 0 1 -1,1 h-11.7 a1,1 0 0 1 -1,-1 v-3.4 a1,1 0 0 1 1,-1 z" />
+</vector>

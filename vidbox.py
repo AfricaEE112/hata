@@ -1453,11 +1453,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_bytes(b'', 'text/plain', 303, extra=h)
 
     def body(self, limit=65536):
+        if self._body is not None:
+            return self._body
         n = int(self.headers.get('Content-Length') or 0)
         if n > limit:
             self.close_connection = True
             raise ValueError('body too large')
-        return self.rfile.read(n) if n else b''
+        self._body = self.rfile.read(n) if n else b''
+        return self._body
 
     def json_body(self):
         try:
@@ -1524,6 +1527,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ── маршрути ──
     def route(self, method):
         self.is_head = method == 'HEAD'
+        self._body = None
         try:
             u = urllib.parse.urlsplit(self.path)
             path, qs = u.path, urllib.parse.parse_qs(u.query)
@@ -1537,6 +1541,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.send_web(path)
                 if path == '/login':
                     return self.send_bytes(LOGIN_HTML.replace('{err}', '').encode(), 'text/html; charset=utf-8')
+                if path == '/api/hello':
+                    return self.send_json(hello_json())
+            if method == 'POST' and path == '/api/login':   # вхід з Android-апки
+                pw = str(self.json_body().get('password') or '')
+                if not C.cfg.get('password_hash'):
+                    return self.send_json({'ok': True, 'token': ''})
+                if hmac.compare_digest(pw_hash(pw), C.cfg['password_hash']):
+                    return self.send_json({'ok': True, 'token': auth_token()})
+                return self.send_json({'ok': False, 'error': 'Неправильний пароль'}, 401)
             if method == 'POST' and path == '/login':
                 form = urllib.parse.parse_qs(self.body().decode('utf-8', 'replace'))
                 if C.cfg.get('password_hash') and hmac.compare_digest(pw_hash(form.get('p', [''])[0]),
@@ -1658,6 +1671,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_json({'error': 'server'}, 500)
             except Exception:
                 pass
+        finally:
+            # тіло запиту, яке маршрут не прочитав, треба дочитати: інакше в з'єднанні keep-alive
+            # воно склеїться з наступним запитом і той отримає 501
+            if method == 'POST' and self._body is None and not self.close_connection:
+                try:
+                    self.body(1 << 20)
+                except (ValueError, OSError):
+                    self.close_connection = True
 
 
 class Server(http.server.ThreadingHTTPServer):
@@ -1687,6 +1708,33 @@ def find_tool(name, hint=None):
         if c and os.path.isfile(c):
             return c
     return None
+
+
+DISCOVERY_PORT = 48800
+
+
+def hello_json():
+    """Коротка візитка сервера: її бачить Android-апка ще до входу (без пароля)."""
+    return {'app': APP, 'version': VERSION, 'host': socket.gethostname(), 'port': C.port,
+            'auth': bool(C.cfg.get('password_hash'))}
+
+
+def discovery_loop():
+    """Апка шле в мережу UDP-пакет «VIDBOX?» — відповідаємо, де нас шукати."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(('', DISCOVERY_PORT))
+    except OSError as e:
+        print('  Автопошук для апки вимкнено: порт %d зайнятий (%s)' % (DISCOVERY_PORT, e))
+        return
+    while True:
+        try:
+            data, addr = s.recvfrom(256)
+            if data.strip() == b'VIDBOX?':
+                s.sendto(json.dumps(hello_json(), ensure_ascii=False).encode('utf-8'), addr)
+        except OSError:
+            time.sleep(1)
 
 
 def lan_ips():
@@ -1832,8 +1880,9 @@ def main():
     if C.cfg['password_hash']:
         print('  Пароль:       увімкнено (прибрати: на сайті в Налаштуваннях або --no-password)')
     print('  Налаштування: на сайті, вкладка «Налаштування» (зберігаються в %s)' % cfg_path())
-    print('  Ctrl+C — зупинити\n')
-    for target in (media_worker, prep_worker, rescan_loop, detect_hw):
+    print('  Ctrl+C — зупинити')
+    print('  Android-апка: знайде цей ПК сама, якщо телефон у тій самій Wi-Fi мережі\n')
+    for target in (media_worker, prep_worker, rescan_loop, detect_hw, discovery_loop):
         threading.Thread(target=target, daemon=True).start()
     if C.cfg.get('open_browser', True) and not args.no_browser:
         try:
