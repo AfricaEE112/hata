@@ -40,6 +40,10 @@ const I = {
   back10: svg('<path d="M4.6 13a7.5 7.5 0 1 0 2.1-6.4M4.5 3.8v4h4"/><text x="12.3" y="15.6" text-anchor="middle" font-size="7.2" font-weight="700" fill="currentColor" stroke="none" font-family="system-ui,sans-serif">10</text>'),
   fwd10: svg('<path d="M19.4 13a7.5 7.5 0 1 1-2.1-6.4M19.5 3.8v4h-4"/><text x="11.7" y="15.6" text-anchor="middle" font-size="7.2" font-weight="700" fill="currentColor" stroke="none" font-family="system-ui,sans-serif">10</text>'),
   pip: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11.5" width="7" height="5.5" rx="1" fill="currentColor" stroke="none"/>'),
+  film: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7.5 4v16M16.5 4v16M3 9h4.5M3 15h4.5M16.5 9H21M16.5 15H21"/>'),
+  chip: svg('<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2.5V6M15 2.5V6M9 18v3.5M15 18v3.5M2.5 9H6M2.5 15H6M18 9h3.5M18 15h3.5"/>'),
+  disk: svg('<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'),
+  queue: svg('<path d="M4 6h16M4 12h16M4 18h10"/>'),
 };
 
 // ── утиліти ──
@@ -55,7 +59,7 @@ function fmtLen(s) {
   const h = Math.floor(s / 3600), m = Math.round(s % 3600 / 60);
   return h ? `${h} год ${m} хв` : (m ? `${m} хв` : `${Math.round(s)} с`);
 }
-const fmtSize = b => !b ? '' : b >= 1099511627776 ? (b / 1099511627776).toFixed(2).replace('.', ',') + ' ТБ' : b >= 1073741824 ? (b / 1073741824).toFixed(1).replace('.', ',') + ' ГБ' : Math.round(b / 1048576) + ' МБ';
+const fmtSize = b => !b ? '' : b >= 1099511627776 ? (b / 1099511627776).toFixed(2).replace('.', ',') + ' ТБ' : b >= 1073741824 ? (b / 1073741824).toFixed(1).replace('.', ',') + ' ГБ' : b >= 1048576 ? Math.round(b / 1048576) + ' МБ' : Math.max(1, Math.round(b / 1024)) + ' КБ';
 const fmtDate = ts => ts ? new Date(ts * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'long', year: 'numeric'}) : '';
 function ago(ts) {
   if (!ts) return 'ніколи';
@@ -110,7 +114,7 @@ async function load() {
 let toastT;
 function toast(msg, btn, fn) {
   const t = $('#toast');
-  t.innerHTML = '<span>' + esc(msg) + '</span>' + (btn ? '<button>' + esc(btn) + '</button>' : '');
+  t.innerHTML = `<div class="dn"><b>vidbox</b>${esc(msg)}</div>` + (btn ? '<button>' + esc(btn) + '</button>' : '');
   if (btn) t.querySelector('button').onclick = () => { fn(); t.classList.remove('show'); };
   t.classList.add('show');
   clearTimeout(toastT);
@@ -120,6 +124,11 @@ function toast(msg, btn, fn) {
 // ── теми, атмосфера, годинник ──
 // Щоб додати тему: блок змінних у style.css + запис тут + назва в THEMES у vidbox.py.
 const THEMES = [
+  {id: 'arch', name: 'Arch', hint: 'Фірмовий синій Arch Linux', bg: '#0c0f14', p: '#141922', a: '#1793d1', a2: '#56c5f2'},
+  {id: 'tokyo', name: 'Tokyo Night', hint: 'Нічне місто, синій з бузковим', bg: '#16161e', p: '#1a1b26', a: '#7aa2f7', a2: '#bb9af7'},
+  {id: 'catppuccin', name: 'Catppuccin', hint: 'Mocha: м’які пастельні кольори', bg: '#11111b', p: '#1e1e2e', a: '#cba6f7', a2: '#89b4fa'},
+  {id: 'dracula', name: 'Dracula', hint: 'Класика: фіолетовий і рожевий', bg: '#1e1f29', p: '#282a36', a: '#bd93f9', a2: '#ff79c6'},
+  {id: 'gruvbox', name: 'Gruvbox', hint: 'Теплий ретро-помаранчевий', bg: '#1d2021', p: '#282828', a: '#fe8019', a2: '#b8bb26'},
   {id: 'cinema', name: 'Cinema', hint: 'Глибокий синій, як зал кінотеатру', bg: '#070b14', p: '#0e1524', a: '#2ea8ff', a2: '#8a6bff'},
   {id: 'nord', name: 'Nord', hint: 'Спокійний сіро-блакитний', bg: '#21262f', p: '#2b313c', a: '#88c0d0', a2: '#b48ead'},
   {id: 'sweet', name: 'Sweet', hint: 'Неоновий рожевий і бірюза', bg: '#100e1a', p: '#1a1729', a: '#ff4fd8', a2: '#38d9f5'},
@@ -141,6 +150,43 @@ function setAtmo(v) {
   atmoUrl = url;
   $('#atmo').style.backgroundImage = url ? `url(${url})` : '';
 }
+// вікно як у тайловому менеджері та рядок промпту як у bash на Arch
+const winBar = (title, extra) => `<header class="win-bar"><span class="dots"><i></i><i></i><i></i></span><span class="win-t">${title}</span>${extra || ''}</header>`;
+const promptLine = (path, cmd, id) => `<p class="prompt"${id ? ` id="${id}"` : ''} aria-hidden="true"><span class="u">[vidbox@${esc(S.host || 'pc')}</span> <span class="p">${esc(path)}</span><span class="u">]$</span> <span class="c">${esc(cmd)}</span><i class="cur"></i></p>`;
+
+// модулі верхньої панелі (як у polybar): відео, фонові задачі, відеокарта, вільне місце
+let statusT = 0, statusFast = false;
+async function pollStatus() {
+  clearTimeout(statusT);
+  if (!document.hidden) {
+    try { const st = await api('/api/status'); S.host = st.host; renderMods(st); } catch (e) {}
+  }
+  statusT = setTimeout(pollStatus, statusFast ? 2000 : 6000);
+}
+function renderMods(st) {
+  const m = [`<span class="mod lib" title="Відео в бібліотеці">${I.film}${st.videos}</span>`];
+  if (st.conv) m.push(`<span class="mod act" title="Конвертую «${esc(st.conv.title)}»">${I.refresh}${esc(st.conv.enc || '')} ${Math.round(st.conv.progress * 100)}%${st.conv.fps ? ` <em>${st.conv.fps} к/с</em>` : ''}</span>`);
+  else if (st.probe || st.sprites) m.push(`<span class="mod act" title="Готую обкладинки й нарізки кадрів у фоні">${I.refresh}кадри ${st.probe + st.sprites}</span>`);
+  if (st.queue) m.push(`<span class="mod" title="Відео в черзі на конвертацію">${I.queue}${st.queue}</span>`);
+  m.push(`<span class="mod hw" title="${esc(st.gpu || 'Відеокарта')}${st.hardware ? '' : ' (кодує процесор)'}">${I.chip}${st.hwChecked ? esc(st.enc) : '…'}</span>`);
+  if (st.disk) m.push(`<span class="mod disk" title="Вільно на диску, де лежить кеш VidBox">${I.disk}${fmtSize(st.disk.free)}</span>`);
+  $('#mods').innerHTML = m.join('');
+  statusFast = !!(st.conv || st.queue);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) pollStatus(); });
+// клавіатура як у тайловому WM: 1–4 робочі столи, / пошук, R випадкове
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+  const t = e.target;
+  if (t.closest && t.closest('input, textarea, select, [contenteditable]')) { if (e.key === 'Escape' && t.id === 'q') t.blur(); return; }
+  if (sheetId || !picker.hidden) return;
+  const onPlayer = (baseHash || '').startsWith('/v/');
+  if (e.key === '/' || e.code === 'Slash') { e.preventDefault(); $('#q').focus(); return; }
+  if (onPlayer) return;
+  if (/^Digit[1-4]$/.test(e.code)) { e.preventDefault(); go(['#/', '#/lib', '#/top', '#/settings'][+e.code.slice(5) - 1]); }
+  else if (e.code === 'KeyR') { e.preventDefault(); randomVideo(false); }
+});
+
 function tick() {
   const d = new Date(), el = $('#clock');
   if (el) el.innerHTML = `${esc(d.toLocaleDateString('uk-UA', {weekday: 'short', day: 'numeric', month: 'short'}))} <b>${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}</b>`;
@@ -444,12 +490,12 @@ async function renderHome() {
     return;
   }
   const list = spotList(week);
-  let html = list.length ? spotHTML(list) : '';
+  let html = promptLine('~', `vidbox --week ${week.week}`) + (list.length ? spotHTML(list) : '');
   const cont = vs.filter(v => S.cfg.resume && v.pos > 15 && v.dur && v.pos < v.dur * 0.95).sort((a, b) => b.posAt - a.posAt).slice(0, 12);
   html += shelf('Продовжити перегляд', '', cont, {meta: v => [shortFolder(v.folder), 'ще ' + fmtLen(v.dur - v.pos)]});
   const weekShelves = week.sections.map(s => shelf(s.title, s.sub, s.ids.map(i => S.by[i]).filter(Boolean), {small: true})).join('');
-  html += `<div class="week"><div class="week-head"><h2 class="title">Підбірка тижня</h2><span class="dates">${weekRange(week)}</span>` +
-    `<button class="btn ghost" id="wkr" aria-label="Зібрати іншу підбірку">${I.refresh}<span>Зібрати іншу</span></button></div>${weekShelves}</div>`;
+  html += `<section class="week win">${winBar(`~/підбірка-тижня/<b>${esc(week.week)}</b>`)}<div class="win-body"><div class="week-head"><h2 class="title">Підбірка тижня</h2><span class="dates">${weekRange(week)}</span>` +
+    `<button class="btn ghost" id="wkr" aria-label="Зібрати іншу підбірку">${I.refresh}<span>Зібрати іншу</span></button></div>${weekShelves}</div></section>`;
   const best = vs.filter(v => v.views).sort((a, b) => b.score - a.score).slice(0, 10);
   if (best.length >= 3) html += shelf('Найкраще за рейтингом', 'Десятка, яку ти дивишся найохочіше', best, {ranked: true});
   html += shelf('Нещодавно додані', '', [...vs].sort((a, b) => b.added - a.added).slice(0, 14), {meta: v => [shortFolder(v.folder), ago(v.added)]});
@@ -504,6 +550,11 @@ function libMeta(v, grouped) {
     : (v.views ? views(v.views) : (grouped ? fmtSize(v.size) : ''));
   return [grouped ? '' : shortFolder(v.folder), extra];
 }
+function libCmd() {
+  const u = ui();
+  return 'ls --sort=' + u.sort + (u.dir === 'asc' && u.sort !== 'random' ? ' --reverse' : '') + (u.group === 'folders' ? ' --group=folder' : '') +
+    (view.folder ? ` "${shortFolder(view.folder)}"` : '') + (view.q ? ` | grep -i "${view.q}"` : '');
+}
 function drawDir() {
   const u = ui(), s = SORTS[u.sort] || SORTS.score, b = $('#dir');
   b.innerHTML = u.sort === 'random' ? I.dice + '<span>Перемішати</span>' : (u.dir === 'asc' ? I.arrUp : I.arrDown) + `<span>${esc(s[u.dir])}</span>`;
@@ -512,6 +563,8 @@ function drawDir() {
 function drawGrid() {
   const vs = filtered(), g = $('#grid');
   $('#cnt').textContent = vs.length + ' відео';
+  const pr = $('#libPrompt');
+  if (pr) pr.outerHTML = promptLine('~/бібліотека', libCmd(), 'libPrompt');
   if (!vs.length) {
     g.className = 'grid';
     g.innerHTML = `<div class="empty" style="grid-column:1/-1">${view.q ? `Нічого не знайшлося за запитом «${esc(view.q)}». Спробуй інше слово або обери «Усі» папки.` : 'У цій папці немає відео.'}</div>`;
@@ -543,7 +596,7 @@ async function renderLib() {
   if (view.folder && !S.folders.includes(view.folder)) view.folder = '';
   const u = ui();
   if (!SORTS[u.sort]) u.sort = 'score';
-  app.innerHTML = `<div class="page-head"><h1 class="title">Бібліотека</h1><span class="count" id="cnt"></span></div>
+  app.innerHTML = `${promptLine('~/бібліотека', libCmd(), 'libPrompt')}<div class="page-head"><h1 class="title">Бібліотека</h1><span class="count" id="cnt"></span></div>
     <div class="toolbar">
       <div class="seg" role="group" aria-label="Вигляд бібліотеки">
         <button data-group="all" class="${u.group !== 'folders' ? 'on' : ''}" aria-pressed="${u.group !== 'folders'}">${I.grid}Усі разом</button>
@@ -609,17 +662,19 @@ async function renderSettings() {
   if (!S.loaded) await load();
   const sw = (k, on) => `<label class="sw"><input type="checkbox" data-k="${k}"${on ? ' checked' : ''}><i></i></label>`;
   const num = (k, val, min, max, step, unit) => `<span class="num"><input type="number" data-k="${k}" value="${val}" min="${min}" max="${max}" step="${step}" inputmode="decimal" aria-label="${unit}">${unit ? `<em>${unit}</em>` : ''}</span>`;
+  const sel = (k, opts, cur, isNum) => `<label class="sel wide"><select data-k="${k}"${isNum ? ' data-num' : ''} aria-label="${k}">${opts.map(([v, t]) =>
+    `<option value="${v}"${String(v) === String(cur) ? ' selected' : ''}>${t}</option>`).join('')}</select>${I.chev}</label>`;
   const row = (title, hint, control, id) => `<div class="srow"${id ? ` id="${id}"` : ''}><div class="sl"><b>${title}</b>${hint ? `<small>${hint}</small>` : ''}</div><div class="sc">${control}</div></div>`;
   const c = st.caches, used = b => fmtSize(b) || '0 МБ';
-  app.innerHTML = `<div class="page-head"><h1 class="title">Налаштування</h1></div>
+  app.innerHTML = `${promptLine('~/.config/vidbox', 'nvim config.json')}<div class="page-head"><h1 class="title">Налаштування</h1></div>
   <p class="lead">Зміни зберігаються одразу на комп’ютері, у файлі config.json, і діють після наступного запуску теж.</p>
   <div class="settings">
-  <section class="set"><h2>Тема</h2>
+  <section class="set win">${winBar('~/.config/vidbox/тема')}<div class="win-body"><h2>Тема</h2>
     <p class="note" style="margin-top:0">Кольори всього сайту. Зберігається на ПК, тож тема однакова на всіх пристроях.</p>
     <div class="themes">${THEMES.map(t => `<button class="theme${st.theme === t.id ? ' on' : ''}" data-theme-pick="${t.id}" aria-pressed="${st.theme === t.id}" ` +
       `style="--t-bg:${t.bg};--t-p:${t.p};--t-a:${t.a};--t-a2:${t.a2}"><span class="tp"><i></i><i></i><i></i></span><b>${t.name}</b><small>${t.hint}</small></button>`).join('')}</div>
-  </section>
-  <section class="set"><h2>Папки з відео</h2>
+  </div></section>
+  <section class="set win">${winBar('~/.config/vidbox/папки')}<div class="win-body"><h2>Папки з відео</h2>
     <div class="flist">${st.folders.map((f, i) => `<div class="frow">${I.folder}<div><b>${esc(f.path)}</b><small>${f.exists ? f.count + ' відео' : 'Папку не знайдено. Можливо, диск від’єднано.'}</small></div>` +
       `<button class="btn ghost icon" data-rm="${i}" title="Прибрати папку" aria-label="Прибрати папку ${esc(f.path)}"${st.folders.length < 2 ? ' disabled' : ''}>${I.trash}</button></div>`).join('')}</div>
     <div class="fadd"><input id="newf" type="text" placeholder="Шлях до папки, наприклад D:\\Фільми" aria-label="Шлях до нової папки">
@@ -627,28 +682,29 @@ async function renderSettings() {
     <p class="warn" id="ferr" hidden></p>
     ${row('Пересканувати зараз', 'Знайде нові файли й прибере видалені.', `<button class="btn" id="rescanNow">${I.refresh}Пересканувати</button>`)}
     ${row('Пересканувати автоматично', 'Як часто VidBox сам перевіряє папки.', num('rescan_min', st.rescan_min, 1, 1440, 1, 'хв'))}
-  </section>
-  <section class="set"><h2>Перегляд</h2>
+  </div></section>
+  <section class="set win">${winBar('~/.config/vidbox/перегляд')}<div class="win-body"><h2>Перегляд</h2>
     ${row('Продовжувати з місця, де зупинився', 'Якщо вимкнути, відео щоразу починається спочатку.', sw('resume', st.resume))}
     ${row('Вмикати наступне відео', 'Коли відео закінчилось, вмикається наступне з тієї ж папки.', sw('autoplay_next', st.autoplay_next))}
     ${row('Пауза перед наступним', 'Скільки секунд чекати, поки можна скасувати.', num('next_delay', st.next_delay, 3, 60, 1, 'с'))}
-  </section>
-  <section class="set"><h2>Обкладинки, кадри й кеш</h2>
+  </div></section>
+  <section class="set win">${winBar('~/.cache/vidbox')}<div class="win-body"><h2>Обкладинки, кадри й кеш</h2>
     ${st.ffmpeg ? '' : `<p class="warn">ffmpeg не знайдено, тому нарізок кадрів і конвертації MKV/AVI немає. Запусти start.bat, він запропонує завантажити ffmpeg, або поклади ffmpeg.exe і ffprobe.exe поруч з vidbox.py.</p>`}
     ${row('Готувати нарізки кадрів у фоні', 'Для наведення на картку й сітки кадрів. Можна вимкнути на слабкому ПК: тоді кадри робляться лише для відкритих відео.', sw('sprites', st.sprites))}
     ${row('Кеш копій для телефону', `MP4-копії MKV/AVI. Зайнято ${used(c.prepared)}, старі видаляються самі, коли перевищено ліміт.`, num('cache_gb', st.cache_gb, 1, 100000, 1, 'ГБ') + `<button class="btn ghost" data-clear="prepared">Очистити</button>`)}
     ${row('Кеш великих кадрів', `Чіткі кадри для вікна з інфою. Зайнято ${used(c.frames)}.`, num('frames_cache_gb', st.frames_cache_gb, 0.5, 10000, 0.5, 'ГБ') + `<button class="btn ghost" data-clear="frames">Очистити</button>`)}
     ${row('Обкладинки й нарізки', `Зайнято ${used(c.thumbs + c.sprites)}.`, '')}
     ${row('Залишки видалених відео', st.orphans ? `${st.orphans} відео вже немає в папках, але їхні картинки ще в кеші. Статистика переглядів залишиться.` : 'Залишків немає.', st.orphans ? `<button class="btn ghost" data-clear="orphans">Прибрати</button>` : '')}
-  </section>
-  <section class="set"><h2>Доступ</h2>
+  </div></section>
+  ${gpuSection(st, {sw, row, sel})}
+  <section class="set win">${winBar('~/.config/vidbox/доступ')}<div class="win-body"><h2>Доступ</h2>
     ${row('Пароль для входу', st.hasPassword ? 'Увімкнено. Кожен пристрій вводить його один раз.' : 'Вимкнено: сайт відкриється будь-кому у твоїй Wi-Fi мережі.',
       `<input type="password" id="pw" placeholder="${st.hasPassword ? 'Новий пароль' : 'Пароль'}" autocomplete="new-password" aria-label="Пароль"><button class="btn" id="pwset">${st.hasPassword ? 'Змінити' : 'Встановити'}</button>${st.hasPassword ? '<button class="btn ghost" id="pwoff">Прибрати</button>' : ''}`)}
     ${row('Порт сайту', st.port !== st.portNow ? `Після перезапуску VidBox адреса зміниться на порт ${st.port}.` : 'Змінюй, лише якщо 8800 зайнятий іншою програмою. Діє після перезапуску.', num('port', st.port, 1024, 65535, 1, ''))}
     ${row('Відкривати сайт на ПК при запуску', '', sw('open_browser', st.open_browser))}
     ${row('Адреса для телефону', 'Телефон має бути в тій самій Wi-Fi мережі.', st.urls.length ? st.urls.map(u => `<code>${esc(u)}</code>`).join('') : '<span class="note">Не вдалося визначити</span>')}
-  </section>
-  <section class="set"><h2>Про програму</h2>${fetchHTML(st)}</section></div>`;
+  </div></section>
+  <section class="set win">${winBar('terminal — <b>vidbox --about</b>')}<div class="win-body"><h2>Про програму</h2>${fetchHTML(st)}</div></section></div>`;
 
   $$('[data-theme-pick]').forEach(b => b.onclick = () => {
     applyTheme(b.dataset.themePick);
@@ -664,10 +720,18 @@ async function renderSettings() {
     return r;
   };
   $$('[data-k]').forEach(el => el.onchange = () => {
-    const k = el.dataset.k, val = el.type === 'checkbox' ? el.checked : +el.value;
+    const k = el.dataset.k;
+    const val = el.type === 'checkbox' ? el.checked : el.tagName === 'SELECT' ? (el.hasAttribute('data-num') ? +el.value : el.value) : +el.value;
     if (el.type === 'number' && !(val >= +el.min && val <= +el.max)) { toast(`Введи число від ${el.min} до ${el.max}`); return; }
-    save({[k]: val}, k === 'port' ? 'Збережено. Новий порт запрацює після перезапуску VidBox' : null);
+    save({[k]: val}, k === 'port' ? 'Збережено. Новий порт запрацює після перезапуску VidBox' :
+      k === 'hwaccel' ? 'Збережено. Нові конвертації підуть через вибраний режим' : null);
   });
+  const hwre = $('#hwre');
+  if (hwre) hwre.onclick = async () => {
+    await api('/api/hw/detect', {method: 'POST'});
+    toast('Перевіряю відеокарту, кілька секунд…');
+    setTimeout(() => { if (baseHash === '/settings') renderBase('/settings', true); }, 5000);
+  };
   const paths = st.folders.map(f => f.path);
   const setFolders = async (list, msg) => {
     const r = await save({folders: list}, msg);
@@ -691,6 +755,29 @@ async function renderSettings() {
   const off = $('#pwoff'); if (off) off.onclick = () => setPw('');
 }
 
+// розділ «Відеокарта»
+function gpuSection(st, h) {
+  const hw = st.hw || {}, encs = hw.encoders || {};
+  const names = {amd: 'AMD AMF', nvidia: 'NVIDIA NVENC', intel: 'Intel QSV', vaapi: 'VA-API'};
+  const why = e => /немає в цій збірці/.test(e.err || '') ? 'немає в цій збірці ffmpeg' : 'немає такої відеокарти або драйвера';
+  const list = Object.keys(encs).map(k => `<dt>${names[k] || k}</dt><dd class="${encs[k].ok ? 'ok' : 'no'}" title="${esc(encs[k].err || '')}">${encs[k].ok ? '✓ працює' : '✗ ' + why(encs[k])}</dd>`).join('');
+  const status = !hw.checked ? '<p class="note">Перевіряю відеокарту…</p>' :
+    `<dl class="hwlist"><dt>Відеокарта</dt><dd>${esc(hw.gpu || 'не визначено')}</dd>` +
+    `<dt>Кодує зараз</dt><dd class="${hw.hardware ? 'ok' : ''}">${esc(hw.current)}${hw.hardware ? ' (апаратне)' : ' (процесор)'}</dd>` +
+    `<dt>Декодування</dt><dd>${hw.decode ? esc(hw.decode.toUpperCase()) + (hw.zero_copy ? ', кадри не покидають відеокарту' : '') : '—'}</dd>${list}</dl>`;
+  const L = hw.last;
+  const last = L ? `${esc(L.title)}: ${esc(L.enc)}, ${L.fps || '?'} к/с${L.speed ? `, у ${String(L.speed).replace('.', ',')} раза швидше за реальний час` : ''}.` : 'Ще не було.';
+  return `<section class="set win" id="gpu">${winBar('~/.config/vidbox/gpu')}<div class="win-body"><h2>Відеокарта</h2>
+    <p class="note" style="margin-top:0">Відеокарта перекодовує для телефону те, що він не відкриває: AVI, 10-бітні аніме, HEVC за потреби. Якщо щось піде не так, VidBox сам повторить задачу процесором.</p>
+    ${status}
+    ${h.row('Прискорення', 'В режимі «Авто» береться AMD, потім NVIDIA, потім Intel.', h.sel('hwaccel', [['auto', 'Авто'], ['amd', 'AMD (AMF)'], ['nvidia', 'NVIDIA (NVENC)'], ['intel', 'Intel (QSV)'], ['vaapi', 'VA-API (Linux)'], ['off', 'Лише процесор']], st.hwaccel))}
+    ${h.row('Роздільність копій для телефону', 'Більші відео зменшуються: менше місця і плавніше на телефоні.', h.sel('max_height', [[720, '720p'], [1080, '1080p'], [1440, '1440p'], [2160, '4K'], [0, 'Як в оригіналі']], st.max_height, true))}
+    ${h.row('Готувати копії заздалегідь', 'Відеокарта у фоні конвертує всі несумісні відео, тож вони відкриваються одразу. Займає місце в кеші копій.', h.sw('prep_all', st.prep_all))}
+    ${h.row('Кадри теж через відеокарту', 'Зазвичай так повільніше: на один кадр відеокарта довше запускається, ніж працює. Кадри й так беруться лише з ключових кадрів, тому це швидко.', h.sw('hw_frames', st.hw_frames))}
+    ${h.row('Остання конвертація', last, `<button class="btn" id="hwre">${I.refresh}Перевірити ще раз</button>`)}
+  </div></section>`;
+}
+
 // «Про програму» у стилі neofetch — привіт райсам Linux
 function fetchHTML(st) {
   const logo = ['███', '██████', '█████████', '████████████', '███████████████', '████████████', '█████████', '██████', '███'].join('\n');
@@ -701,6 +788,8 @@ function fetchHTML(st) {
     ['Папки', String(st.folders.length)],
     ['Тема', theme],
     ['ffmpeg', st.ffmpegVersion || (st.ffmpeg ? 'є' : 'не знайдено')],
+    ['GPU', (st.hw && st.hw.gpu) || ''],
+    ['Кодування', st.hw ? st.hw.current + (st.hw.hardware ? ' (апаратне)' : ' (процесор)') : ''],
     ['Python', st.python || ''],
     ['Система', st.os || ''],
     ['Працює', fmtLen(st.uptime) || 'щойно'],
@@ -730,7 +819,7 @@ function closePicker() {
 }
 async function pickerGo(path) {
   const d = await api('/api/fs?path=' + encodeURIComponent(path || ''));
-  pickPanel.innerHTML = `<button class="x" data-pclose aria-label="Закрити">${I.close}</button><div class="pk"><h2>Вибери папку з відео</h2>
+  pickPanel.innerHTML = `${winBar(`pick-folder — <b>${esc(d.path || 'цей комп’ютер')}</b>`, `<button class="x" data-pclose aria-label="Закрити (Esc)">${I.close}</button>`)}<div class="pk"><h2>Вибери папку з відео</h2>
     <div class="pk-path">${d.path ? `<button class="btn icon ghost" data-go="${esc(d.parent || '')}" aria-label="На рівень вище">${I.left}</button><span>${esc(d.path)}</span>` : '<span>Цей комп’ютер</span>'}</div>
     ${d.error ? `<p class="warn">${esc(d.error)}</p>` : ''}
     ${d.quick && d.quick.length ? `<div class="pk-quick">${d.quick.map(q => `<button class="chip" data-go="${esc(q.path)}">${esc(q.name)}</button>`).join('')}</div>` : ''}
@@ -751,7 +840,7 @@ async function renderTop() {
   await load();
   const rated = S.videos.filter(v => v.views || v.vote).sort(sorter('score', 'desc'));
   const rest = S.videos.length - rated.length;
-  let html = `<div class="page-head"><h1 class="title">Рейтинг</h1></div>
+  let html = `${promptLine('~/рейтинг', `sort -k score -rn | head -${rated.length}`)}<div class="page-head"><h1 class="title">Рейтинг</h1></div>
     <p class="lead">Складається сам із того, як ти дивишся: наскільки досматриваєш відео (45%), як часто до нього вертаєшся, і свіжі перегляди тут важать більше (40%), плюс твої лайки й дизлайки (15%).</p>`;
   if (!rated.length) html += `<div class="empty"><h1 class="title">Рейтинг ще порожній</h1>Подивись кілька відео, і він збереться сам.</div>`;
   html += '<div class="ranks">' + rated.map((v, i) => `<a class="rank-row" href="#/i/${v.id}"><span class="n">${i + 1}</span><div class="th" data-scrub="${v.id}">${cover(v)}</div>
@@ -778,7 +867,7 @@ function sheetHTML(v, rnd) {
       ? `<div class="frames">${Array.from({length: 8}, () => '<span class="fcell"><span class="fimg skel"></span></span>').join('')}</div><p class="note">Нарізаю кадри з цього відео, кілька секунд…</p>`
       : `<p class="note">${S.ffmpeg ? 'З цього файлу не вдалося взяти кадри.' : 'Щоб тут з’явились кадри з відео, поклади ffmpeg.exe і ffprobe.exe поруч з vidbox.py і перезапусти VidBox.'}</p>`);
   const vcodec = [v.vc ? v.vc.toUpperCase() : '', v.w ? v.w + '×' + v.h : ''].filter(Boolean).join(', ');
-  return `<button class="x" data-close aria-label="Закрити">${I.close}</button>
+  return `${winBar(`info — <b>${esc(v.file)}</b>`, `<button class="x" data-close aria-label="Закрити (Esc)">${I.close}</button>`)}
   <div class="sh-media"><div class="screen" id="shScreen">${has ? screenLayers : `<div class="cv">${cover(v)}</div>`}</div>
     <a class="btn primary play" href="#/v/${v.id}">${I.play}${resume ? 'Продовжити з ' + fmtDur(v.pos) : 'Дивитися'}</a></div>
   <div class="sh-body">
@@ -1248,7 +1337,7 @@ async function renderPlayer(id, startAt) {
   const k = sib.findIndex(x => x.id === v.id);
   const more = sib.slice(k + 1).concat(sib.slice(0, k)).filter(x => x.id !== v.id).slice(0, 14);
   app.innerHTML = `<div class="theatre">${playerHTML(v, next)}</div>
-  <div class="pwrap">
+  <div class="pwrap">${promptLine('~/' + v.folder.split('/').pop(), `mpv "${v.file}"`)}
     <div class="phead"><div><h1 class="title">${esc(v.title)}</h1><div class="meta">${metaHTML(v)}<span>${esc(shortFolder(v.folder))}</span></div></div>
       <div class="acts">
         <button class="btn icon${v.vote > 0 ? ' on' : ''}" data-pvote="1" aria-label="Подобається">${I.up}</button>
@@ -1358,9 +1447,9 @@ async function renderPlayer(id, startAt) {
     if (!b) return;
     e.stopPropagation();
     if (b.dataset.m === 'raw') { rawMode = true; start('/stream/' + v.id + '?raw=1'); }
-    else prepareFlow();
+    else prepareFlow(true);
   });
-  function prepareFlow() {
+  function prepareFlow(force) {   // force: перекодувати в H.264 навіть HEVC (для старих телефонів)
     if (!S.ffmpeg) {
       player.msg(`<p>Формат ${esc(fmt)} браузер може не відкрити.<small>Поклади ffmpeg.exe поруч з vidbox.py, і VidBox сам конвертуватиме такі файли.</small></p><button class="btn primary" data-m="raw">Спробувати відкрити</button>`);
       return;
@@ -1372,13 +1461,14 @@ async function renderPlayer(id, startAt) {
     const poll = async () => {
       if (dead || rawMode) return;
       try {
-        const st = await api('/api/prepare/' + v.id, first ? {method: 'POST'} : undefined);
+        const st = await api('/api/prepare/' + v.id + (first && force ? '?mode=h264' : ''), first ? {method: 'POST'} : undefined);
         first = false;
         if (dead || rawMode) return;
         if (st.state === 'ready') { v.ready = true; start('/stream/' + v.id + '?r=' + Date.now()); return; }
         if (st.state === 'error') { $('#pgt').textContent = 'Не вдалося конвертувати: ' + (st.error || 'невідома помилка'); return; }
         $('#pg').style.width = (st.progress * 100).toFixed(1) + '%';
-        $('#pgt').textContent = st.state === 'queued' ? 'В черзі' : Math.round(st.progress * 100) + '%';
+        $('#pgt').textContent = st.state === 'queued' ? 'В черзі' :
+          `${Math.round(st.progress * 100)}%${st.enc ? ', ' + (st.enc === 'CPU' ? 'процесор' : st.enc === 'copy' ? 'перепаковую без перекодування' : 'відеокарта ' + st.enc) : ''}${st.fps ? `, ${st.fps} к/с` : ''}`;
       } catch (e) {}
       setTimeout(poll, 1200);
     };
@@ -1405,4 +1495,4 @@ setInterval(async () => {
   });
 }, 6000);
 
-route();
+pollStatus().then(route, route);

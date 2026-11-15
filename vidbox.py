@@ -43,7 +43,7 @@ import string
 from concurrent.futures import ThreadPoolExecutor
 
 APP = 'VidBox'
-VERSION = '0.4'
+VERSION = '0.5'
 
 VIDEO_EXT = {
     '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS videos(
   duration REAL, width INTEGER, height INTEGER, vcodec TEXT, acodec TEXT,
   probed INTEGER DEFAULT 0, thumb INTEGER DEFAULT 0, missing INTEGER DEFAULT 0,
   vote INTEGER DEFAULT 0, position REAL DEFAULT 0, position_at REAL DEFAULT 0,
-  sprite INTEGER DEFAULT 0);
+  sprite INTEGER DEFAULT 0, pixfmt TEXT);
 CREATE TABLE IF NOT EXISTS sessions(
   id TEXT PRIMARY KEY, video_id TEXT, started REAL, last REAL,
   start_pos REAL, max_pos REAL, watched REAL, duration REAL, ended INTEGER DEFAULT 0);
@@ -116,7 +116,9 @@ class Store:
             cols = {r[1] for r in self.con.execute('PRAGMA table_info(videos)')}
             if 'sprite' not in cols:   # база від версії 0.1
                 self.con.execute('ALTER TABLE videos ADD COLUMN sprite INTEGER DEFAULT 0')
-                self.con.commit()
+            if 'pixfmt' not in cols:   # база до версії 0.5
+                self.con.execute('ALTER TABLE videos ADD COLUMN pixfmt TEXT')
+            self.con.commit()
         self.version = 0
 
     def q(self, sql, a=()):
@@ -269,10 +271,146 @@ def probe(path):
     for s in j.get('streams', []):
         if s.get('codec_type') == 'video' and 'vcodec' not in info \
                 and not s.get('disposition', {}).get('attached_pic'):
-            info.update(vcodec=s.get('codec_name'), width=s.get('width'), height=s.get('height'))
+            info.update(vcodec=s.get('codec_name'), width=s.get('width'), height=s.get('height'),
+                        pixfmt=s.get('pix_fmt'))
         elif s.get('codec_type') == 'audio' and 'acodec' not in info:
             info['acodec'] = s.get('codec_name')
     return info
+
+
+# ───────────────────────────── відеокарта (апаратне прискорення) ─────────────────────────────
+#
+# Що робить відеокарта:
+#   • конвертація для телефону (MKV/AVI/HEVC → H.264 MP4): декодування D3D11VA + кодування AMF.
+#     Якщо фільтрів не треба — кадри взагалі не покидають відеокарту (найшвидший шлях);
+#     10-біт і зменшення роздільності йдуть через процесор, бо AMF H.264 не приймає 10-біт.
+#   • якщо GPU-кодування впало — та сама задача автоматично повторюється процесором.
+# Окремі кадри (обкладинки, нарізки) беруться лише з ключових кадрів: це швидше за будь-яку
+# відеокарту, бо запуск GPU на один кадр триває довше, ніж сам кадр. Можна ввімкнути й GPU.
+
+HW_KINDS = (('amd', 'h264_amf', 'AMF'), ('nvidia', 'h264_nvenc', 'NVENC'),
+            ('intel', 'h264_qsv', 'QSV'), ('vaapi', 'h264_vaapi', 'VA-API'))
+ENC_LABEL = {enc: label for _, enc, label in HW_KINDS}
+ENC_LABEL['libx264'] = 'CPU'
+VAAPI_DEV = '/dev/dri/renderD128'
+HW = {'checked': False, 'gpu': '', 'encoders': {}, 'decode': None, 'zero_copy': False, 'last': None}
+HW_LOCK = threading.Lock()
+
+
+def gpu_name():
+    try:
+        if os.name == 'nt':
+            out = run(['powershell', '-NoProfile', '-Command',
+                       "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join '; '"], 20)
+            return out.stdout.decode('utf-8', 'replace').strip()
+        if shutil.which('lspci'):
+            out = run(['lspci'], 10).stdout.decode('utf-8', 'replace')
+            return '; '.join(l.split(': ', 1)[1] for l in out.splitlines()
+                             if ': ' in l and ('VGA' in l or '3D controller' in l or 'Display controller' in l))
+    except Exception:
+        pass
+    return ''
+
+
+def _ok(cmd, timeout=40):
+    try:
+        r = run(cmd, timeout)
+        return r.returncode == 0, r.stderr.decode('utf-8', 'replace').strip()[-240:]
+    except Exception as e:
+        return False, str(e)
+
+
+def detect_hw(verbose=True):
+    """Пробує кожен апаратний кодувальник на 10 кадрах, перевіряє D3D11VA/VA-API."""
+    if not C.ffmpeg:
+        with HW_LOCK:
+            HW.update(checked=True)
+        return
+    try:
+        enc_list = run([C.ffmpeg, '-hide_banner', '-encoders'], 20).stdout.decode('utf-8', 'replace')
+        accels = run([C.ffmpeg, '-hide_banner', '-hwaccels'], 20).stdout.decode('utf-8', 'replace')
+    except Exception:
+        enc_list = accels = ''
+    src = ['-f', 'lavfi', '-i', 'testsrc2=s=640x360:r=25:d=0.4']
+    encs = {}
+    for kind, enc, label in HW_KINDS:
+        if kind == 'vaapi' and (os.name == 'nt' or not os.path.exists(VAAPI_DEV)):
+            continue
+        if not re.search(r'\b%s\b' % enc, enc_list):
+            encs[kind] = {'enc': enc, 'label': label, 'ok': False, 'err': 'немає в цій збірці ffmpeg'}
+            continue
+        if kind == 'vaapi':
+            cmd = [C.ffmpeg, '-hide_banner', '-v', 'error', '-vaapi_device', VAAPI_DEV, *src,
+                   '-vf', 'format=nv12,hwupload', '-c:v', enc, '-f', 'null', '-']
+        else:
+            cmd = [C.ffmpeg, '-hide_banner', '-v', 'error', *src, '-pix_fmt', 'nv12', '-c:v', enc, '-f', 'null', '-']
+        ok, err = _ok(cmd)
+        encs[kind] = {'enc': enc, 'label': label, 'ok': ok, 'err': '' if ok else err}
+    decode, zero = None, False
+    if os.name == 'nt' and re.search(r'\bd3d11va\b', accels):
+        sample = os.path.join(C.data, 'hwtest.mp4')
+        maker = 'libx264' if re.search(r'\blibx264\b', enc_list) else 'mpeg4'
+        _ok([C.ffmpeg, '-hide_banner', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=640x360:r=25:d=1',
+             '-c:v', maker, '-pix_fmt', 'yuv420p', sample])
+        if os.path.exists(sample):
+            ok, _ = _ok([C.ffmpeg, '-hide_banner', '-v', 'error', '-hwaccel', 'd3d11va', '-i', sample, '-f', 'null', '-'])
+            decode = 'd3d11va' if ok else None
+            if ok and encs.get('amd', {}).get('ok'):
+                zero, _ = _ok([C.ffmpeg, '-hide_banner', '-v', 'error', '-hwaccel', 'd3d11va', '-hwaccel_output_format', 'd3d11',
+                               '-i', sample, '-c:v', 'h264_amf', '-f', 'null', '-'])
+            try:
+                os.remove(sample)
+            except OSError:
+                pass
+    elif os.name != 'nt' and re.search(r'\bvaapi\b', accels) and os.path.exists(VAAPI_DEV):
+        decode = 'vaapi'
+    gpu = gpu_name()
+    with HW_LOCK:
+        HW.update(checked=True, gpu=gpu, encoders=encs, decode=decode, zero_copy=zero)
+    if verbose:
+        enc = pick_encoder()
+        print('  Відеокарта:   %s' % (gpu or 'не визначено'))
+        print('                кодування: %s%s' % (
+            ENC_LABEL.get(enc, enc) + (' (апаратне)' if enc != 'libx264' else ' — апаратного кодувальника не знайдено'),
+            ', декодування: %s%s' % (decode.upper(), ' без копіювання кадрів' if zero else '') if decode else ''))
+
+
+def pick_encoder():
+    mode = C.cfg.get('hwaccel', 'auto')
+    if mode == 'off' or not C.ffmpeg:
+        return 'libx264'
+    with HW_LOCK:
+        encs = dict(HW.get('encoders') or {})
+    for kind in (['amd', 'nvidia', 'intel', 'vaapi'] if mode == 'auto' else [mode]):
+        if encs.get(kind, {}).get('ok'):
+            return encs[kind]['enc']
+    return 'libx264'
+
+
+def grab_args():
+    """Вхідні параметри для взяття окремих кадрів: лише ключові кадри (+ GPU, якщо ввімкнено)."""
+    hw = []
+    if C.cfg.get('hw_frames') and C.cfg.get('hwaccel', 'auto') != 'off':
+        if HW.get('decode') == 'd3d11va':
+            hw = ['-hwaccel', 'd3d11va']
+        elif HW.get('decode') == 'vaapi':
+            hw = ['-hwaccel', 'vaapi', '-vaapi_device', VAAPI_DEV]
+    return hw + ['-skip_frame', 'nokey']
+
+
+def grab(path, t, out, vf, q, flags, timeout=60):
+    """Один кадр у JPEG. Спершу швидко (найближчий ключовий кадр), якщо не вийшло — точно."""
+    for fast in (True, False):
+        pre = grab_args() + ['-noaccurate_seek'] if fast else []
+        try:
+            subprocess.run([C.ffmpeg, '-v', 'error', '-y', *pre, '-ss', '%.2f' % t, '-i', path,
+                            '-frames:v', '1', '-an', '-sn', '-vf', vf, '-q:v', str(q), out],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout, creationflags=flags)
+        except Exception:
+            pass
+        if os.path.exists(out) and os.path.getsize(out) > 0:
+            return True
+    return False
 
 
 def make_thumb(path, duration, out):
@@ -281,12 +419,7 @@ def make_thumb(path, duration, out):
     t = max(0.0, min(duration * 0.15, 300.0)) if duration and duration > 3 else 0.0
     tmp = out + '.tmp.jpg'
     for ss in (t, 0.0):
-        try:
-            run([C.ffmpeg, '-v', 'error', '-y', '-ss', '%.2f' % ss, '-i', path,
-                 '-frames:v', '1', '-vf', 'scale=480:-2', '-q:v', '4', tmp], 90)
-        except Exception:
-            pass
-        if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+        if grab(path, ss, tmp, 'scale=480:-2', 4, BG_PRIO, 90):
             os.replace(tmp, out)
             return True
         if ss == 0.0:
@@ -313,20 +446,9 @@ def make_sprite(path, duration, out, background=True):
     def fpath(i):
         return os.path.join(tmpdir, 'f%02d.jpg' % i)
 
-    def grab(item):
-        i, t = item
-        try:
-            subprocess.run([C.ffmpeg, '-v', 'error', '-y', '-ss', '%.2f' % t, '-i', path,
-                            '-frames:v', '1', '-an', '-sn', '-vf', vf, '-q:v', '5', fpath(i)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=60, creationflags=flags)
-        except Exception:
-            pass
-        return os.path.exists(fpath(i)) and os.path.getsize(fpath(i)) > 0
-
     try:
         with ThreadPoolExecutor(max_workers=4) as ex:
-            ok = list(ex.map(grab, enumerate(sprite_times(duration))))
+            ok = list(ex.map(lambda it: grab(path, it[1], fpath(it[0]), vf, 5, flags), enumerate(sprite_times(duration))))
         if sum(ok) < SPRITE_N // 2:
             return False
         last = ok.index(True)
@@ -376,14 +498,7 @@ def ensure_frame(vid, i):
             return None
         os.makedirs(os.path.dirname(p), exist_ok=True)
         tmp = p + '.tmp.jpg'
-        try:
-            subprocess.run([C.ffmpeg, '-v', 'error', '-y', '-ss', '%.2f' % sprite_times(r['duration'])[i],
-                            '-i', r['path'], '-frames:v', '1', '-an', '-sn',
-                            '-vf', "scale=w='min(1280,iw)':h=-2", '-q:v', '4', tmp],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60, creationflags=NOWIN)
-        except Exception:
-            pass
-        if not (os.path.exists(tmp) and os.path.getsize(tmp) > 0):
+        if not grab(r['path'], sprite_times(r['duration'])[i], tmp, "scale=w='min(1280,iw)':h=-2", 4, NOWIN):
             return None
         os.replace(tmp, p)
         _frames_made[0] += 1
@@ -429,8 +544,27 @@ def ensure_sprite(vid, background=True):
         return val
 
 
+def queue_prep_all():
+    """«Готувати копії заздалегідь»: ставить у чергу несумісні відео, поки є місце в кеші."""
+    if not (C.ffmpeg and C.cfg.get('prep_all')):
+        return 0
+    if dir_size(os.path.join(C.data, 'prepared')) > 0.85 * C.cfg.get('cache_gb', 30) * 1024 ** 3:
+        return 0
+    with PREP_LOCK:
+        busy = {k for k, v in PREP.items() if v.get('state') in ('queued', 'working', 'error')}
+    n = 0
+    for r in DB.q('SELECT * FROM videos WHERE missing=0 AND probed=1 ORDER BY added DESC'):
+        if n >= 2:
+            break
+        if r['id'] in busy or not needs_prepare(r) or os.path.exists(prepared_path(r['id'])):
+            continue
+        request_prepare(r['id'])
+        n += 1
+    return n
+
+
 def media_worker():
-    """У фоні: тривалість, кодеки, обкладинки, потім нарізки кадрів для всіх відео."""
+    """У фоні: тривалість, кодеки, обкладинки, потім нарізки кадрів, потім (якщо ввімкнено) копії."""
     announced = False
     while True:
         MEDIA_EVENT.wait()
@@ -441,14 +575,15 @@ def media_worker():
             rows = DB.q('SELECT id, path, duration FROM videos '
                         'WHERE missing=0 AND probed=0 ORDER BY added DESC LIMIT 10')
             if not rows:
-                if not C.ffmpeg or not C.cfg.get('sprites', True):
-                    break
-                todo = DB.one('SELECT COUNT(*) AS n FROM videos WHERE missing=0 AND sprite=0 '
-                              'AND duration > 0')['n']
+                todo = 0
+                if C.ffmpeg and C.cfg.get('sprites', True):
+                    todo = DB.one('SELECT COUNT(*) AS n FROM videos WHERE missing=0 AND sprite=0 '
+                                  'AND duration > 0')['n']
                 if not todo:
                     if announced:
                         print('  ✔ Нарізки кадрів готові для всіх відео')
                         announced = False
+                    queue_prep_all()
                     break
                 if not announced:
                     print('  … Готую нарізки кадрів у фоні: %d відео (ПК не гальмуватиме)' % todo)
@@ -463,20 +598,27 @@ def media_worker():
                     dur = info.get('duration') or r['duration']
                     th = int(time.time()) if make_thumb(r['path'], dur, thumb_path(r['id'])) else 0
                     DB.x('''UPDATE videos SET probed=1, duration=COALESCE(?, duration),
-                            width=?, height=?, vcodec=?, acodec=?,
+                            width=?, height=?, vcodec=?, acodec=?, pixfmt=?,
                             thumb=CASE WHEN ?>0 THEN ? ELSE thumb END WHERE id=?''',
                          (info.get('duration'), info.get('width'), info.get('height'),
-                          info.get('vcodec'), info.get('acodec'), th, th, r['id']))
+                          info.get('vcodec'), info.get('acodec'), info.get('pixfmt'), th, th, r['id']))
                 except Exception:
                     traceback.print_exc()
                     DB.x('UPDATE videos SET probed=1 WHERE id=?', (r['id'],))
             DB.bump()
 
 
+def odd_pixfmt(pixfmt):
+    """H.264 не у звичному 8-біт 4:2:0 (10-біт аніме, 4:4:4): телефони таке не відтворюють."""
+    return bool(pixfmt) and pixfmt not in ('yuv420p', 'yuvj420p', 'nv12')
+
+
 def needs_prepare(r):
     if r['ext'] not in NATIVE_EXT:
         return True
     if r['vcodec'] and r['vcodec'] not in OK_VCODEC:
+        return True
+    if r['vcodec'] == 'h264' and odd_pixfmt(r['pixfmt']):
         return True
     if r['acodec'] and r['acodec'] not in OK_ACODEC:
         return True
@@ -485,21 +627,29 @@ def needs_prepare(r):
 
 def prepare_status(vid):
     if os.path.exists(prepared_path(vid)):
-        return {'state': 'ready', 'progress': 1.0}
+        with PREP_LOCK:
+            st = dict(PREP.get(vid) or {})
+        return {'state': 'ready', 'progress': 1.0, 'enc': st.get('enc'), 'fps': st.get('fps')}
     with PREP_LOCK:
         return dict(PREP.get(vid) or {'state': 'none', 'progress': 0.0})
 
 
-def request_prepare(vid):
-    if os.path.exists(prepared_path(vid)):
-        return {'state': 'ready', 'progress': 1.0}
+def request_prepare(vid, force=False):
+    """force=True: перекодувати в H.264, навіть якщо формат «мав би» грати (напр. HEVC на Android)."""
     if not C.ffmpeg:
         return {'state': 'error', 'progress': 0.0, 'error': 'ffmpeg не знайдено'}
     with PREP_LOCK:
         st = PREP.get(vid)
         if st and st['state'] in ('queued', 'working'):
             return dict(st)
-        PREP[vid] = {'state': 'queued', 'progress': 0.0}
+        if os.path.exists(prepared_path(vid)):
+            if not force or (st and st.get('force')):
+                return {'state': 'ready', 'progress': 1.0}
+            try:
+                os.remove(prepared_path(vid))
+            except OSError:
+                pass
+        PREP[vid] = {'state': 'queued', 'progress': 0.0, 'force': force}
     PREP_Q.put(vid)
     return {'state': 'queued', 'progress': 0.0}
 
@@ -518,51 +668,112 @@ def prep_worker():
             with PREP_LOCK:
                 st.update(state='error', error=str(e)[-300:])
         DB.bump()
+        if C.cfg.get('prep_all'):
+            MEDIA_EVENT.set()
 
 
-def convert(vid, st):
-    """Робить MP4-копію, яку відкриє будь-який телефон. H.264/HEVC — без перекодування."""
-    r = DB.one('SELECT * FROM videos WHERE id=?', (vid,))
-    if not r:
-        raise RuntimeError('відео не знайдено')
-    info = {'vcodec': r['vcodec'], 'acodec': r['acodec'], 'duration': r['duration']}
-    if not r['probed']:
-        info.update(probe(r['path']))
-    vc, ac = info.get('vcodec'), info.get('acodec')
-    if vc in ('h264', 'hevc'):
-        v = ['-c:v', 'copy'] + (['-tag:v', 'hvc1'] if vc == 'hevc' else [])
+def encode_args(enc, src_h, odd):
+    """(параметри входу, параметри відео) для кодувальника. Підібрано під RDNA2 (RX 6000) для AMF."""
+    mh = int(C.cfg.get('max_height') or 0)
+    scale = bool(mh and src_h and src_h > mh)
+    pre, vf = [], []
+    if scale:
+        vf.append('scale=-2:%d' % mh)
+    gop = ['-g', '120']                    # ключовий кадр кожні ~5 с: швидке перемотування на телефоні
+    if enc == 'h264_amf':
+        dec = HW.get('decode')
+        if dec == 'd3d11va' and HW.get('zero_copy') and not scale and not odd:
+            pre = ['-hwaccel', 'd3d11va', '-hwaccel_output_format', 'd3d11']   # кадри не покидають відеокарту
+        else:
+            if dec == 'd3d11va':
+                pre = ['-hwaccel', 'd3d11va']                                  # декодує GPU, фільтри — процесор
+            vf.append('format=nv12')
+        v = ['-c:v', 'h264_amf', '-usage', 'transcoding', '-quality', 'balanced', '-rc', 'cqp',
+             '-qp_i', '20', '-qp_p', '22', '-qp_b', '24', '-profile:v', 'high', *gop]
+    elif enc == 'h264_nvenc':
+        vf.append('format=yuv420p')
+        v = ['-c:v', 'h264_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', '22', '-b:v', '0', '-profile:v', 'high', *gop]
+    elif enc == 'h264_qsv':
+        vf.append('format=nv12')
+        v = ['-c:v', 'h264_qsv', '-preset', 'faster', '-global_quality', '22', *gop]
+    elif enc == 'h264_vaapi':
+        pre = ['-vaapi_device', VAAPI_DEV]
+        vf += ['format=nv12', 'hwupload']
+        v = ['-c:v', 'h264_vaapi', '-qp', '22', *gop]
     else:
-        v = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p']
-    a = ['-c:a', 'copy'] if ac in ('aac', 'mp3') else ['-c:a', 'aac', '-b:a', '192k', '-ac', '2']
-    out = prepared_path(vid)
-    tmp = out[:-4] + '.part.mp4'
-    cmd = [C.ffmpeg, '-hide_banner', '-v', 'error', '-y', '-fflags', '+genpts', '-i', r['path'],
-           '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-dn', *v, *a,
-           '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', tmp]
-    dur = info.get('duration') or 0
+        vf.append('format=yuv420p')
+        v = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-profile:v', 'high', *gop]
+    if vf:
+        v = ['-vf', ','.join(vf)] + v
+    return pre, v
+
+
+def run_convert(cmd, st, dur):
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=NOWIN)
     err = []
     t = threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True)
     t.start()
     for raw in p.stdout:
         line = raw.decode('utf-8', 'replace').strip()
-        if line.startswith('out_time_us=') and dur:
-            try:
-                with PREP_LOCK:
-                    st['progress'] = max(0.0, min(0.99, int(line[12:]) / 1e6 / dur))
-            except ValueError:
-                pass
+        k, _, val = line.partition('=')
+        try:
+            with PREP_LOCK:
+                if k == 'out_time_us' and dur:
+                    st['progress'] = max(0.0, min(0.99, int(val) / 1e6 / dur))
+                elif k == 'fps':
+                    st['fps'] = round(float(val))
+                elif k == 'speed' and val.endswith('x'):
+                    st['speed'] = float(val[:-1])
+        except ValueError:
+            pass
     rc = p.wait()
     t.join(5)
-    if rc != 0 or not os.path.exists(tmp):
+    return rc == 0, (err[0] if err else b'').decode('utf-8', 'replace').strip()
+
+
+def convert(vid, st):
+    """Робить MP4-копію, яку відкриє будь-який телефон.
+    H.264 8-біт і HEVC просто перепаковуються (секунди), решта перекодовується відеокартою."""
+    r = DB.one('SELECT * FROM videos WHERE id=?', (vid,))
+    if not r:
+        raise RuntimeError('відео не знайдено')
+    info = probe(r['path']) or {'vcodec': r['vcodec'], 'acodec': r['acodec'], 'duration': r['duration'],
+                                'height': r['height'], 'pixfmt': r['pixfmt']}
+    vc, ac, odd = info.get('vcodec'), info.get('acodec'), odd_pixfmt(info.get('pixfmt'))
+    force = st.get('force')
+    copy = (vc == 'h264' and not odd) or (vc == 'hevc' and not force)
+    a = ['-c:a', 'copy'] if ac in ('aac', 'mp3') else ['-c:a', 'aac', '-b:a', '192k', '-ac', '2']
+    out = prepared_path(vid)
+    tmp = out[:-4] + '.part.mp4'
+    dur = info.get('duration') or r['duration'] or 0
+    if copy:
+        plans = [('copy', [], ['-c:v', 'copy'] + (['-tag:v', 'hvc1'] if vc == 'hevc' else []))]
+    else:
+        enc = pick_encoder()
+        plans = [(e, *encode_args(e, info.get('height'), odd)) for e in ([enc, 'libx264'] if enc != 'libx264' else ['libx264'])]
+    last_err = ''
+    for enc, pre, v in plans:
+        with PREP_LOCK:
+            st.update(enc=ENC_LABEL.get(enc, 'copy' if enc == 'copy' else enc), progress=0.0, fps=None)
+        cmd = [C.ffmpeg, '-hide_banner', '-v', 'error', '-y', '-fflags', '+genpts', *pre, '-i', r['path'],
+               '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-dn', *v, *a,
+               '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', tmp]
+        started = time.time()
+        ok, last_err = run_convert(cmd, st, dur)
+        if ok and os.path.exists(tmp):
+            os.replace(tmp, out)
+            with HW_LOCK:
+                HW['last'] = {'title': r['title'], 'enc': ENC_LABEL.get(enc, enc), 'fps': st.get('fps'),
+                              'speed': st.get('speed'), 'secs': round(time.time() - started), 'at': time.time()}
+            trim_cache(keep=out)
+            return
         try:
             os.remove(tmp)
         except OSError:
             pass
-        msg = (err[0] if err else b'').decode('utf-8', 'replace').strip()
-        raise RuntimeError(msg or 'ffmpeg завершився з помилкою %s' % rc)
-    os.replace(tmp, out)
-    trim_cache(keep=out)
+        if enc not in ('copy', 'libx264'):
+            print('  ⚠ %s не впорався з «%s», повторюю процесором: %s' % (ENC_LABEL.get(enc, enc), r['title'], last_err[-160:]))
+    raise RuntimeError(last_err or 'ffmpeg завершився з помилкою')
 
 
 def trim_cache(keep=None):
@@ -754,8 +965,19 @@ def library_json():
                  if n.endswith('.mp4') and not n.endswith('.part.mp4')}
     except OSError:
         ready = set()
+    def names(sub):
+        try:
+            return {n.split('.')[0] for n in os.listdir(os.path.join(C.data, sub)) if n.endswith('.jpg')}
+        except OSError:
+            return set()
+    have_spr, have_th = names('sprites'), names('thumbs')
+    lost_spr, lost_th = [], []          # кеш почистили вручну → перегенерувати
     vids, pending, sprites = [], 0, 0
     for r in DB.q('SELECT * FROM videos WHERE missing=0'):
+        if (r['sprite'] or 0) > 0 and r['id'] not in have_spr:
+            lost_spr.append(r['id'])
+        if r['thumb'] and r['id'] not in have_th:
+            lost_th.append(r['id'])
         s = st['data'].get(r['id'], {})
         if not r['probed'] and (C.ffprobe or C.ffmpeg):
             pending += 1
@@ -764,14 +986,18 @@ def library_json():
         vids.append({
             'id': r['id'], 'title': r['title'], 'folder': r['folder'], 'ext': r['ext'][1:],
             'size': r['size'], 'added': r['added'], 'dur': r['duration'],
-            'w': r['width'], 'h': r['height'], 'thumb': r['thumb'],
+            'w': r['width'], 'h': r['height'], 'thumb': 0 if r['id'] in lost_th else r['thumb'],
             'prep': needs_prepare(r), 'ready': r['id'] in ready, 'vote': r['vote'],
             'pos': r['position'], 'posAt': r['position_at'],
             'score': s.get('score', 30), 'views': s.get('views', 0), 'avg': s.get('avg'),
             'cmp': s.get('cmp', 0.5), 'pop': s.get('pop', 0.0),
             'last': s.get('last', 0), 'weekSec': s.get('week_sec', 0),
-            'sprite': r['sprite'] or 0, 'file': os.path.basename(r['path']),
+            'sprite': 0 if r['id'] in lost_spr else (r['sprite'] or 0), 'file': os.path.basename(r['path']),
             'vc': r['vcodec'], 'ac': r['acodec']})
+    if lost_spr or lost_th:
+        DB.many('UPDATE videos SET sprite=0 WHERE id=?', [(i,) for i in lost_spr])
+        DB.many('UPDATE videos SET thumb=0, probed=0 WHERE id=?', [(i,) for i in lost_th])
+        MEDIA_EVENT.set()
     folders = sorted({v['folder'] for v in vids}, key=str.lower)
     return {'videos': vids, 'folders': folders, 'ffmpeg': bool(C.ffmpeg), 'pending': pending,
             'spritesPending': sprites if C.cfg.get('sprites', True) else 0, 'spriteN': SPRITE_N,
@@ -822,10 +1048,12 @@ DEFAULTS = {
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},
-    'theme': 'cinema',
-    'password_hash': '', 'secret': '',
+    'theme': 'arch',
+    'hwaccel': 'auto', 'hw_frames': False, 'max_height': 1080, 'prep_all': False,
+    'password_hash': '', 'secret': '', 'cfg_version': 5,
 }
-THEMES = {'cinema', 'nord', 'sweet', 'exodia', 'projector'}
+THEMES = {'arch', 'tokyo', 'catppuccin', 'dracula', 'gruvbox', 'nord', 'sweet', 'exodia', 'cinema', 'projector'}
+HWACCEL_MODES = {'auto', 'amd', 'nvidia', 'intel', 'vaapi', 'off'}
 STARTED = time.time()
 _ffmpeg_ver = []
 SORT_KEYS = {'score', 'added', 'name', 'size', 'dur', 'res', 'views', 'last', 'folder', 'random'}
@@ -849,6 +1077,9 @@ def load_config():
         elif k in cfg:
             cfg[k] = v
     cfg['secret'] = cfg['secret'] or secrets.token_hex(16)
+    if raw and raw.get('cfg_version', 0) < 5 and cfg['theme'] == 'cinema':
+        cfg['theme'] = 'arch'          # 0.5: нова тема за замовчуванням
+    cfg['cfg_version'] = DEFAULTS['cfg_version']
     return cfg
 
 
@@ -903,9 +1134,13 @@ def apply_settings(d):
                     cfg[k] = max(lo, min(hi, cast(d[k])))
                 except (TypeError, ValueError):
                     pass
-        for k in ('autoplay_next', 'resume', 'sprites', 'open_browser'):
+        for k in ('autoplay_next', 'resume', 'sprites', 'open_browser', 'hw_frames', 'prep_all'):
             if k in d:
                 cfg[k] = bool(d[k])
+        if d.get('hwaccel') in HWACCEL_MODES:
+            cfg['hwaccel'] = d['hwaccel']
+        if 'max_height' in d and d['max_height'] in (0, 720, 1080, 1440, 2160):
+            cfg['max_height'] = d['max_height']
         if d.get('theme') in THEMES:
             cfg['theme'] = d['theme']
         num('next_delay', 3, 60, int)
@@ -932,7 +1167,7 @@ def apply_settings(d):
         save_config()
     if changed_folders:
         threading.Thread(target=scan, daemon=True).start()
-    if d.get('sprites'):
+    if d.get('sprites') or d.get('prep_all'):
         MEDIA_EVENT.set()
     if 'cache_gb' in d:
         threading.Thread(target=trim_cache, daemon=True).start()
@@ -1004,7 +1239,7 @@ def settings_json():
     cfg = C.cfg
     counts = {os.path.normcase(r['root'] or ''): r['n']
               for r in DB.q('SELECT root, COUNT(*) AS n FROM videos WHERE missing=0 GROUP BY root')}
-    out = {k: cfg[k] for k in DEFAULTS if k not in ('password_hash', 'secret', 'folders')}
+    out = {k: cfg[k] for k in DEFAULTS if k not in ('password_hash', 'secret', 'folders', 'cfg_version')}
     out.update(
         folders=[{'path': f, 'count': counts.get(os.path.normcase(f), 0), 'exists': os.path.isdir(f)}
                  for f in cfg['folders']],
@@ -1019,7 +1254,39 @@ def settings_json():
                totals={'videos': t['n'], 'size': t['size'], 'dur': t['dur']},
                python=platform.python_version(), os='%s %s' % (platform.system(), platform.release()),
                ffmpegVersion=ffmpeg_version())
+    with HW_LOCK:
+        hw = json.loads(json.dumps(HW))
+    enc = pick_encoder()
+    hw.update(current=ENC_LABEL.get(enc, enc), hardware=enc != 'libx264')
+    out['hw'] = hw
     return out
+
+
+def status_json():
+    """Дані для верхньої панелі (як модулі polybar/waybar)."""
+    with PREP_LOCK:
+        work = [(k, dict(v)) for k, v in PREP.items() if v.get('state') == 'working']
+        queued = sum(1 for v in PREP.values() if v.get('state') == 'queued')
+    conv = None
+    if work:
+        vid, st = work[0]
+        r = DB.one('SELECT title FROM videos WHERE id=?', (vid,))
+        conv = {'id': vid, 'title': r['title'] if r else '', 'progress': st.get('progress', 0),
+                'fps': st.get('fps'), 'enc': st.get('enc')}
+    c = DB.one('SELECT COUNT(*) AS n, COALESCE(SUM(probed=0), 0) AS probe, COALESCE(SUM(sprite=0 AND duration>0), 0) AS spr '
+               'FROM videos WHERE missing=0')
+    try:
+        du = shutil.disk_usage(C.data)
+        disk = {'free': du.free, 'total': du.total}
+    except OSError:
+        disk = None
+    enc = pick_encoder()
+    with HW_LOCK:
+        gpu, checked = HW.get('gpu', ''), HW.get('checked')
+    return {'videos': c['n'], 'probe': c['probe'] if (C.ffprobe or C.ffmpeg) else 0,
+            'sprites': c['spr'] if (C.ffmpeg and C.cfg.get('sprites', True)) else 0,
+            'conv': conv, 'queue': queued, 'disk': disk, 'enc': ENC_LABEL.get(enc, enc), 'hardware': enc != 'libx264',
+            'gpu': gpu, 'hwChecked': checked, 'host': socket.gethostname(), 'uptime': round(time.time() - STARTED)}
 
 
 def ffmpeg_version():
@@ -1305,6 +1572,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.send_file(r['path'], VIDEO_EXT.get(r['ext'], 'application/octet-stream'))
                 if path == '/api/settings':
                     return self.send_json(settings_json())
+                if path == '/api/status':
+                    return self.send_json(status_json())
                 if path == '/api/fs':
                     return self.send_json(list_dirs(qs.get('path', [''])[0]))
                 return self.send_web(path)
@@ -1320,6 +1589,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     extra = {'Set-Cookie': 'vb=%s; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax'
                              % auth_token()} if pw else None
                     return self.send_json({'ok': True, 'hasPassword': bool(pw)}, extra=extra)
+                if path == '/api/hw/detect':
+                    threading.Thread(target=detect_hw, daemon=True).start()
+                    return self.send_json({'ok': True})
                 if path == '/api/cache/clear':
                     return self.send_json(clear_cache(self.json_body().get('what')))
                 if path == '/api/ping':
@@ -1342,7 +1614,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if m:
                     if not self.video_row(m.group(1)):
                         return self.send_json({'error': 'not found'}, 404)
-                    return self.send_json(request_prepare(m.group(1)))
+                    return self.send_json(request_prepare(m.group(1), force=qs.get('mode', [''])[0] == 'h264'))
                 m = re.fullmatch(r'/api/sprite/(\w+)', path)
                 if m:   # нарізку просять зараз (відкрили інфо) → робимо без черги
                     if not self.video_row(m.group(1)):
@@ -1548,7 +1820,7 @@ def main():
         print('  Пароль:       увімкнено (прибрати: на сайті в Налаштуваннях або --no-password)')
     print('  Налаштування: на сайті, вкладка «Налаштування» (зберігаються в %s)' % cfg_path())
     print('  Ctrl+C — зупинити\n')
-    for target in (media_worker, prep_worker, rescan_loop):
+    for target in (media_worker, prep_worker, rescan_loop, detect_hw):
         threading.Thread(target=target, daemon=True).start()
     if C.cfg.get('open_browser', True) and not args.no_browser:
         try:
