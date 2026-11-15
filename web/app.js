@@ -1115,6 +1115,7 @@ function playerHTML(v, next) {
           <input type="range" min="0" max="1" step="0.02" aria-label="Гучність"></div>
         <span class="vp-time"><span class="vp-cur">0:00</span> <span class="sep">/</span> <span class="vp-dur">${fmtDur(v.dur)}</span></span>
         <span class="vp-grow"></span>
+        <button class="vp-b vp-txt" data-a="quality" title="Якість" aria-label="Якість відео">Авто</button>
         <button class="vp-b vp-txt" data-a="speed" title="Швидкість (Shift + &lt; &gt;)" aria-label="Швидкість відтворення">1×</button>
         <button class="vp-b" data-a="pip" title="Картинка в картинці (P)" aria-label="Картинка в картинці">${I.pip}</button>
         <button class="vp-b" data-a="fs" title="На весь екран (F)" aria-label="На весь екран">${svg(PI.fs, 'ic-fs')}${svg(PI.fsExit, 'ic-fs-exit')}</button>
@@ -1215,8 +1216,11 @@ function mountPlayer(vp, v, o) {
     else if (video.requestPictureInPicture && document.pictureInPictureEnabled) video.requestPictureInPicture().catch(() => vpToast('Картинка в картинці зараз недоступна'));
     else if (video.webkitSetPresentationMode) video.webkitSetPresentationMode(video.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
   }
-  function openMenu() {
-    menu.innerHTML = '<p>Швидкість</p>' + RATES.map(r => `<button data-rate="${r}" class="${r === video.playbackRate ? 'on' : ''}">${r === 1 ? 'Звичайна' : rateLabel(r)}</button>`).join('');
+  function openMenu(kind) {
+    menu.dataset.kind = kind;
+    menu.innerHTML = kind === 'quality' && o.quality
+      ? '<p>Якість</p>' + o.quality.items().map(x => `<button data-q="${x.id}" class="${x.on ? 'on' : ''}"${x.off ? ' disabled' : ''}>${x.name}<small>${esc(x.hint)}</small></button>`).join('')
+      : '<p>Швидкість</p>' + RATES.map(r => `<button data-rate="${r}" class="${r === video.playbackRate ? 'on' : ''}">${r === 1 ? 'Звичайна' : rateLabel(r)}</button>`).join('');
     menu.hidden = false;
     clearTimeout(idleT);
     vp.classList.remove('idle');
@@ -1226,13 +1230,16 @@ function mountPlayer(vp, v, o) {
   const act = {
     play, back: () => skip(-10), fwd: () => skip(10),
     mute: () => { video.muted = !video.muted; if (!video.muted && video.volume === 0) video.volume = 0.6; },
-    speed: () => (menu.hidden ? openMenu() : closeMenu()),
+    speed: () => (menu.hidden || menu.dataset.kind !== 'speed' ? openMenu('speed') : closeMenu()),
+    quality: () => (menu.hidden || menu.dataset.kind !== 'quality' ? openMenu('quality') : closeMenu()),
     pip: togglePip, fs: toggleFs, next: () => { if (o.onNext) { wantFs = !!fsEl(); o.onNext(); } },
   };
 
   vp.addEventListener('click', e => {
     const r = e.target.closest('[data-rate]');
     if (r) { setRate(+r.dataset.rate); closeMenu(); return; }
+    const qb = e.target.closest('[data-q]');
+    if (qb) { closeMenu(); if (o.quality) o.quality.pick(qb.dataset.q); return; }
     const b = e.target.closest('[data-a]');
     if (b && act[b.dataset.a]) { act[b.dataset.a](); poke(); return; }
     if (!menu.hidden && !e.target.closest('.vp-menu')) closeMenu();
@@ -1421,8 +1428,11 @@ function mountPlayer(vp, v, o) {
   });
 
   drawVol(); drawRate(); draw();
+  const qBtn = q('[data-a=quality]');
+  if (!o.quality) qBtn.hidden = true;
   return {
     video, toast: vpToast, poke,
+    setQuality(text) { qBtn.textContent = text; },
     msg(html) { msg.innerHTML = html; msg.hidden = false; vp.classList.remove('loading'); },
     hideMsg() { msg.hidden = true; msg.innerHTML = ''; },
     msgEl: msg,
@@ -1437,6 +1447,56 @@ function mountPlayer(vp, v, o) {
       if (ms) { ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'nexttrack'].forEach(a => msh(a, null)); try { ms.metadata = null; } catch (e) {} }
     },
   };
+}
+
+// ── якість: потік з перекодуванням на льоту (/live) ──
+// Підміняємо час і тривалість на самому <video>: решта плеєра бачить позицію від початку файлу,
+// а перемотка просто запитує новий потік з потрібного місця.
+function liveAdapter(el, v) {
+  const P = HTMLMediaElement.prototype, d = n => Object.getOwnPropertyDescriptor(P, n);
+  const CT = d('currentTime'), DU = d('duration'), BU = d('buffered');
+  const st = {h: 0, off: 0, pend: null, timer: 0, play: false};
+  const go = (t, play) => { st.off = t; st.pend = null; el.src = `/live/${v.id}?h=${st.h}&t=${t.toFixed(2)}`; if (play) el.play().catch(() => {}); };
+  Object.defineProperty(el, 'currentTime', {configurable: true,
+    get() { return !st.h ? CT.get.call(el) : st.pend != null ? st.pend : st.off + CT.get.call(el); },
+    set(x) {
+      if (!st.h) { CT.set.call(el, x); return; }
+      const t = Math.max(0, Math.min(+x || 0, Math.max(0, (v.dur || 0) - 1)));
+      if (st.pend == null) st.play = !el.paused || el.ended;
+      st.pend = t;
+      clearTimeout(st.timer);
+      st.timer = setTimeout(() => go(t, st.play), 300);   // кілька натискань стрілок = один запит
+    }});
+  Object.defineProperty(el, 'duration', {configurable: true, get() { return st.h ? (v.dur || NaN) : DU.get.call(el); }});
+  Object.defineProperty(el, 'buffered', {configurable: true, get() {
+    const b = BU.get.call(el);
+    return st.h ? {length: b.length, start: i => st.off + b.start(i), end: i => st.off + b.end(i)} : b;
+  }});
+  return {
+    get h() { return st.h; },
+    play(h, t) { clearTimeout(st.timer); st.h = h; go(t, true); },
+    stop() { clearTimeout(st.timer); st.h = 0; st.pend = null; },
+  };
+}
+
+const VC_MIME = {av1: 'av01.0.13M.08', hevc: 'hvc1.1.6.L153.B0', h264: 'avc1.640033', vp9: 'vp09.00.51.08'};
+
+/** «Авто»: чи браузер сам потягне файл. Якщо ні або важко (4K без апаратного декодування) — висота для /live. */
+async function autoQuality(v) {
+  if (!S.ffmpeg) return 0;
+  const src = Math.min(v.w || 0, v.h || 0) || v.h || 0;
+  const c = navigator.connection;
+  if (c && (c.saveData || /(^|-)2g|3g/.test(c.effectiveType || '')) && src > 720) return 720;
+  const codec = VC_MIME[(v.vc || '').toLowerCase()];
+  if (!codec || !navigator.mediaCapabilities) return 0;
+  try {
+    const r = await navigator.mediaCapabilities.decodingInfo({type: 'file', video: {
+      contentType: `video/mp4; codecs="${codec}"`, width: v.w || 1920, height: v.h || 1080,
+      bitrate: v.dur ? Math.round(v.size * 8 / v.dur) : 8e6, framerate: 30}});
+    if (!r.supported) return Math.min(1080, Math.max(480, src >= 1080 ? 1080 : src >= 720 ? 720 : 480));
+    if (!r.powerEfficient && src > 1080) return 1080;   // напр. 4K AV1 на старому Маку: декодує процесор і смикається
+  } catch (e) {}
+  return 0;
 }
 
 function nextOf(v) {
@@ -1489,8 +1549,24 @@ async function renderPlayer(id, startAt) {
     $$('.on', strip).forEach(x => x.classList.remove('on'));
     strip.children[n].classList.add('on');
   }
-  const player = mountPlayer(vp, v, {next, onNext: next ? () => go('#/v/' + next.id, true) : null, onError: onPlayError, onTime: lightFrame});
+  let quality = 'auto';
+  try { quality = localStorage.getItem('vb_quality') || 'auto'; } catch (e) {}
+  const srcH = Math.min(v.w || 0, v.h || 0) || v.h || 0;
+  const fitH = want => [1080, 720, 480].find(h => h <= want && h <= Math.max(srcH || want, 480)) || 480;
+  const QUALS = [
+    {id: 'auto', name: 'Авто', hint: 'Браузер тягне файл — оригінал, ні — перекодування на ПК'},
+    {id: 'orig', name: 'Оригінал', hint: [v.res || resLabel(v), (v.vc || '').toUpperCase()].filter(Boolean).join(', ') + ' без перекодування'},
+    {id: '1080', name: '1080p', hint: '≈ 6 Мбіт/с, перекодовує ПК'},
+    {id: '720', name: '720p', hint: '≈ 3 Мбіт/с'},
+    {id: '480', name: '480p', hint: '≈ 1,5 Мбіт/с, коли зв’язок слабкий'},
+  ];
+  const player = mountPlayer(vp, v, {next, onNext: next ? () => go('#/v/' + next.id, true) : null, onError: onPlayError, onTime: lightFrame,
+    quality: {
+      items: () => QUALS.map(x => ({...x, on: x.id === quality, off: !S.ffmpeg && !['auto', 'orig'].includes(x.id)})),
+      pick: id => { quality = id; try { localStorage.setItem('vb_quality', id); } catch (e) {} reopen(); },
+    }});
   const pv = player.video;
+  const live = liveAdapter(pv, v);
   if (wantFs) { wantFs = false; player.enterFs(); }
   const sid = Math.random().toString(36).slice(2) + Date.now().toString(36);
   let watched = 0, lastT = null, startPos = null, timer = null, ended = false, dead = false, rawMode = false, captured = !!v.thumb;
@@ -1532,7 +1608,48 @@ async function renderPlayer(id, startAt) {
       }, 'image/jpeg', 0.8);
     } catch (e) {}
   }
+  function qLabel() { player.setQuality(live.h ? live.h + 'p' : quality === 'auto' ? 'Авто' : 'Ориг.'); }
+  async function pickH() {
+    if (quality === 'orig') return 0;
+    if (/^\d+$/.test(quality)) return S.ffmpeg && (!srcH || srcH > +quality) ? +quality : 0;
+    return autoQuality(v);
+  }
+  function resumeAt() {
+    if (startAt != null) return startAt;
+    return S.cfg.resume && v.pos > 15 && v.dur && v.pos < v.dur * 0.95 ? v.pos : 0;
+  }
+  function startLive(h, t) {
+    player.hideMsg();
+    rawMode = false;
+    live.play(fitH(h), t);
+    vp.classList.add('loading');
+    qLabel();
+  }
+  async function begin() {
+    const h = await pickH();
+    if (dead) return;
+    const t = resumeAt();
+    if (h || (v.prep && !v.ready && S.ffmpeg)) {
+      startLive(h || 1080, t);
+      if (t && startAt == null) player.toast('Продовжую з ' + fmtDur(t), 'З початку', () => { pv.currentTime = 0; if (watched < 30) startPos = 0; });
+    } else if (v.prep && !v.ready) prepareFlow();
+    else start('/stream/' + v.id);
+  }
+  async function reopen() {   // змінили якість: продовжуємо з того самого місця
+    const t = pv.getAttribute('src') ? pv.currentTime : resumeAt();
+    const h = await pickH();
+    if (h) { startLive(h, t); player.toast('Якість: ' + live.h + 'p'); return; }
+    live.stop();
+    player.hideMsg();
+    pv.addEventListener('loadedmetadata', () => { pv.currentTime = t; }, {once: true});
+    pv.src = '/stream/' + v.id;
+    pv.play().catch(() => {});
+    qLabel();
+    player.toast('Якість: ' + (quality === 'auto' ? 'авто, оригінал' : 'оригінал'));
+  }
   function start(src) {
+    live.stop();
+    qLabel();
     player.hideMsg();
     pv.addEventListener('loadedmetadata', () => {
       const d = dur();
@@ -1564,6 +1681,7 @@ async function renderPlayer(id, startAt) {
     document.removeEventListener('visibilitychange', onHide);
     if (!ended) ping(false);
     player.destroy();
+    live.stop();
     pv.pause(); pv.removeAttribute('src'); pv.load();
   };
 
@@ -1601,14 +1719,15 @@ async function renderPlayer(id, startAt) {
     poll();
   }
   function onPlayError() {
+    if (live.h) { live.stop(); prepareFlow(true); return; }   // потік не пішов — готуємо копію
+    if (S.ffmpeg) { startLive(1080, pv.currentTime || resumeAt()); return; }   // браузер не тягне файл — перекодування на льоту
     if (S.ffmpeg && !v.ready) {
       player.msg(`<p>Браузер не зміг відтворити цей файл.<small>VidBox може зробити сумісну копію MP4 через ffmpeg.</small></p><button class="btn primary" data-m="prep">Зробити сумісну копію</button>`);
     } else {
       player.msg(`<p>Браузер не зміг відтворити цей файл.<small>${S.ffmpeg ? 'Спробуй відкрити його на комп’ютері або в іншому браузері.' : 'Поклади ffmpeg.exe поруч з vidbox.py, і VidBox зможе робити сумісні копії.'}</small></p>`);
     }
   }
-  if (v.prep && !v.ready) prepareFlow();
-  else start('/stream/' + v.id);
+  begin();
 }
 
 // обкладинки й нарізки, які ще готуються на ПК, підтягуються самі
