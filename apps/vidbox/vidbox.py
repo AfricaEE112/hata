@@ -1667,6 +1667,7 @@ def settings_json():
                  for f in cfg['folders']],
         caches={k: dir_size(os.path.join(C.data, k)) for k in ('thumbs', 'sprites', 'frames', 'prepared')},
         animeCount=counts.get(os.path.normcase(C.anime), 0) if C.anime else 0,
+        animeTitles=len(anime_series()) if C.anime else 0,
         animeExists=bool(cfg.get('anime_folder')) and os.path.isdir(cfg['anime_folder']),
         orphans=len(orphan_ids()), hasPassword=bool(cfg['password_hash']),
         ffmpeg=C.ffmpeg, data=C.data, version=VERSION, portNow=C.port,

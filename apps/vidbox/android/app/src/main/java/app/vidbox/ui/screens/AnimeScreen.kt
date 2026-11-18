@@ -4,6 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -104,7 +108,8 @@ private fun AnimeCard(vm: AppVM, t: AnimeTitle) {
         }
         Spacer(Modifier.height(6.dp))
         Text(t.title, style = body(13.sp, FontWeight.SemiBold), color = p.fg, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(eps(t.n) + if (t.watched in 1 until t.n) " · ${t.watched} перегл." else "", style = body(11.5.sp), color = p.mute, maxLines = 1)
+        Text((t.meta?.year?.takeIf { it > 0 }?.let { "$it · " } ?: "") + eps(t.n) + if (t.watched in 1 until t.n) " · ${t.watched} перегл." else "",
+            style = body(11.5.sp), color = p.mute, maxLines = 1)
     }
 }
 
@@ -127,6 +132,9 @@ fun AnimeShowScreen(vm: AppVM, sid: String) {
                 Spacer(Modifier.width(16.dp))
                 Column(Modifier.weight(1f)) {
                     Text(t.title, style = display(26.sp), color = p.fg, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    t.meta?.alt?.takeIf { it.isNotEmpty() }?.let {
+                        Text(it.joinToString(" · "), style = body(12.5.sp), color = p.mute, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
                     Spacer(Modifier.height(4.dp))
                     Text(eps(t.n) + if (t.watched > 0) " · переглянуто ${t.watched} з ${t.n}" else "", style = body(13.5.sp), color = p.mute)
                     Spacer(Modifier.height(12.dp))
@@ -137,6 +145,7 @@ fun AnimeShowScreen(vm: AppVM, sid: String) {
                 }
             }
         }
+        t.meta?.let { m -> item { AnimeMetaBlock(m) } }
         items(t.eps, key = { it.v.id }) { e ->
             val cur = e.v.id == startId
             Row(
@@ -158,4 +167,40 @@ fun AnimeShowScreen(vm: AppVM, sid: String) {
             }
         }
     }
+}
+
+
+/** Рік, формат, рейтинг, жанри й опис з AniList — під шапкою тайтлу. Опис розгортається дотиком. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AnimeMetaBlock(m: app.vidbox.data.AnimeMeta) {
+    val p = LocalPal.current
+    var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    Column(Modifier.padding(horizontal = PAD).padding(bottom = 12.dp)) {
+        val facts = listOfNotNull(
+            m.year.takeIf { it > 0 }?.toString(), app.vidbox.data.animeFormat(m.format).takeIf { it.isNotEmpty() },
+            m.episodes.takeIf { it > 0 }?.let { "$it у сезоні" },
+            m.score.takeIf { it > 0 }?.let { "★ " + String.format(java.util.Locale.US, "%.1f", it / 10.0).replace('.', ',') },
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            facts.forEach { MetaTag(it, p.fg) }
+            m.genres.forEach { MetaTag(it, p.mute) }
+        }
+        if (m.desc.isNotBlank()) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                m.desc, style = body(13.5.sp), color = p.mute, maxLines = if (open) Int.MAX_VALUE else 4, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { open = !open },
+            )
+            Text(if (open) "Згорнути" else "Детальніше", style = mono(12.sp, FontWeight.Bold), color = p.acc,
+                modifier = Modifier.padding(top = 4.dp).clip(RoundedCornerShape(6.dp)).clickable { open = !open }.padding(vertical = 4.dp))
+        }
+    }
+}
+
+@Composable
+private fun MetaTag(text: String, color: Color) {
+    val p = LocalPal.current
+    Text(text, style = mono(11.5.sp), color = color,
+        modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, p.line, RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 4.dp))
 }

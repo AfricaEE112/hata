@@ -761,8 +761,12 @@ async function renderSettings() {
     ${row('Пересканувати автоматично', 'Як часто VidBox сам перевіряє папки.', num('rescan_min', st.rescan_min, 1, 1440, 1, 'хв'))}
   </div></section>
   <section class="set win">${winBar('~/.config/vidbox/аніме')}<div class="win-body"><h2>Аніме</h2>
-    ${row('Папка з аніме', st.anime_folder ? (st.animeExists ? `${st.animeCount} серій. Кожна підпапка — окремий тайтл. Аніме не потрапляє в бібліотеку, рейтинг і «Продовжити».` : 'Папку не знайдено — можливо, диск відключено.') : 'Окремий розділ: кожна підпапка — тайтл, файли в ній — серії. Обкладинка — cover.jpg у папці тайтлу, інакше з AniList.',
-      `<input id="animef" value="${esc(st.anime_folder || '')}" placeholder="Напр. E:\\Anime" aria-label="Папка з аніме"><button class="btn" id="animeset">Зберегти</button>${st.anime_folder ? '<button class="btn ghost" id="animeoff">Прибрати</button>' : ''}`)}
+    <p class="note" style="margin-top:0">Окремий розділ з постерами: кожна підпапка — тайтл, файли в ній — серії. Аніме не потрапляє в бібліотеку, рейтинг і «Продовжити». Обкладинки, жанри й описи — з AniList.</p>
+    ${st.anime_folder ? `<div class="flist"><div class="frow">${I.folder}<div><b>${esc(st.anime_folder)}</b><small>${st.animeExists ? `${st.animeCount} ${plural(st.animeCount, 'серія', 'серії', 'серій')} · ${st.animeTitles} ${plural(st.animeTitles, 'тайтл', 'тайтли', 'тайтлів')}` : 'Папку не знайдено. Можливо, диск від’єднано.'}</small></div>` +
+      `<button class="btn ghost icon" id="animeoff" title="Прибрати папку з аніме" aria-label="Прибрати папку з аніме">${I.trash}</button></div></div>`
+    : `<div class="fadd"><input id="animef" type="text" placeholder="Шлях до папки з аніме, наприклад E:\\Аніме" aria-label="Шлях до папки з аніме">
+      <button class="btn" id="animeBrowse">${I.folder}Огляд</button><button class="btn primary" id="animeset">${I.plus}Додати</button></div>`}
+    <p class="warn" id="aerr" hidden></p>
   </div></section>
   <section class="set win">${winBar('~/.config/vidbox/перегляд')}<div class="win-body"><h2>Перегляд</h2>
     ${row('Продовжувати з місця, де зупинився', 'Якщо вимкнути, відео щоразу починається спочатку.', sw('resume', st.resume))}
@@ -800,11 +804,20 @@ async function renderSettings() {
     LS.set('lite', e.target.checked);
     toast(e.target.checked ? 'Оптимізовану версію увімкнено на цьому пристрої' : 'Повну версію увімкнено');
   };
-  const setAnime = async a => { const r = await save({anime_folder: a}, a ? 'Папку аніме збережено, сканую…' : 'Розділ аніме вимкнено');
-    if (r.ok) setTimeout(() => { if (baseHash === '/settings') renderBase('/settings', true); }, 1500); };
-  $('#animeset').onclick = () => setAnime($('#animef').value.trim());
-  $('#animef').onkeydown = e => { if (e.key === 'Enter') setAnime(e.target.value.trim()); };
-  if ($('#animeoff')) $('#animeoff').onclick = () => setAnime('');
+  const setAnime = async a => {
+    if (a === null) return;
+    const r = await api('/api/settings', {method: 'POST', body: JSON.stringify({anime_folder: a})});
+    const e = $('#aerr');
+    if (!r.ok) { e.textContent = r.error || 'Не вдалося зберегти'; e.hidden = false; return; }
+    e.hidden = true;
+    toast(a ? 'Папку з аніме додано, сканую…' : 'Розділ аніме вимкнено. Самі файли не видаляються');
+    setTimeout(() => { if (baseHash === '/settings') renderBase('/settings', true); }, 1500);
+  };
+  const addAnime = () => { const v = $('#animef').value.trim(); if (!v) { $('#animef').focus(); return toast('Введи шлях або натисни «Огляд»'); } setAnime(v); };
+  if ($('#animeset')) $('#animeset').onclick = addAnime;
+  if ($('#animef')) $('#animef').onkeydown = e => { if (e.key === 'Enter') addAnime(); };
+  if ($('#animeBrowse')) $('#animeBrowse').onclick = () => openPicker('', path => { $('#animef').value = path; });
+  if ($('#animeoff')) $('#animeoff').onclick = () => { if (confirm('Прибрати папку з аніме? Розділ «Аніме» зникне, файли на диску лишаться.')) setAnime(''); };
 
   $$('[data-theme-pick]').forEach(b => b.onclick = () => {
     applyTheme(b.dataset.themePick);

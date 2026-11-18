@@ -88,7 +88,24 @@ data class Queue(val pl: String, val name: String, val ids: List<String>, val sh
 /** Аніме: тайтл (підпапка) і серії. Серії — звичайні Video, плеєр грає їх так само. */
 data class AnimeCont(val id: String, val ep: Int, val pos: Double, val dur: Double)
 data class AnimeTitle(val sid: String, val title: String, val n: Int, val watched: Int, val cover: String,
-                      val lastAt: Double, val cont: AnimeCont?, val eps: List<AnimeEp> = emptyList())
+                      val lastAt: Double, val cont: AnimeCont?, val eps: List<AnimeEp> = emptyList(), val meta: AnimeMeta? = null)
+
+/** Метадані з AniList: назви, рік, формат, серії в сезоні, рейтинг 0–100, жанри, опис. */
+data class AnimeMeta(val alt: List<String>, val year: Int, val format: String, val episodes: Int, val score: Int,
+                     val genres: List<String>, val desc: String, val url: String)
+
+private val ANIME_FMT = mapOf("TV" to "серіал", "TV_SHORT" to "короткий серіал", "MOVIE" to "фільм", "OVA" to "OVA",
+    "ONA" to "ONA", "SPECIAL" to "спешл", "MUSIC" to "кліп")
+fun animeFormat(f: String) = ANIME_FMT[f] ?: f
+
+private fun parseAnimeMeta(o: JSONObject?, title: String): AnimeMeta? {
+    if (o == null || o.optInt("id") == 0) return null
+    val g = o.optJSONArray("genres")
+    val alt = listOf("english", "romaji", "native").mapNotNull { k -> o.optString(k).takeIf { !o.isNull(k) && it.isNotBlank() && it != title } }.distinct().take(2)
+    return AnimeMeta(alt, o.optInt("year"), if (o.isNull("format")) "" else o.optString("format"), o.optInt("episodes"),
+        o.optInt("score"), if (g == null) emptyList() else (0 until g.length()).map { g.getString(it) },
+        if (o.isNull("desc")) "" else o.optString("desc"), if (o.isNull("url")) "" else o.optString("url"))
+}
 data class AnimeEp(val v: Video, val ep: Int, val name: String, val done: Boolean)
 data class AnimeList(val folder: String, val titles: List<AnimeTitle>)
 
@@ -99,6 +116,7 @@ fun parseAnimeTitle(o: JSONObject): AnimeTitle {
         sid = o.optString("sid"), title = o.optString("title"), n = o.optInt("n"), watched = o.optInt("watched"),
         cover = o.optString("cover"), lastAt = o.optDouble("lastAt", 0.0),
         cont = c?.let { AnimeCont(it.optString("id"), it.optInt("ep"), it.optDouble("pos", 0.0), it.optDouble("dur", 0.0)) },
+        meta = parseAnimeMeta(o.optJSONObject("meta"), o.optString("title")),
         eps = if (eps == null) emptyList() else (0 until eps.length()).map {
             val e = eps.getJSONObject(it)
             AnimeEp(parseVideo(e), e.optInt("ep"), e.optString("etitle"), e.optBoolean("done"))
