@@ -138,7 +138,6 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     init {
         if (!connected) nav.go(Connect)
         startPolling()
-        checkUpdate(manual = false)
     }
 
     // ── оновлення апки з GitHub ──
@@ -148,6 +147,8 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         private set
     var updateProgress by mutableStateOf(0f)
         private set
+
+    init { checkUpdate(manual = false) }   // після оголошення стану оновлення, інакше він ще null
 
     fun checkUpdate(manual: Boolean = true) = viewModelScope.launch {
         if (updateState == "checking" || updateState == "downloading") return@launch
