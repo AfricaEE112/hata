@@ -295,9 +295,9 @@ private fun DownloadPicker(v: app.vidbox.data.Video, onPick: (Int) -> Unit, onCl
     val mb = { kbps: Int -> app.vidbox.data.Fmt.size((kbps * 125L * v.dur).toLong()) }
     val opts = buildList {
         add(Triple(0, "Оригінал", listOf(v.res, v.vc.uppercase(), app.vidbox.data.Fmt.size(v.size)).filter { it.isNotEmpty() }.joinToString(" · ")))
-        if (v.resKey > 1080) add(Triple(1080, "1080p", "≈ ${mb(6128)}, ПК спершу перекодує"))
-        if (v.resKey > 720) add(Triple(720, "720p", "≈ ${mb(3128)}, ПК спершу перекодує"))
-        add(Triple(480, "480p", "≈ ${mb(1628)}, найменший файл"))
+        if (v.resKey > 1080) add(Triple(1080, "1080p", "до ${mb(6128)}, ПК спершу перекодує"))
+        if (v.resKey > 720) add(Triple(720, "720p", "до ${mb(3128)}, ПК спершу перекодує"))
+        add(Triple(480, "480p", "до ${mb(1628)}, найменший файл"))
     }
     androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
         app.vidbox.ui.Win("wget — ", Modifier.widthIn(max = 420.dp), bold = "якість") {
