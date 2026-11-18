@@ -18,6 +18,8 @@ import app.vidbox.data.LEN_GROUPS
 import app.vidbox.data.AnimeList
 import app.vidbox.data.AnimeTitle
 import app.vidbox.data.Library
+import app.vidbox.data.Update
+import app.vidbox.data.Updater
 import app.vidbox.data.Queue
 import app.vidbox.data.Ui
 import app.vidbox.data.Video
@@ -136,6 +138,42 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     init {
         if (!connected) nav.go(Connect)
         startPolling()
+        checkUpdate(manual = false)
+    }
+
+    // ── оновлення апки з GitHub ──
+    var update by mutableStateOf<Update?>(null)
+        private set
+    var updateState by mutableStateOf("")      // "", "checking", "latest", "error: …", "downloading"
+        private set
+    var updateProgress by mutableStateOf(0f)
+        private set
+
+    fun checkUpdate(manual: Boolean = true) = viewModelScope.launch {
+        if (updateState == "checking" || updateState == "downloading") return@launch
+        updateState = "checking"
+        runCatching { Updater.check() }
+            .onSuccess { u ->
+                update = u
+                updateState = if (u == null) "latest" else ""
+                if (u != null && !manual) say("Є нова версія апки ${u.name}", "Оновити") { installUpdate() }
+                if (u == null && manual) say("Встановлено найновішу версію")
+            }
+            .onFailure { updateState = if (manual) "error: ${it.message}" else "" }
+    }
+
+    fun installUpdate() = viewModelScope.launch {
+        val u = update ?: return@launch
+        if (updateState == "downloading") return@launch
+        updateState = "downloading"
+        updateProgress = 0f
+        val ctx = getApplication<Application>()
+        runCatching { Updater.download(ctx, u) { p -> updateProgress = p } }
+            .onSuccess { f ->
+                updateState = ""
+                if (!Updater.install(ctx, f)) say("Дозволь VidBox встановлювати апки й натисни «Оновити» ще раз")
+            }
+            .onFailure { updateState = "error: ${it.message}" }
     }
 
     fun say(text: String, action: String? = null, onAction: (() -> Unit)? = null) {

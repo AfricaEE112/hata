@@ -47,6 +47,7 @@ import app.vidbox.AppVM
 import app.vidbox.BuildConfig
 import app.vidbox.data.Fmt
 import app.vidbox.ui.Btn
+import app.vidbox.ui.Meter
 import app.vidbox.ui.Ic
 import app.vidbox.ui.Kind
 import app.vidbox.ui.LocalPal
@@ -160,6 +161,32 @@ fun SettingsScreen(vm: AppVM) {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        item {
+            Win("~/.local/bin/", w, bold = "update") {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                    val u = vm.update
+                    val st = vm.updateState
+                    Text(if (u != null) "Доступна версія ${u.name}" else "Оновлення апки", style = body(15.sp, FontWeight.Medium), color = p.fg)
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        when {
+                            st == "checking" -> "Перевіряю GitHub…"
+                            st == "downloading" -> "Завантажую ${(vm.updateProgress * 100).toInt()}%" + if (u != null && u.size > 0) " з ${Fmt.size(u.size)}" else ""
+                            st.startsWith("error") -> "Не вдалося: " + st.removePrefix("error: ")
+                            u != null -> "Зараз ${BuildConfig.VERSION_NAME}. Апка завантажиться з GitHub і запропонує встановити оновлення, налаштування збережуться."
+                            st == "latest" -> "Встановлено найновішу версію ${BuildConfig.VERSION_NAME}"
+                            else -> "Зараз ${BuildConfig.VERSION_NAME}. Нову версію апка перевіряє сама при запуску."
+                        },
+                        style = body(12.5.sp), color = p.mute,
+                    )
+                    if (st == "downloading") Meter(vm.updateProgress, Modifier.padding(top = 10.dp).fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                    if (u != null) Btn("Оновити", { vm.installUpdate() }, icon = Ic.arrDown, kind = Kind.Primary, enabled = st != "downloading")
+                    else Btn("Перевірити оновлення", { vm.checkUpdate() }, icon = Ic.refresh, enabled = st != "checking")
                 }
             }
         }
