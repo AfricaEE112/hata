@@ -24,7 +24,7 @@ import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, 'web')
-FONTS = os.path.join(os.path.dirname(HERE), 'web', 'fonts')      # шрифти VidBox — той самий стиль
+FONTS = os.path.join(WEB, 'fonts')      # ті самі шрифти, що й у VidBox
 DATA = os.environ.get('HATA_DATA', '/var/lib/hata')
 CFG = os.path.join(DATA, 'hata.json')
 VB_DATA = os.path.join(DATA, 'vidbox')

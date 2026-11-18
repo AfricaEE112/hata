@@ -8,7 +8,7 @@ User=hata
 Group=hata
 SupplementaryGroups=video render
 Environment=VIDBOX_MANAGED=hata
-ExecStart=/usr/bin/python3 /opt/hata/src/vidbox.py --data /var/lib/hata/vidbox --no-browser
+ExecStart=/usr/bin/python3 /opt/hata/src/apps/vidbox/vidbox.py --data /var/lib/hata/vidbox --no-browser
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/hata

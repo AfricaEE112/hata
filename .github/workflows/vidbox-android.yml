@@ -6,9 +6,9 @@ on:
   push:
     branches: [main, android-wip]
     paths:
-      - "android/**"
-      - "vidbox.py"
-      - ".github/workflows/android.yml"
+      - "apps/vidbox/android/**"
+      - "apps/vidbox/vidbox.py"
+      - ".github/workflows/vidbox-android.yml"
   workflow_dispatch:
 
 permissions:
@@ -34,7 +34,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build APK
-        working-directory: android
+        working-directory: apps/vidbox/android
         shell: bash
         run: |
           set -o pipefail
@@ -44,7 +44,7 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          msg=$(grep -E "^e: |error:|What went wrong|Could not|Unresolved|> " android/build.log | head -80 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+          msg=$(grep -E "^e: |error:|What went wrong|Could not|Unresolved|> " apps/vidbox/android/build.log | head -80 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
           echo "::error title=Gradle build failed::$msg"
 
       - name: Name the APK
@@ -53,7 +53,7 @@ jobs:
         run: |
           v="0.6.${{ github.run_number }}"
           echo "version=$v" >> "$GITHUB_OUTPUT"
-          cp android/app/build/outputs/apk/release/app-release.apk "VidBox-$v.apk"
+          cp apps/vidbox/android/app/build/outputs/apk/release/app-release.apk "VidBox-$v.apk"
           ls -la VidBox-*.apk
 
       - uses: actions/upload-artifact@v4
@@ -67,7 +67,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: android/build.log
+          path: apps/vidbox/android/build.log
           if-no-files-found: ignore
 
   # Справжня перевірка: сервер VidBox з тестовими відео + емулятор Android з цією APK
@@ -113,10 +113,10 @@ jobs:
           path: |
             ~/vids
             ~/anime
-          key: e2e-videos-${{ hashFiles('android/e2e/server.sh') }}
+          key: e2e-videos-${{ hashFiles('apps/vidbox/android/e2e/server.sh') }}
 
       - name: Start VidBox server with test videos
-        run: bash android/e2e/server.sh
+        run: bash apps/vidbox/android/e2e/server.sh
 
       # знімок уже ввімкненого емулятора: тест стартує за секунди, а не чекає повного завантаження Android
       - name: Emulator snapshot cache
@@ -153,7 +153,7 @@ jobs:
           force-avd-creation: false
           disable-animations: true
           emulator-options: -no-window -gpu swangle_indirect -no-snapshot-save -noaudio -no-boot-anim -camera-back none -no-metrics
-          script: bash android/e2e/app.sh
+          script: bash apps/vidbox/android/e2e/app.sh
 
       # емулятор на GitHub іноді падає сам; тоді ще одна спроба з чистого запуску
       - name: Retry if the emulator crashed
@@ -174,7 +174,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -no-metrics
-          script: bash android/e2e/app.sh
+          script: bash apps/vidbox/android/e2e/app.sh
 
       - name: Publish screenshots and logs
         if: always()

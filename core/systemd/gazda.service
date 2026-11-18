@@ -4,7 +4,7 @@ After=local-fs.target network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/python3 /opt/hata/src/hata/gazda.py serve
+ExecStart=/usr/bin/python3 /opt/hata/src/core/gazda.py serve
 Restart=always
 RestartSec=2
 

@@ -3,7 +3,7 @@ name: hata
 on:
   push:
     branches: [main]
-    paths: ['hata/**', 'vidbox.py', 'web/**', '.github/workflows/hata.yml']
+    paths: ['core/**', 'install.sh', 'apps/vidbox/vidbox.py', 'apps/vidbox/web/**', '.github/workflows/hata.yml']
   workflow_dispatch:
 
 permissions:
@@ -26,13 +26,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/apt-cache
-          key: hata-apt-${{ hashFiles('hata/install.sh') }}
+          key: hata-apt-${{ hashFiles('install.sh') }}
           restore-keys: hata-apt-
 
       - name: Install Hata
         run: |
           [ -d ~/apt-cache ] && sudo cp ~/apt-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
-          sudo HATA_HOSTNAME=keep bash hata/install.sh
+          sudo HATA_HOSTNAME=keep bash install.sh
           mkdir -p ~/apt-cache && cp /var/cache/apt/archives/*.deb ~/apt-cache/ 2>/dev/null || true
 
       - name: Services are running
@@ -52,7 +52,7 @@ jobs:
           lsblk -f
 
       - name: Laptop screen before setup
-        run: sleep 12; mkdir -p hata-out; sudo python3 hata/ci/tty.py | tee hata-out/screen-before.txt
+        run: sleep 12; mkdir -p hata-out; sudo python3 core/ci/tty.py | tee hata-out/screen-before.txt
 
       - name: Playwright
         run: |
@@ -60,7 +60,7 @@ jobs:
           python -m playwright install --with-deps chromium > /dev/null
 
       - name: Go through the setup wizard
-        run: python hata/ci/wizard.py hata-out
+        run: python core/ci/wizard.py hata-out
 
       - name: After setup
         if: always()
@@ -70,12 +70,12 @@ jobs:
           grep hata /etc/fstab || true
           sudo gazda update || true
           sudo journalctl -u hata-screen --no-pager -n 20 || true
-          sleep 12; sudo python3 hata/ci/tty.py > hata-out/screen-after.txt || true; cat hata-out/screen-after.txt
+          sleep 12; sudo python3 core/ci/tty.py > hata-out/screen-after.txt || true; cat hata-out/screen-after.txt
           sudo journalctl -u gazda -u hata -u vidbox -u hata-screen --no-pager -n 200 > hata-out/journal.txt || true
           sudo cat /var/lib/hata/vidbox/config.json | python3 -c "import json,sys; c=json.load(sys.stdin); print({k: c[k] for k in ('folders','anime_folder')})" > hata-out/vidbox-config.txt || true
 
       - name: Reinstall is safe (idempotent)
-        run: sudo HATA_HOSTNAME=keep bash hata/install.sh && systemctl is-active gazda hata vidbox
+        run: sudo HATA_HOSTNAME=keep bash install.sh && systemctl is-active gazda hata vidbox
 
       - name: Publish screenshots
         if: always()

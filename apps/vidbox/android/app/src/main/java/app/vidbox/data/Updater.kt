@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
 data class Update(val build: Int, val name: String, val url: String, val size: Long, val notes: String)
 
 object Updater {
-    private const val LATEST = "https://api.github.com/repos/AfricaEE112/vidbox/releases/latest"
+    private const val LATEST = "https://api.github.com/repos/AfricaEE112/hata/releases/latest"
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
 
     /** null — апка вже найновіша. */

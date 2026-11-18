@@ -785,7 +785,7 @@ async function renderSettings() {
     ${row('Відкривати сайт на ПК при запуску', '', sw('open_browser', st.open_browser))}
     ${row('Адреса для телефону', 'Телефон має бути в тій самій Wi-Fi мережі.', st.urls.length ? st.urls.map(u => `<code>${esc(u)}</code>`).join('') : '<span class="note">Не вдалося визначити</span>')}
     ${row('Апка для Android', 'Своя апка з плеєром: сама знаходить цей ПК у Wi-Fi, грає MKV, HEVC і AV1 без перекодування, звук у фоні й керування зі шторки.',
-      `<a class="btn" href="https://github.com/AfricaEE112/vidbox/releases/latest" target="_blank" rel="noopener">${I.arrDown}Завантажити APK</a>`)}
+      `<a class="btn" href="https://github.com/AfricaEE112/hata/releases/latest" target="_blank" rel="noopener">${I.arrDown}Завантажити APK</a>`)}
   </div></section>
   <section class="set win" id="srv">${winBar('~/.local/share/vidbox/сервер')}<div class="win-body"><h2>Сервер</h2>
     <div id="srvInfo"><p class="note">Завантажую стан…</p></div>

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Hata — встановлення на чистий Ubuntu Server 24.04 (або Debian 12/13).
 #
-#   git clone https://github.com/AfricaEE112/vidbox && sudo vidbox/hata/install.sh
+#   git clone https://github.com/AfricaEE112/hata && sudo hata/install.sh
 #
 # Скрипт можна запускати повторно: він доставить відсутнє й оновить код, нічого не зламавши.
 # Після встановлення на екрані ноутбука з'явиться QR-код — далі все в браузері (майстер налаштування).
@@ -17,7 +17,7 @@ say()  { printf '\n\033[1;36m::\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mxx\033[0m %s\n' "$*"; exit 1; }
 
-HERE="$(cd "$(dirname "$0")/.." && pwd)"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC=/opt/hata/src
 DATA=/var/lib/hata
 HOST_NEW="${HATA_HOSTNAME:-hata}"
@@ -49,7 +49,7 @@ install -d -o root -g root -m 755 /srv/disks /opt/hata
 
 # ── код (належить root: панель не може змінити те, що виконує gazda) ──
 say "Копіюю код Hata і VidBox у $SRC…"
-ORIGIN="${HATA_REPO:-$(git -C "$HERE" remote get-url origin 2>/dev/null || echo https://github.com/AfricaEE112/vidbox.git)}"
+ORIGIN="${HATA_REPO:-$(git -C "$HERE" remote get-url origin 2>/dev/null || echo https://github.com/AfricaEE112/hata.git)}"
 BRANCH="$(git -C "$HERE" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
 [ "$BRANCH" = HEAD ] && BRANCH=main
 if [ ! -d "$SRC/.git" ]; then
@@ -66,8 +66,8 @@ else
 fi
 chown -R root:root /opt/hata
 chmod -R go-w /opt/hata
-ln -sf "$SRC/hata/gazda.py" /usr/local/bin/gazda
-chmod 755 "$SRC/hata/gazda.py"
+ln -sf "$SRC/core/gazda.py" /usr/local/bin/gazda
+chmod 755 "$SRC/core/gazda.py"
 
 # ── ноутбук: працювати з закритою кришкою, гасити екран ──
 say "Налаштовую ноутбук: закрита кришка не присипляє сервер…"
@@ -112,7 +112,7 @@ fi
 
 # ── служби ──
 say "Запускаю служби…"
-install -m 644 "$SRC"/hata/systemd/*.service /etc/systemd/system/
+install -m 644 "$SRC"/core/systemd/*.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable -q --now gazda.service
 systemctl enable -q hata.service hata-screen.service

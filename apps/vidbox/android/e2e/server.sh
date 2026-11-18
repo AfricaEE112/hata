@@ -23,7 +23,7 @@ done
 gen -f lavfi -i "smptebars=s=1280x720:r=24" -f lavfi -i "sine=f=300:r=44100" -t 10 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest "$HOME/anime/Cowboy Bebop/Cowboy Bebop - 01 - Asteroid Blues.mp4"
 ls -laR "$V" "$HOME/anime"
 
-nohup python3 vidbox.py "$V" --data "$HOME/vbdata" --no-browser > /tmp/vidbox-server.log 2>&1 &
+nohup python3 "$(dirname "$0")/../../vidbox.py" "$V" --data "$HOME/vbdata" --no-browser > /tmp/vidbox-server.log 2>&1 &
 for i in $(seq 1 60); do curl -sf localhost:8800/api/hello && break; sleep 1; done
 echo
 curl -sf -XPOST localhost:8800/api/settings -d "{\"anime_folder\": \"$HOME/anime\"}"; echo
