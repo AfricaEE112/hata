@@ -131,8 +131,11 @@ async function stepDisks() {
   });
 }
 
+let foldersSeq = 0;
 async function stepFolders(path) {
+  const my = ++foldersSeq;    // швидкі кліки: застаріла відповідь не перемальовує новіший екран
   const r = await api('/api/dirs' + (path ? '?path=' + encodeURIComponent(path) : ''));
+  if (my !== foldersSeq) return;
   const chosen = W.folders.map(f => `<div class="row"><div class="l"><b class="link">${esc(f)}</b><small>відео</small></div><div class="r"><button class="btn ghost" data-rm="${esc(f)}">Прибрати</button></div></div>`).join('') +
     (W.anime ? `<div class="row"><div class="l"><b class="link">${esc(W.anime)}</b><small>аніме — окремий розділ</small></div><div class="r"><button class="btn ghost" data-rma>Прибрати</button></div></div>` : '');
   const here = r.path ? `<div class="acts" style="margin-top:6px"><button class="btn" id="asVideo">Тут відео</button><button class="btn" id="asAnime">Тут аніме</button></div>` : '';
