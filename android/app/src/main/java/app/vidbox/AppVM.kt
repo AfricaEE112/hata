@@ -97,7 +97,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     val prefs = vb.prefs
     val nav = Nav()
     /** Завантажене на телефон: грається без ПК. */
-    val dl = Offline(app, api.client)
+    val dl = vb.dl
 
     var lib by mutableStateOf<Library?>(null)
         private set

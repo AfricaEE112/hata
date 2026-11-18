@@ -11,6 +11,8 @@ class VidBoxApp : Application(), ImageLoaderFactory {
         private set
     lateinit var api: Api
         private set
+    /** Завантаження живуть на рівні апки: не зупиняються, коли закривається екран. */
+    val dl by lazy { app.vidbox.data.Offline(this, api.client) }
 
     override fun onCreate() {
         super.onCreate()

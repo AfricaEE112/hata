@@ -27,7 +27,9 @@ fun Video.json(): JSONObject = JSONObject().put("id", id).put("title", title).pu
     .put("views", views).put("cmp", cmp).put("pop", pop).put("last", last).put("sprite", 0).put("file", file)
     .put("vc", vc).put("ac", ac)
 
-class Offline(ctx: Context, private val client: OkHttpClient) {
+class Offline(private val ctx: Context, private val client: OkHttpClient) {
+    /** Власна область корутин: завантаження не прив'язані до екрана й ViewModel. */
+    private val own = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main)
     private val dir = File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, "offline").apply { mkdirs() }
     private val index = File(dir, "index.json")
     private val jobs = HashMap<String, Job>()
@@ -66,7 +68,7 @@ class Offline(ctx: Context, private val client: OkHttpClient) {
         if ((items[v.id]?.h ?: h) != h) part(v.id).delete()   // інша якість — качаємо заново
         items[v.id] = Dl(v, part(v.id).length(), sizeHint, false, h = h)
         save()
-        jobs[v.id] = scope.launch {
+        jobs[v.id] = own.launch {
             val err = withContext(Dispatchers.IO) {
                 runCatching {
                     prep?.invoke { n -> items[v.id] = items[v.id]!!.copy(note = n) }
@@ -110,6 +112,7 @@ class Offline(ctx: Context, private val client: OkHttpClient) {
                           else cur.copy(error = err.message ?: "Помилка")
             save()
         }
+        DownloadService.start(ctx)
     }
 
     fun stop(id: String) { jobs.remove(id)?.cancel() }
