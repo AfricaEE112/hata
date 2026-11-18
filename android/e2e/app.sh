@@ -33,9 +33,6 @@ for m in re.finditer(r'<node [^>]*>', xml):
 " "$1")
   [ -n "$xy" ] && adb shell input tap $xy
 }
-# чекаємо, поки на екрані з'явиться текст (замість фіксованих пауз): швидше й надійніше
-wait_text() { local i; for i in $(seq 1 "${2:-20}"); do has_text "$1" && return 0; sleep 0.4; done; echo "no '$1' on screen" >> "$OUT/NOTES.txt"; return 0; }
-
 # лише падіння самої VidBox (системні апки емулятора теж іноді падають)
 crashed() { timeout 60 adb logcat -d | grep -A 30 "FATAL EXCEPTION" | grep -A 28 "Process: app.vidbox" | head -60; }
 
@@ -70,7 +67,7 @@ shot 03-home-2
 adb shell input swipe 540 1900 540 500 350; sleep 1.5
 shot 04-home-3
 
-open_route lib; wait_text "Тривалість"
+open_route lib; sleep 3
 shot 05-library
 tap_text "Тривалість"; sleep 2
 shot 06-library-duration
@@ -80,29 +77,29 @@ open_route pl; sleep 2
 shot 07-playlists
 open_route pl/short; sleep 2
 shot 08-playlist
-open_route top; wait_text "sort -k score"
+open_route top; sleep 3
 shot 09-top
 # ── аніме ──
-open_route anime; wait_text "Cowboy Bebop"
+open_route anime; sleep 3
 shot 09b-anime
 SID=$(python3 -c "import json;print([t['sid'] for t in json.load(open('/tmp/anime.json'))['titles'] if 'Frieren' in t['title']][0])")
-open_route "anime/$SID"; wait_text "Серія 10"
+open_route "anime/$SID"; sleep 3
 shot 09c-anime-title
 tap_text "Дивитися з першої"; sleep 3
 dismiss_hint; sleep 4
 shot 09d-anime-player
 adb shell input keyevent 4; sleep 2
 # ── завантаження на телефон ──
-open_route "i/$(id_of 'Захід сонця')"; wait_text "Дивитися"; sleep 0.5
+open_route "i/$(id_of 'Захід сонця')"; sleep 3
 dismiss_anr; sleep 1
 tap_text "Завантажити" || { dismiss_anr; sleep 1; tap_text "Завантажити"; }; sleep 2
 shot 09f-download-quality
 tap_text "480p"; sleep 15
 dismiss_anr
-open_route downloads; wait_text "du -sh"
+open_route downloads; sleep 3
 dismiss_anr; sleep 1
 shot 09e-downloads
-open_route "i/$(id_of 'Захід сонця')"; wait_text "Дивитися"; sleep 0.5
+open_route "i/$(id_of 'Захід сонця')"; sleep 3
 shot 10-info
 adb shell input swipe 540 1900 540 700 350; sleep 1.5
 shot 11-info-2
