@@ -70,6 +70,9 @@ class Api(private val prefs: Prefs) {
     suspend fun vote(id: String, vote: Int) = post("/api/vote", JSONObject().put("id", id).put("vote", vote))
     suspend fun ping(o: JSONObject) = post("/api/ping", o)
     suspend fun rescan() = post("/api/rescan")
+    suspend fun dlPrep(id: String, h: Int, start: Boolean): JSONObject =
+        if (start) post("/api/dlprep/$id?h=$h") else get("/api/dlprep/$id?h=$h")
+    fun dlFileUrl(id: String, h: Int) = url("/dlfile/$id?h=$h")
     suspend fun anime() = parseAnimeList(get("/api/anime"))
     suspend fun animeTitle(sid: String) = parseAnimeTitle(get("/api/anime/$sid"))
     suspend fun prepare(id: String, force: Boolean) = parsePrep(post("/api/prepare/$id" + if (force) "?mode=h264" else ""))

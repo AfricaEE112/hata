@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -65,6 +66,7 @@ import kotlin.math.roundToInt
 @Composable
 fun InfoScreen(vm: AppVM, r: Info) {
     val p = LocalPal.current
+    var pickDl by remember { mutableStateOf(false) }
     val lib = vm.lib ?: return Waiting(vm)
     val v = vm.byId[r.id] ?: return Empty("Відео не знайдено", "Можливо, файл перемістили або видалили з папки на ПК.") {
         Btn("Назад", { vm.nav.back() }, icon = Ic.back)
@@ -131,9 +133,12 @@ fun InfoScreen(vm: AppVM, r: Info) {
                     val d = vm.dl.items[v.id]
                     when {
                         d?.done == true -> Btn("На телефоні", { vm.nav.go(app.vidbox.Downloads) }, icon = Ic.check, kind = Kind.Ghost)
-                        d != null && vm.dl.running(v.id) -> Btn("${(d.progress * 100).toInt()}% · Стоп", { vm.dl.stop(v.id) }, icon = Ic.close, kind = Kind.Ghost)
-                        else -> Btn(if (d != null) "Докачати" else "Завантажити", { vm.download(v) }, icon = Ic.arrDown, kind = Kind.Ghost)
+                        d != null && vm.dl.running(v.id) -> Btn((d.note?.substringAfter(": ")?.let { "ПК $it" } ?: "${(d.progress * 100).toInt()}%") + " · Стоп", { vm.dl.stop(v.id) }, icon = Ic.close, kind = Kind.Ghost)
+                        else -> Btn(if (d != null) "Докачати" else "Завантажити", {
+                            if (d == null && vm.lib?.ffmpeg == true && v.resKey > 480) pickDl = true else vm.download(v)
+                        }, icon = Ic.arrDown, kind = Kind.Ghost)
                     }
+                    if (pickDl) DownloadPicker(v, { pickDl = false; vm.download(v, it) }) { pickDl = false }
                 }
             }
         }
@@ -278,6 +283,31 @@ private fun FileInfo(v: Video) {
             Row {
                 Text(k, style = mono(12.sp), color = p.mute, modifier = Modifier.width(78.dp).padding(top = 1.dp))
                 Text(value, style = body(14.sp), color = p.fg, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+/** Якість завантаження: оригінал або копія меншої роздільності, яку спершу готує ПК. */
+@Composable
+private fun DownloadPicker(v: app.vidbox.data.Video, onPick: (Int) -> Unit, onClose: () -> Unit) {
+    val p = LocalPal.current
+    val mb = { kbps: Int -> app.vidbox.data.Fmt.size((kbps * 125L * v.dur).toLong()) }
+    val opts = buildList {
+        add(Triple(0, "Оригінал", listOf(v.res, v.vc.uppercase(), app.vidbox.data.Fmt.size(v.size)).filter { it.isNotEmpty() }.joinToString(" · ")))
+        if (v.resKey > 1080) add(Triple(1080, "1080p", "≈ ${mb(6128)}, ПК спершу перекодує"))
+        if (v.resKey > 720) add(Triple(720, "720p", "≈ ${mb(3128)}, ПК спершу перекодує"))
+        add(Triple(480, "480p", "≈ ${mb(1628)}, найменший файл"))
+    }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
+        app.vidbox.ui.Win("wget — ", Modifier.widthIn(max = 420.dp), bold = "якість") {
+            Column(Modifier.padding(vertical = 6.dp)) {
+                opts.forEach { (h, name, hint) ->
+                    Column(Modifier.fillMaxWidth().clickable { onPick(h) }.padding(horizontal = 16.dp, vertical = 11.dp)) {
+                        Text(name, style = body(15.sp, FontWeight.Medium), color = p.fg)
+                        Text(hint, style = body(12.sp), color = p.mute)
+                    }
+                }
             }
         }
     }

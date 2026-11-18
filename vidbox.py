@@ -987,6 +987,66 @@ def live_cmd(r, h, t, enc):
             '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-frag_duration', '2000000', 'pipe:1']
 
 
+# ── копії для завантаження на телефон: звичайний MP4 (з перемоткою) потрібної висоти ──
+DLV, DLV_LOCK = {}, threading.Lock()
+
+
+def dl_path(vid, h):
+    return os.path.join(C.data, 'dl', '%s_%d.mp4' % (vid, h))
+
+
+def dlv_status(vid, h, start=False):
+    key = (vid, h)
+    with DLV_LOCK:
+        st = DLV.get(key)
+        if st and st['state'] == 'working':
+            return dict(st)
+        if os.path.isfile(dl_path(vid, h)):
+            return {'state': 'ready', 'progress': 1.0, 'size': os.path.getsize(dl_path(vid, h))}
+        if not start:
+            return dict(st) if st else {'state': 'none', 'progress': 0.0}
+        if not C.ffmpeg:
+            return {'state': 'error', 'progress': 0.0, 'error': 'ffmpeg не знайдено'}
+        DLV[key] = {'state': 'working', 'progress': 0.0}
+    threading.Thread(target=dlv_run, args=(vid, h), daemon=True).start()
+    return {'state': 'working', 'progress': 0.0}
+
+
+def dlv_run(vid, h):
+    key, out = (vid, h), dl_path(vid, h)
+    d = os.path.dirname(out)
+    os.makedirs(d, exist_ok=True)
+    for n in os.listdir(d):   # копії старші за 2 дні телефон уже забрав
+        try:
+            if time.time() - os.path.getmtime(os.path.join(d, n)) > 2 * 86400:
+                os.remove(os.path.join(d, n))
+        except OSError:
+            pass
+    r = DB.one('SELECT * FROM videos WHERE id=?', (vid,))
+    dur = (r['duration'] or 0) if r else 0
+    part = out[:-4] + '.part.mp4'
+    enc = pick_encoder()
+    for e in ([enc, 'libx264'] if enc != 'libx264' else ['libx264']) if r else []:
+        cmd = live_cmd(r, h, 0, e)
+        cmd = cmd[:cmd.index('-f')] + ['-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', '-y', part]
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                             creationflags=NOWIN)
+        for line in p.stdout:
+            if dur and line.startswith((b'out_time_us=', b'out_time_ms=')):
+                try:
+                    DLV[key]['progress'] = min(0.99, int(line.split(b'=')[1]) / 1e6 / dur)
+                except (ValueError, KeyError):
+                    pass
+        if p.wait() == 0 and os.path.isfile(part):
+            os.replace(part, out)
+            with DLV_LOCK:
+                DLV[key] = {'state': 'ready', 'progress': 1.0}
+            print('Копія для телефона готова: %s, %dp' % (r['title'], h))
+            return
+    with DLV_LOCK:
+        DLV[key] = {'state': 'error', 'progress': 0.0, 'error': 'Не вдалося перекодувати'}
+
+
 def trim_cache(keep=None):
     d = os.path.join(C.data, 'prepared')
     files = []
@@ -1874,7 +1934,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 html = LOGIN_HTML.replace('{err}', '<p class="err">Неправильний пароль</p>')
                 return self.send_bytes(html.encode(), 'text/html; charset=utf-8', 401)
             if not self.authed():
-                if path.startswith(('/api/', '/stream/', '/thumb/', '/live/')):
+                if path.startswith(('/api/', '/stream/', '/thumb/', '/live/', '/dlfile/')):
                     return self.send_json({'error': 'auth'}, 401)
                 return self.redirect('/login')
 
@@ -1923,6 +1983,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.send_json(status_json())
                 if path == '/api/admin':
                     return self.send_json(admin_json())
+                m = re.fullmatch(r'/(api/dlprep|dlfile)/(\w+)', path)
+                if m:
+                    h = int(qs.get('h', ['720'])[0]) if qs.get('h', ['720'])[0].isdigit() else 720
+                    if h not in LIVE_KBPS or not self.video_row(m.group(2)):
+                        return self.send_json({'error': 'not found'}, 404)
+                    if m.group(1) == 'dlfile':
+                        return self.send_file(dl_path(m.group(2), h), 'video/mp4')
+                    return self.send_json(dlv_status(m.group(2), h))
                 if path == '/api/anime':
                     return self.send_json(anime_list_json())
                 m = re.fullmatch(r'/api/anime/(ep/)?(\w+)', path)
@@ -1937,6 +2005,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_web(path)
 
             if method == 'POST':
+                m = re.fullmatch(r'/api/dlprep/(\w+)', path)
+                if m:
+                    h = int(qs.get('h', ['720'])[0]) if qs.get('h', ['720'])[0].isdigit() else 720
+                    if h not in LIVE_KBPS or not self.video_row(m.group(1)):
+                        return self.send_json({'error': 'not found'}, 404)
+                    return self.send_json(dlv_status(m.group(1), h, start=True))
                 if path == '/api/admin/restart':
                     restart_later()
                     return self.send_json({'ok': True})

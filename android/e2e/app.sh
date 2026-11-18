@@ -89,7 +89,9 @@ adb shell input keyevent 4; sleep 2
 # ── завантаження на телефон ──
 open_route "i/$(id_of 'Захід сонця')"; sleep 4
 dismiss_anr; sleep 1
-tap_text "Завантажити" || { dismiss_anr; sleep 1; tap_text "Завантажити"; }; sleep 6
+tap_text "Завантажити" || { dismiss_anr; sleep 1; tap_text "Завантажити"; }; sleep 2
+shot 09f-download-quality
+tap_text "480p"; sleep 15
 dismiss_anr
 open_route downloads; sleep 3
 dismiss_anr; sleep 1

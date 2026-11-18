@@ -16,7 +16,8 @@ import java.io.File
 import java.io.FileOutputStream
 
 /** Завантажене відео: лежить у приватній папці апки (не в галереї), видаляється разом з апкою. */
-data class Dl(val v: Video, val bytes: Long, val total: Long, val done: Boolean, val error: String? = null) {
+data class Dl(val v: Video, val bytes: Long, val total: Long, val done: Boolean, val error: String? = null,
+              val note: String? = null, val h: Int = 0) {
     val progress: Float get() = if (total > 0) (bytes.toFloat() / total).coerceIn(0f, 1f) else 0f
 }
 
@@ -40,7 +41,7 @@ class Offline(ctx: Context, private val client: OkHttpClient) {
                 val v = parseVideo(o.getJSONObject("v"))
                 val f = if (o.optBoolean("done")) file(v.id) else part(v.id)
                 items[v.id] = Dl(v, f.length(), o.optLong("total"), o.optBoolean("done") && f.exists(),
-                    if (o.optBoolean("done")) null else "Перервано")
+                    if (o.optBoolean("done")) null else "Перервано", h = o.optInt("h"))
             }
         }
     }
@@ -54,17 +55,22 @@ class Offline(ctx: Context, private val client: OkHttpClient) {
 
     private fun save() = runCatching {
         val a = JSONArray()
-        items.values.forEach { a.put(JSONObject().put("v", it.v.json()).put("total", it.total).put("done", it.done)) }
+        items.values.forEach { a.put(JSONObject().put("v", it.v.json()).put("total", it.total).put("done", it.done).put("h", it.h)) }
         index.writeText(a.toString())
     }
 
-    fun start(scope: CoroutineScope, v: Video, url: String, thumbUrl: String?) {
+    /** prep — спершу дочекатися, поки ПК підготує копію потрібної якості (оновлює підпис note). */
+    fun start(scope: CoroutineScope, v: Video, url: String, thumbUrl: String?, h: Int = 0, sizeHint: Long = v.size,
+              prep: (suspend ((String) -> Unit) -> Unit)? = null) {
         if (running(v.id) || ready(v.id) != null) return
-        items[v.id] = Dl(v, part(v.id).length(), items[v.id]?.total ?: v.size, false)
+        if ((items[v.id]?.h ?: h) != h) part(v.id).delete()   // інша якість — качаємо заново
+        items[v.id] = Dl(v, part(v.id).length(), sizeHint, false, h = h)
         save()
         jobs[v.id] = scope.launch {
             val err = withContext(Dispatchers.IO) {
                 runCatching {
+                    prep?.invoke { n -> items[v.id] = items[v.id]!!.copy(note = n) }
+                    items[v.id] = items[v.id]!!.copy(note = null)
                     if (thumbUrl != null && !thumb(v.id).exists()) runCatching {
                         client.newCall(Request.Builder().url(thumbUrl).build()).execute().use { r ->
                             if (r.isSuccessful) thumb(v.id).writeBytes(r.body!!.bytes())
@@ -77,7 +83,7 @@ class Offline(ctx: Context, private val client: OkHttpClient) {
                         if (!r.isSuccessful) throw Exception("ПК відповів ${r.code}")
                         if (r.code != 206) have = 0L            // сервер почав з нуля — і ми теж
                         val body = r.body!!
-                        val total = have + body.contentLength().coerceAtLeast(0)
+                        val total = if (body.contentLength() > 0) have + body.contentLength() else sizeHint
                         FileOutputStream(p, have > 0).use { os ->
                             body.byteStream().use { inp ->
                                 val buf = ByteArray(128 * 1024)
@@ -88,11 +94,11 @@ class Offline(ctx: Context, private val client: OkHttpClient) {
                                     if (n < 0) break
                                     os.write(buf, 0, n)
                                     got += n
-                                    if (got - shown > 1_000_000) { shown = got; items[v.id] = Dl(v, got, total, false) }
+                                    if (got - shown > 1_000_000) { shown = got; items[v.id] = Dl(v, got, total, false, h = h) }
                                 }
                                 if (!isActive) throw Exception("Зупинено")
-                                if (total > 0 && got < total) throw Exception("Зв'язок обірвався")
-                                items[v.id] = Dl(v, got, total, false)
+                                if (body.contentLength() > 0 && got < total) throw Exception("Зв'язок обірвався")
+                                items[v.id] = Dl(v, got, total, false, h = h)
                             }
                         }
                     }

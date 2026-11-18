@@ -56,13 +56,14 @@ fun DownloadsScreen(vm: AppVM) {
                     Spacer(Modifier.height(3.dp))
                     Text(
                         when {
-                            d.done -> listOf(if (v.dur > 0) Fmt.len(v.dur) else "", Fmt.size(d.bytes)).filter { it.isNotEmpty() }.joinToString(" · ")
+                            d.done -> listOf(if (v.dur > 0) Fmt.len(v.dur) else "", if (d.h > 0) "${d.h}p" else "", Fmt.size(d.bytes)).filter { it.isNotEmpty() }.joinToString(" · ")
+                            running && d.note != null -> d.note
                             running -> "Завантажую ${(d.progress * 100).toInt()}% · ${Fmt.size(d.bytes)} з ${Fmt.size(d.total)}"
                             else -> (d.error ?: "Зупинено") + " · ${Fmt.size(d.bytes)} з ${Fmt.size(d.total)}"
                         },
                         style = body(12.sp), color = if (!d.done && !running) Color(0xFFFF8A7A) else p.mute, maxLines = 2,
                     )
-                    if (running) Meter(d.progress, Modifier.padding(top = 6.dp).fillMaxWidth())
+                    if (running && d.note == null) Meter(d.progress, Modifier.padding(top = 6.dp).fillMaxWidth())
                 }
                 Spacer(Modifier.width(6.dp))
                 when {

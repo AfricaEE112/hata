@@ -139,9 +139,21 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         dl.items.mapValues { it.value.v } + (lib?.videos?.associateBy { it.id } ?: emptyMap()) + animeEps
     }
 
-    fun download(v: Video) {
+    /** h > 0 — ПК спершу перекодовує в цю висоту (звичайний MP4 з перемоткою), потім телефон качає копію. */
+    fun download(v: Video, h: Int = dl.items[v.id]?.h ?: 0) {
+        val th = if (v.thumb > 0) api.thumbUrl(v) else null
         when {
             dl.ready(v.id) != null -> say("Уже на телефоні")
+            h > 0 -> dl.start(viewModelScope, v, api.dlFileUrl(v.id, h), th, h,
+                ((mapOf(1080 to 6128, 720 to 3128, 480 to 1628)[h] ?: 3128) * 125L * v.dur).toLong()) { note ->
+                var st = api.dlPrep(v.id, h, true)
+                while (st.optString("state") == "working") {
+                    note("ПК готує ${h}p: ${(st.optDouble("progress", 0.0) * 100).toInt()}%")
+                    kotlinx.coroutines.delay(2000)
+                    st = api.dlPrep(v.id, h, false)
+                }
+                if (st.optString("state") != "ready") throw Exception(st.optString("error").ifEmpty { "ПК не підготував копію" })
+            }
             !v.prep -> dl.start(viewModelScope, v, api.streamUrl(v, raw = true), if (v.thumb > 0) api.thumbUrl(v) else null)
             v.ready -> dl.start(viewModelScope, v, api.streamUrl(v, raw = false), if (v.thumb > 0) api.thumbUrl(v) else null)
             else -> viewModelScope.launch {
