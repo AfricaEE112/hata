@@ -230,9 +230,71 @@ def scan():
         gone = [(v,) for v in existing if v not in seen]
         if gone:
             DB.many('UPDATE videos SET missing=1 WHERE id=?', gone)
+        moved = relink()
+        if moved:
+            print('Перенесено історію для %d переміщених відео.' % moved)
         DB.bump()
         MEDIA_EVENT.set()
         return len(seen), len([r for r in rows if r[0] not in existing])
+
+
+RELINK_COPY = ('vote', 'position', 'position_at', 'added', 'first_seen', 'duration', 'width', 'height',
+               'vcodec', 'acodec', 'pixfmt', 'probed')
+
+
+def relink():
+    """Файли переїхали (інший диск чи папка) — id від шляху змінився.
+    Зниклий запис з тією ж назвою файлу й розміром, що й новий, вважаємо тим самим відео:
+    переносимо історію, оцінку, позицію, дату додавання, обкладинку й спрайт, старий запис видаляємо."""
+    old = DB.q('SELECT * FROM videos WHERE missing=1')
+    if not old:
+        return 0
+    new = DB.q('SELECT * FROM videos WHERE missing=0')
+    key = lambda r: (os.path.basename(r['path']).lower(), r['size'])
+    by_key = {}
+    for r in new:
+        by_key.setdefault(key(r), []).append(r)
+    olds = {}
+    for r in old:
+        olds.setdefault(key(r), []).append(r)
+    busy = {r['video_id'] for r in DB.q('SELECT DISTINCT video_id FROM sessions')}
+    pairs = []
+    for k, os_ in olds.items():
+        cand = [r for r in by_key.get(k, []) if r['id'] not in busy and not r['vote'] and not r['position']]
+        if len(os_) == 1 and len(cand) == 1:   # лише однозначні збіги
+            pairs.append((os_[0], cand[0]))
+    if not pairs:
+        return 0
+    week = DB.q('SELECT week, data FROM weekly')
+    for o, n in pairs:
+        oid, nid = o['id'], n['id']
+        vals = [o[c] if o[c] is not None else n[c] for c in RELINK_COPY]
+        for c, src in (('thumb', thumb_path), ('sprite', sprite_path)):
+            have_new = n[c] and os.path.isfile(src(nid))
+            if not have_new and o[c] and os.path.isfile(src(oid)):
+                try:
+                    os.replace(src(oid), src(nid))
+                    vals.append(1)
+                    continue
+                except OSError:
+                    pass
+            vals.append(n[c])
+        for src in (prepared_path,):
+            if os.path.isfile(src(oid)) and not os.path.isfile(src(nid)):
+                try:
+                    os.replace(src(oid), src(nid))
+                except OSError:
+                    pass
+        shutil.rmtree(os.path.join(C.data, 'frames', oid), ignore_errors=True)
+        cols = RELINK_COPY + ('thumb', 'sprite')
+        with DB.lock:
+            DB.con.execute('UPDATE videos SET %s WHERE id=?' % ', '.join(c + '=?' for c in cols), vals + [nid])
+            DB.con.execute('UPDATE sessions SET video_id=? WHERE video_id=?', (nid, oid))
+            DB.con.execute('DELETE FROM videos WHERE id=?', (oid,))
+            DB.con.commit()
+        week = [(w, d.replace('"%s"' % oid, '"%s"' % nid)) for w, d in week]
+    DB.many('UPDATE weekly SET data=? WHERE week=?', [(d, w) for w, d in week])
+    return len(pairs)
 
 
 def rescan_loop():
