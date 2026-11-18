@@ -52,10 +52,18 @@ def ip():
         return ''
 
 
-def qr(text):
+def rows():
     try:
-        return subprocess.run(['qrencode', '-t', 'ANSI', '-m', '2', text], stdout=subprocess.PIPE,
-                              timeout=10, text=True).stdout
+        return os.get_terminal_size(1).lines
+    except OSError:
+        return 25
+
+
+def qr(text, compact=False):
+    """Звичайний QR — з пробілів із кольоровим фоном (будь-який шрифт); компактний — з півблоків, удвічі нижчий."""
+    try:
+        return subprocess.run(['qrencode', '-t', 'ANSIUTF8' if compact else 'ANSI', '-m', '1' if compact else '2', text],
+                              stdout=subprocess.PIPE, timeout=10, text=True).stdout
     except (OSError, subprocess.SubprocessError):
         return ''
 
@@ -79,12 +87,13 @@ def frame():
     host = socket.gethostname()
     addr = ip()
     url = 'http://%s/' % (addr or host + '.local')
-    out = [C['acc'] + LOGO + C['r']]
+    small = rows() < 42          # малий екран: без логотипа і з компактним QR
+    out = [] if small else [C['acc'] + LOGO + C['r']]
     if not setup_done():
-        out += ['', C['b'] + '  Hata майже готова.' + C['r'],
+        out += ['' if small else '', C['b'] + '  Hata майже готова.' + C['r'],
                 '  Відскануй код телефоном або відкрий у браузері:', '',
                 '    ' + C['acc'] + url + C['r'] + ('   або  http://%s.local/' % host), '']
-        out.append(qr(url))
+        out.append(qr(url, compact=small))
         return '\n'.join(out)
     st = gazda({'do': 'status'})
     ts = gazda({'do': 'tailscale', 'op': 'status'})

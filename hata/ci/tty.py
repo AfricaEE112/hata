@@ -1,9 +1,9 @@
 """CI: текст, що зараз на екрані tty1 (те, що побачить людина на ноутбуці)."""
-import sys
+import struct
 with open('/dev/vcsa1', 'rb') as f:
+    rows, cols = f.read(2)
+with open('/dev/vcsu1', 'rb') as f:      # Юнікод: по 4 байти на символ
     data = f.read()
-rows, cols = data[0], data[1]
-chars = data[4::2]
+codes = struct.unpack('<%dI' % (len(data) // 4), data)
 for r in range(rows):
-    line = chars[r * cols:(r + 1) * cols].decode('cp437', 'replace').rstrip()
-    print(line)
+    print(''.join(chr(c) if c else ' ' for c in codes[r * cols:(r + 1) * cols]).rstrip())
