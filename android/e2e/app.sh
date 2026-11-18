@@ -12,6 +12,8 @@ shot() { alive "$1"; timeout 30 adb exec-out screencap -p > "$OUT/$1.png"; }
 id_of() { python3 -c "import json,sys; d=json.load(open('/tmp/ids.json')); print(next(v for k, v in d.items() if k.startswith(sys.argv[1])))" "$1"; }
 # підказка Android «Viewing full screen» з'являється при першому повноекранному режимі
 dismiss_hint() { has_text "Got it" && tap_text "Got it"; }
+# системний діалог емулятора «… isn't responding» перекриває екран — просто чекаємо далі
+dismiss_anr() { has_text "isn't responding" && tap_text "Wait"; return 0; }
 open_route() { adb shell am start -n $PKG/.MainActivity --es route "$1" > /dev/null; }
 dump() { timeout 25 adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1; timeout 10 adb shell cat /sdcard/ui.xml 2>/dev/null; }
 has_text() { dump | grep -q "$1"; }
@@ -86,8 +88,11 @@ shot 09d-anime-player
 adb shell input keyevent 4; sleep 2
 # ── завантаження на телефон ──
 open_route "i/$(id_of 'Захід сонця')"; sleep 4
-tap_text "Завантажити"; sleep 6
+dismiss_anr; sleep 1
+tap_text "Завантажити" || { dismiss_anr; sleep 1; tap_text "Завантажити"; }; sleep 6
+dismiss_anr
 open_route downloads; sleep 3
+dismiss_anr; sleep 1
 shot 09e-downloads
 open_route "i/$(id_of 'Захід сонця')"; sleep 4
 shot 10-info
