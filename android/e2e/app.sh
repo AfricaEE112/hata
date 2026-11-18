@@ -141,7 +141,10 @@ adb shell input keyevent 4; sleep 2
 # MKV зі звуком AC3: у емулятора немає декодера → ПК робить копію MP4
 open_route "v/$(id_of 'Концерт')"; sleep 2; dismiss_hint; sleep 3
 shot 17-player-ac3-prepare
-sleep 30
+# чекаємо, поки ПК зробить копію (а не фіксовані 30 с), потім ще трохи на старт відтворення
+AC3=$(id_of 'Концерт')
+for i in $(seq 1 45); do curl -sf "localhost:8800/api/prepare/$AC3" | grep -q '"ready"' && break; sleep 1; done
+sleep 5
 shot 18-player-ac3-playing
 adb shell input keyevent 4; sleep 2
 
