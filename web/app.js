@@ -686,6 +686,50 @@ $('#q').addEventListener('input', e => {
 });
 
 // ── Налаштування (зберігаються на ПК у config.json) ──
+const fmtUp = s => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d} д ${h} год` : h ? `${h} год ${m} хв` : `${m} хв`; };
+
+async function waitServer(msg) {
+  toast(msg);
+  await new Promise(r => setTimeout(r, 2500));
+  for (let i = 0; i < 60; i++) {
+    try { const r = await fetch('/api/hello', {cache: 'no-store'}); if (r.ok) return location.reload(); } catch (e) {}
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  toast('Сервер не відповідає. Перевір вікно VidBox на комп’ютері');
+}
+
+async function loadAdmin(row) {
+  const box = $('#srvInfo'), log = $('#srvLog');
+  if (!box) return;
+  const a = await api('/api/admin');
+  if (!a || a.error) { box.innerHTML = '<p class="note">Не вдалося отримати стан сервера.</p>'; return; }
+  const disk = d => d.ok ? `${fmtSize(d.free)} вільно з ${fmtSize(d.total)}` : 'диск недоступний — перевір, чи підключений';
+  const bat = a.battery ? `${a.battery.pct}% · ${a.battery.ac ? 'від мережі' : 'від батареї'}` : 'немає (стаціонарний ПК)';
+  const ver = a.git ? `${a.version} · коміт ${esc(a.git.commit)} від ${new Date(a.git.date).toLocaleDateString('uk-UA')}` : `${a.version} · встановлено з архіву`;
+  box.innerHTML = row('Комп’ютер', esc(a.os), `<code>${esc(a.host)}</code>`) +
+    row('Працює', 'Від останнього запуску сервера.', `<span>${fmtUp(a.uptime)}</span>`) +
+    row('Живлення', a.battery && !a.battery.ac ? 'Ноутбук не на зарядці — сервер вимкнеться, коли сяде батарея.' : '', `<span>${bat}</span>`) +
+    a.disks.map(d => row('Диск з відео', `<code>${esc(d.path)}</code>`, `<span${d.ok ? '' : ' class="warn"'}>${disk(d)}</span>`)).join('') +
+    row('Версія', '', `<span>${ver}</span>`);
+  log.textContent = a.log.join('\n') || '(порожньо)';
+  log.scrollTop = log.scrollHeight;
+  $('#srvRe').onclick = async () => {
+    if (!confirm('Перезапустити сервер VidBox?')) return;
+    await api('/api/admin/restart', {method: 'POST'});
+    waitServer('Перезапускаю сервер…');
+  };
+  $('#srvUpd').onclick = async e => {
+    e.target.disabled = true;
+    toast('Завантажую оновлення…');
+    const r = await api('/api/admin/update', {method: 'POST'});
+    e.target.disabled = false;
+    if (!r.ok) return toast('Не вдалося оновити: ' + (r.error || 'невідома помилка'));
+    if (!r.changed) return toast('Уже встановлено останню версію');
+    waitServer('Оновлено, перезапускаю сервер…');
+  };
+}
+
 async function renderSettings() {
   const st = await api('/api/settings');
   if (!S.loaded) await load();
@@ -735,7 +779,14 @@ async function renderSettings() {
     ${row('Апка для Android', 'Своя апка з плеєром: сама знаходить цей ПК у Wi-Fi, грає MKV, HEVC і AV1 без перекодування, звук у фоні й керування зі шторки.',
       `<a class="btn" href="https://github.com/AfricaEE112/vidbox/releases/latest" target="_blank" rel="noopener">${I.arrDown}Завантажити APK</a>`)}
   </div></section>
+  <section class="set win" id="srv">${winBar('~/.local/share/vidbox/сервер')}<div class="win-body"><h2>Сервер</h2>
+    <div id="srvInfo"><p class="note">Завантажую стан…</p></div>
+    ${row('Оновити VidBox', 'Бере останню версію з GitHub і перезапускає сервер. Історія й налаштування не змінюються.', '<button class="btn" id="srvUpd">Оновити</button>')}
+    ${row('Перезапустити сервер', 'Знадобиться, якщо щось зависло або після зміни порту. Відтворення на всіх пристроях перерветься на кілька секунд.', '<button class="btn ghost" id="srvRe">Перезапустити</button>')}
+    <div class="srow col"><div class="sl"><b>Журнал</b><small>Останні повідомлення сервера, як у вікні консолі на комп’ютері.</small></div><pre class="srvlog" id="srvLog"></pre></div>
+  </div></section>
   <section class="set win">${winBar('terminal — <b>vidbox --about</b>')}<div class="win-body"><h2>Про програму</h2>${fetchHTML(st)}</div></section></div>`;
+  loadAdmin(row);
 
   $$('[data-theme-pick]').forEach(b => b.onclick = () => {
     applyTheme(b.dataset.themePick);

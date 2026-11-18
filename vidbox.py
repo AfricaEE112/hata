@@ -14,6 +14,11 @@ VidBox — домашній відеосервер «як Jellyfin, але св�
 ffmpeg — необов'язковий: з ним будуть прев'юшки і конвертація MKV/AVI для телефону.
 """
 import argparse
+import collections
+import glob
+import io
+import urllib.request
+import zipfile
 import datetime
 import hashlib
 import hmac
@@ -1748,11 +1753,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.send_json(settings_json())
                 if path == '/api/status':
                     return self.send_json(status_json())
+                if path == '/api/admin':
+                    return self.send_json(admin_json())
                 if path == '/api/fs':
                     return self.send_json(list_dirs(qs.get('path', [''])[0]))
                 return self.send_web(path)
 
             if method == 'POST':
+                if path == '/api/admin/restart':
+                    restart_later()
+                    return self.send_json({'ok': True})
+                if path == '/api/admin/update':
+                    r = update_from_github()
+                    if r.get('ok') and r.get('changed'):
+                        restart_later(1.0)
+                        r['restarting'] = True
+                    return self.send_json(r)
                 if path == '/api/settings':
                     return self.send_json(apply_settings(self.json_body()))
                 if path == '/api/password':
@@ -1943,6 +1959,7 @@ def pick_folder():
 
 
 def main():
+    LOG.install()
     global DB
     for s in (sys.stdout, sys.stderr):
         try:
@@ -2005,9 +2022,15 @@ def main():
     DB = Store(os.path.join(C.data, 'vidbox.db'))
     print('Сканую папки…')
     total, new = scan()
-    try:
-        httpd = Server((args.host, C.port), Handler)
-    except OSError as e:
+    for attempt in range(40 if os.environ.get('VIDBOX_RESTART') else 1):
+        try:
+            httpd = Server((args.host, C.port), Handler)
+            break
+        except OSError as e:
+            err = e
+            time.sleep(0.25)   # після перезапуску старий процес ще може тримати порт
+    else:
+        e = err
         print('Не вдалося запустити сайт на порту %d (%s).' % (C.port, e))
         print('Можливо, VidBox уже запущений в іншому вікні. Або запусти з іншим портом: --port %d'
               % (C.port + 1))
@@ -2041,6 +2064,159 @@ def main():
         httpd.serve_forever()
     except KeyboardInterrupt:
         print('Зупинено.')
+
+
+# ───────────────────────────── віддалене керування ─────────────────────────────
+
+class LogTee:
+    """Останні рядки консолі — для сторінки «Сервер» на сайті."""
+    def __init__(self, n=400):
+        self.lines, self.buf, self.lock = collections.deque(maxlen=n), '', threading.Lock()
+        self.out = None
+
+    def install(self):
+        self.out = sys.stdout
+        sys.stdout = sys.stderr = self
+
+    def write(self, s):
+        if self.out:
+            try:
+                self.out.write(s)
+            except Exception:
+                pass
+        with self.lock:
+            self.buf += s
+            *done, self.buf = self.buf.split('\n')
+            stamp = time.strftime('%H:%M:%S')
+            self.lines.extend('%s  %s' % (stamp, l) for l in done if l.strip())
+        return len(s)
+
+    def flush(self):
+        if self.out:
+            try:
+                self.out.flush()
+            except Exception:
+                pass
+
+    def isatty(self):
+        return False
+
+    def tail(self, n=200):
+        with self.lock:
+            return list(self.lines)[-n:]
+
+
+LOG = LogTee()
+REPO_ZIP = 'https://github.com/AfricaEE112/vidbox/archive/refs/heads/main.zip'
+UPDATE_LOCK = threading.Lock()
+
+
+def battery():
+    if os.name == 'nt':
+        import ctypes
+
+        class SPS(ctypes.Structure):
+            _fields_ = [('ac', ctypes.c_ubyte), ('flag', ctypes.c_ubyte), ('pct', ctypes.c_ubyte),
+                        ('saver', ctypes.c_ubyte), ('life', ctypes.c_ulong), ('full', ctypes.c_ulong)]
+        st = SPS()
+        if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(st)) and st.pct != 255 and st.flag != 128:
+            return {'pct': st.pct, 'ac': st.ac == 1}
+        return None
+    for b in glob.glob('/sys/class/power_supply/BAT*'):
+        try:
+            pct = int(open(os.path.join(b, 'capacity')).read())
+            ac = any(open(a).read().strip() == '1' for a in glob.glob('/sys/class/power_supply/*/online'))
+            return {'pct': pct, 'ac': ac}
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def git_info():
+    d = app_dir()
+    if not os.path.isdir(os.path.join(d, '.git')) or not shutil.which('git'):
+        return None
+    try:
+        r = run(['git', '-C', d, 'log', '-1', '--format=%h %cI %s'], 10)
+        h, date, msg = r.stdout.decode('utf-8', 'replace').strip().split(' ', 2)
+        return {'commit': h, 'date': date, 'msg': msg}
+    except Exception:
+        return None
+
+
+def admin_json():
+    disks = []
+    for root in C.roots:
+        try:
+            du = shutil.disk_usage(root)
+            disks.append({'path': root, 'free': du.free, 'total': du.total, 'ok': True})
+        except OSError:
+            disks.append({'path': root, 'ok': False})
+    return {'version': VERSION, 'git': git_info(), 'battery': battery(), 'disks': disks,
+            'host': socket.gethostname(), 'os': platform.platform(terse=True),
+            'python': platform.python_version(), 'uptime': round(time.time() - STARTED),
+            'log': LOG.tail()}
+
+
+def restart_later(delay=0.6):
+    """Новий процес з тими самими аргументами; він дочекається, поки звільниться порт."""
+    def go():
+        time.sleep(delay)
+        args = [a for a in sys.argv[1:] if a != '--pick']
+        if '--no-browser' not in args:
+            args.append('--no-browser')
+        cmd = [sys.executable, os.path.abspath(sys.argv[0])] + args
+        env = dict(os.environ, VIDBOX_RESTART='1')
+        kw = {'start_new_session': True} if os.name != 'nt' else {}
+        print('Перезапуск…')
+        for p in list(LIVE.values()):
+            try:
+                p.kill()
+            except Exception:
+                pass
+        subprocess.Popen(cmd, env=env, cwd=os.getcwd(), **kw)
+        os._exit(0)
+    threading.Thread(target=go, daemon=True).start()
+
+
+def update_from_github():
+    d = app_dir()
+    if not UPDATE_LOCK.acquire(blocking=False):
+        return {'ok': False, 'error': 'Оновлення вже триває'}
+    try:
+        if git_info():
+            r = run(['git', '-C', d, 'pull', '--ff-only', '--autostash'], 120)
+            out = (r.stdout + r.stderr).decode('utf-8', 'replace').strip()
+            print(out)
+            if r.returncode:
+                return {'ok': False, 'error': 'git pull не вдався', 'out': out}
+            changed = 'Already up to date' not in out and 'Вже оновлено' not in out
+            return {'ok': True, 'changed': changed, 'out': out}
+        # встановлено з архіву: беремо свіжий zip з GitHub і замінюємо vidbox.py та web/
+        print('Завантажую оновлення з GitHub…')
+        data = urllib.request.urlopen(REPO_ZIP, timeout=60).read()
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        names = [n for n in zf.namelist() if not n.endswith('/')]
+        prefix = names[0].split('/', 1)[0] + '/'
+        files = {n[len(prefix):]: n for n in names
+                 if n[len(prefix):] == 'vidbox.py' or n[len(prefix):].startswith('web/')}
+        if 'vidbox.py' not in files:
+            return {'ok': False, 'error': 'В архіві немає vidbox.py'}
+        compile(zf.read(files['vidbox.py']), 'vidbox.py', 'exec')   # битий файл не ставимо
+        shutil.copy2(os.path.join(d, 'vidbox.py'), os.path.join(d, 'vidbox.py.bak'))
+        for rel, n in files.items():
+            dst = os.path.join(d, *rel.split('/'))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(dst + '.new', 'wb') as f:
+                f.write(zf.read(n))
+            os.replace(dst + '.new', dst)
+        print('Оновлено %d файлів (стара версія — vidbox.py.bak).' % len(files))
+        return {'ok': True, 'changed': True, 'out': 'Оновлено %d файлів' % len(files)}
+    except Exception as e:
+        print('Оновлення не вдалося:', e)
+        return {'ok': False, 'error': str(e)}
+    finally:
+        UPDATE_LOCK.release()
 
 
 # ───────────────────────────── сторінки ─────────────────────────────
