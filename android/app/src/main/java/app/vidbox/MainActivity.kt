@@ -81,10 +81,24 @@ class MainActivity : ComponentActivity() {
         if (vm.pip || !vm.prefs.bgAudio) p.pause()
     }
 
+    /** Кнопки контролера Quest, пульта чи клавіатури в плеєрі: A/пробіл — пауза, ←/→ і бампери — перемотка. */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val k = event.keyCode
+        if (vm.nav.top is Player && k in PLAYER_KEYS) {
+            if (event.action == android.view.KeyEvent.ACTION_DOWN) vm.keys.tryEmit(k)
+            return true
+        }
+        if (k == android.view.KeyEvent.KEYCODE_BUTTON_B && event.action == android.view.KeyEvent.ACTION_UP) {
+            onBackPressedDispatcher.onBackPressed()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         // на Android 12+ вікно PiP вмикається само (setAutoEnterEnabled), на старших — тут
-        if (Build.VERSION.SDK_INT < 31 && vm.nav.top is Player && PlayerHolder.peek()?.isPlaying == true) enterPip()
+        if (Build.VERSION.SDK_INT < 31 && !app.vidbox.data.Device.isQuest && vm.nav.top is Player && PlayerHolder.peek()?.isPlaying == true) enterPip()
     }
 
     fun pipParams(auto: Boolean): PictureInPictureParams {
@@ -94,7 +108,7 @@ class MainActivity : ComponentActivity() {
         val h = vs?.height?.takeIf { it > 0 } ?: 9
         val r = (w.toFloat() / h).coerceIn(0.42f, 2.38f)
         val b = PictureInPictureParams.Builder().setAspectRatio(Rational((r * 1000).toInt(), 1000))
-        if (Build.VERSION.SDK_INT >= 31) b.setAutoEnterEnabled(auto).setSeamlessResizeEnabled(true)
+        if (Build.VERSION.SDK_INT >= 31) b.setAutoEnterEnabled(auto && !app.vidbox.data.Device.isQuest).setSeamlessResizeEnabled(true)
         return b.build()
     }
 
@@ -118,3 +132,11 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 }
+
+private val PLAYER_KEYS = setOf(
+    android.view.KeyEvent.KEYCODE_BUTTON_A, android.view.KeyEvent.KEYCODE_BUTTON_X, android.view.KeyEvent.KEYCODE_SPACE,
+    android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+    android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+    android.view.KeyEvent.KEYCODE_BUTTON_L1, android.view.KeyEvent.KEYCODE_BUTTON_R1,
+    android.view.KeyEvent.KEYCODE_MEDIA_REWIND, android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+)

@@ -108,6 +108,8 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     var themeId by mutableStateOf(prefs.theme)
         private set
     var queue by mutableStateOf<Queue?>(null)
+    /** Кнопки (контролер Quest, пульт, клавіатура) для плеєра. */
+    val keys = kotlinx.coroutines.flow.MutableSharedFlow<Int>(extraBufferCapacity = 8)
     var toast by mutableStateOf<Toast?>(null)
     var foreground = true
     var pip by mutableStateOf(false)

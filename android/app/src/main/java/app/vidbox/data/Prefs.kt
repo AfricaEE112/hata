@@ -37,6 +37,13 @@ class Prefs(ctx: Context) {
         get() = p.getBoolean("auto_landscape", true)
         set(v) = p.edit().putBoolean("auto_landscape", v).apply()
     var gestures: Boolean
-        get() = p.getBoolean("gestures", true)
+        get() = p.getBoolean("gestures", !Device.isQuest)   // на Quest свайпи курсором контролера незручні
         set(v) = p.edit().putBoolean("gestures", v).apply()
+}
+
+/** Шолом Meta Quest: апка там — пласке вікно, керування курсором і кнопками контролера. */
+object Device {
+    val isQuest: Boolean = android.os.Build.MANUFACTURER.equals("Oculus", true) ||
+        android.os.Build.MANUFACTURER.equals("Meta", true) && android.os.Build.MODEL.contains("Quest", true) ||
+        android.os.Build.MODEL.contains("Quest", true)
 }

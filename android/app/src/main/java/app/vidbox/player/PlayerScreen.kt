@@ -341,6 +341,18 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
         poke()
     }
 
+    LaunchedEffect(Unit) {
+        vm.keys.collect { k ->
+            when (k) {
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_BUTTON_L1,
+                android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> { seekBy(-step); poke() }
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT, android.view.KeyEvent.KEYCODE_BUTTON_R1,
+                android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { seekBy(step); poke() }
+                else -> togglePlay()
+            }
+        }
+    }
+
     // ── підключення плеєра ──
     DisposableEffect(route.id) {
         activity.bindPlayback()

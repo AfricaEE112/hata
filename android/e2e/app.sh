@@ -101,6 +101,9 @@ dismiss_hint; sleep 0.6
 shot 14-player-controls
 sleep 7
 shot 15-player-playing
+# кнопки (контролер Quest / пульт): пауза й перемотка вперед
+adb shell input keyevent 62; sleep 1; adb shell input keyevent 22; sleep 1.5
+shot 15a-player-keys
 adb shell input keyevent 4; sleep 2
 
 # якість 480p: ПК перекодовує на льоту
