@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.vidbox.Anime
+import app.vidbox.Downloads
 import app.vidbox.AnimeShow
 import app.vidbox.AppVM
 import app.vidbox.Connect
@@ -66,6 +67,7 @@ import app.vidbox.ui.screens.PlaylistsScreen
 import app.vidbox.ui.screens.SettingsScreen
 import app.vidbox.ui.screens.TopScreen
 import app.vidbox.ui.screens.AnimeScreen
+import app.vidbox.ui.screens.DownloadsScreen
 import app.vidbox.ui.screens.AnimeShowScreen
 
 @Composable
@@ -107,6 +109,7 @@ private fun Shell(vm: AppVM, top: Route) {
                     is Playlist -> PlaylistScreen(vm, r.id)
                     is Top -> TopScreen(vm)
                     is Anime -> AnimeScreen(vm)
+                    is Downloads -> DownloadsScreen(vm)
                     is AnimeShow -> AnimeShowScreen(vm, r.sid)
                     is Settings -> SettingsScreen(vm)
                     is Info -> InfoScreen(vm, r)
@@ -134,6 +137,10 @@ private fun TopBar(vm: AppVM) {
                     modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, Color(0x66FF8A7A), RoundedCornerShape(6.dp))
                         .clickable { vm.refresh() }.padding(horizontal = 8.dp, vertical = 4.dp),
                 )
+                Spacer(Modifier.width(8.dp))
+            }
+            if (vm.dl.items.isNotEmpty()) {
+                IconBtn(Ic.arrDown, { vm.nav.go(Downloads) }, on = vm.nav.top == Downloads, size = 40.dp, desc = "Завантажені")
                 Spacer(Modifier.width(8.dp))
             }
             IconBtn(Ic.search, { vm.focusSearch = true; vm.nav.go(Lib) }, size = 40.dp, desc = "Пошук")

@@ -237,6 +237,11 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
 
     /** Що грати: оригінал чи перекодований потік — за вибором якості й можливостями телефона. */
     fun open(atMs: Long) {
+        vm.dl.ready(v.id)?.let { f ->   // завантажене на телефон — граємо з файлу, ПК не потрібен
+            source = "file"
+            load(Uri.fromFile(f).toString(), atMs)
+            return
+        }
         val src = v.resKey
         val pick = when (quality) {
             "orig" -> 0

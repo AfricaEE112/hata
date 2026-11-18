@@ -84,6 +84,11 @@ tap_text "Дивитися з першої"; sleep 3
 dismiss_hint; sleep 4
 shot 09d-anime-player
 adb shell input keyevent 4; sleep 2
+# ── завантаження на телефон ──
+open_route "i/$(id_of 'Захід сонця')"; sleep 4
+tap_text "Завантажити"; sleep 6
+open_route downloads; sleep 3
+shot 09e-downloads
 open_route "i/$(id_of 'Захід сонця')"; sleep 4
 shot 10-info
 adb shell input swipe 540 1900 540 700 350; sleep 1.5

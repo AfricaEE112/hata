@@ -18,6 +18,7 @@ import app.vidbox.data.LEN_GROUPS
 import app.vidbox.data.AnimeList
 import app.vidbox.data.AnimeTitle
 import app.vidbox.data.Library
+import app.vidbox.data.Offline
 import app.vidbox.data.Update
 import app.vidbox.data.Updater
 import app.vidbox.data.Queue
@@ -48,6 +49,7 @@ data class Playlist(val id: String) : Route { override val key = "pl/$id" }
 data class Info(val id: String, val random: Boolean = false) : Route { override val key = "i/$id" }
 data class Player(val id: String, val startAt: Double? = null) : Route { override val key = "v/$id" }
 data object Anime : Route { override val key = "anime" }
+data object Downloads : Route { override val key = "downloads" }
 data class AnimeShow(val sid: String) : Route { override val key = "anime/$sid" }
 
 val TABS = listOf(Home, Lib, Anime, Playlists, Top, Settings)
@@ -94,6 +96,8 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     val api = vb.api
     val prefs = vb.prefs
     val nav = Nav()
+    /** Завантажене на телефон: грається без ПК. */
+    val dl = Offline(app, api.client)
 
     var lib by mutableStateOf<Library?>(null)
         private set
@@ -131,7 +135,21 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     val animeEps = mutableStateMapOf<String, Video>()
     var animeList by mutableStateOf<AnimeList?>(null)
     val animeShows = mutableStateMapOf<String, AnimeTitle>()
-    val byId: Map<String, Video> by derivedStateOf { (lib?.videos?.associateBy { it.id } ?: emptyMap()) + animeEps }
+    val byId: Map<String, Video> by derivedStateOf {
+        dl.items.mapValues { it.value.v } + (lib?.videos?.associateBy { it.id } ?: emptyMap()) + animeEps
+    }
+
+    fun download(v: Video) {
+        when {
+            dl.ready(v.id) != null -> say("Уже на телефоні")
+            !v.prep -> dl.start(viewModelScope, v, api.streamUrl(v, raw = true), if (v.thumb > 0) api.thumbUrl(v) else null)
+            v.ready -> dl.start(viewModelScope, v, api.streamUrl(v, raw = false), if (v.thumb > 0) api.thumbUrl(v) else null)
+            else -> viewModelScope.launch {
+                runCatching { api.prepare(v.id, false) }
+                say("Телефон не грає цей формат — ПК робить MP4-копію. Натисни «Завантажити» ще раз, коли вона буде готова")
+            }
+        }
+    }
     val videos: List<Video> get() = lib?.videos ?: emptyList()
     val connected get() = prefs.server.isNotEmpty()
     val host: String get() = prefs.host.ifEmpty { "pc" }
@@ -414,7 +432,10 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 
     /** Після перегляду оновлюємо місце зупинки локально, не чекаючи сервера. */
-    fun localPos(id: String, pos: Double) = update(id) { it.copy(pos = pos, posAt = System.currentTimeMillis() / 1000.0) }
+    fun localPos(id: String, pos: Double) {
+        dl.setPos(id, pos)
+        update(id) { it.copy(pos = pos, posAt = System.currentTimeMillis() / 1000.0) }
+    }
 
     // ── підписи ──
     fun libCmd(): String {

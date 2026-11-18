@@ -128,6 +128,12 @@ fun InfoScreen(vm: AppVM, r: Info) {
                     IconBtn(Ic.up, { vm.vote(v, 1) }, on = v.vote > 0, desc = "Подобається")
                     IconBtn(Ic.down, { vm.vote(v, -1) }, on = v.vote < 0, desc = "Не подобається")
                     if (r.random) Btn("Інше випадкове", { vm.openRandom(replace = true) }, icon = Ic.dice, kind = Kind.Ghost)
+                    val d = vm.dl.items[v.id]
+                    when {
+                        d?.done == true -> Btn("На телефоні", { vm.nav.go(app.vidbox.Downloads) }, icon = Ic.check, kind = Kind.Ghost)
+                        d != null && vm.dl.running(v.id) -> Btn("${(d.progress * 100).toInt()}% · Стоп", { vm.dl.stop(v.id) }, icon = Ic.close, kind = Kind.Ghost)
+                        else -> Btn(if (d != null) "Докачати" else "Завантажити", { vm.download(v) }, icon = Ic.arrDown, kind = Kind.Ghost)
+                    }
                 }
             }
         }

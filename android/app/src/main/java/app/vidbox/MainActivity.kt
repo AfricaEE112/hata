@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
                 vm.nav.go(Playlist(parts[1]))
             } else vm.nav.go(Playlists)
             "top" -> vm.nav.go(Top)
+            "downloads" -> vm.nav.go(Downloads)
             "anime" -> if (parts.size > 1) {
                 vm.nav.go(Anime)
                 vm.nav.go(AnimeShow(parts[1]))
