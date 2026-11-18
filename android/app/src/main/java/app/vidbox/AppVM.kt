@@ -15,6 +15,8 @@ import androidx.lifecycle.viewModelScope
 import app.vidbox.data.AuthException
 import app.vidbox.data.Fmt
 import app.vidbox.data.LEN_GROUPS
+import app.vidbox.data.AnimeList
+import app.vidbox.data.AnimeTitle
 import app.vidbox.data.Library
 import app.vidbox.data.Queue
 import app.vidbox.data.Ui
@@ -43,8 +45,10 @@ data object Connect : Route { override val key = "connect" }
 data class Playlist(val id: String) : Route { override val key = "pl/$id" }
 data class Info(val id: String, val random: Boolean = false) : Route { override val key = "i/$id" }
 data class Player(val id: String, val startAt: Double? = null) : Route { override val key = "v/$id" }
+data object Anime : Route { override val key = "anime" }
+data class AnimeShow(val sid: String) : Route { override val key = "anime/$sid" }
 
-val TABS = listOf(Home, Lib, Playlists, Top, Settings)
+val TABS = listOf(Home, Lib, Anime, Playlists, Top, Settings)
 
 class Nav {
     val stack = mutableStateListOf<Route>(Home)
@@ -119,7 +123,11 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     private var themeSetAt = 0L
     private var poller: Job? = null
 
-    val byId: Map<String, Video> by derivedStateOf { lib?.videos?.associateBy { it.id } ?: emptyMap() }
+    /** Серії аніме: окремо від бібліотеки, але плеєр шукає відео в byId. */
+    val animeEps = mutableStateMapOf<String, Video>()
+    var animeList by mutableStateOf<AnimeList?>(null)
+    val animeShows = mutableStateMapOf<String, AnimeTitle>()
+    val byId: Map<String, Video> by derivedStateOf { (lib?.videos?.associateBy { it.id } ?: emptyMap()) + animeEps }
     val videos: List<Video> get() = lib?.videos ?: emptyList()
     val connected get() = prefs.server.isNotEmpty()
     val host: String get() = prefs.host.ifEmpty { "pc" }
@@ -336,6 +344,22 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 
     fun queueFor(v: Video) = queue?.takeIf { v.id in it.ids }
+
+    fun loadAnime() = viewModelScope.launch {
+        runCatching { api.anime() }.onSuccess { animeList = it }.onFailure { if (it is AuthException) nav.go(Connect) }
+    }
+
+    fun loadAnimeShow(sid: String) = viewModelScope.launch {
+        runCatching { api.animeTitle(sid) }.onSuccess { t ->
+            t.eps.forEach { animeEps[it.v.id] = it.v }
+            animeShows[sid] = t
+        }
+    }
+
+    fun playAnime(t: AnimeTitle, id: String) {
+        queue = Queue("anime", t.title, t.eps.map { it.v.id }, false, anime = t.sid)
+        nav.go(Player(id))
+    }
 
     fun nextOf(v: Video): Video? {
         queueFor(v)?.let { q ->

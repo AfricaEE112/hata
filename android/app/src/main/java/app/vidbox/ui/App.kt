@@ -63,6 +63,8 @@ import app.vidbox.ui.screens.PlaylistScreen
 import app.vidbox.ui.screens.PlaylistsScreen
 import app.vidbox.ui.screens.SettingsScreen
 import app.vidbox.ui.screens.TopScreen
+import app.vidbox.ui.screens.AnimeScreen
+import app.vidbox.ui.screens.AnimeShowScreen
 
 @Composable
 fun App(vm: AppVM, activity: MainActivity) {
@@ -102,6 +104,8 @@ private fun Shell(vm: AppVM, top: Route) {
                     is Playlists -> PlaylistsScreen(vm)
                     is Playlist -> PlaylistScreen(vm, r.id)
                     is Top -> TopScreen(vm)
+                    is Anime -> AnimeScreen(vm)
+                    is AnimeShow -> AnimeShowScreen(vm, r.sid)
                     is Settings -> SettingsScreen(vm)
                     is Info -> InfoScreen(vm, r)
                     else -> {}
@@ -160,8 +164,8 @@ private fun Dock(vm: AppVM) {
             ) {
                 Icon(Ic.dice, "Випадкове відео", tint = p.on, modifier = Modifier.size(27.dp))
             }
+            DockItem("Аніме", Ic.anime, tab == Anime) { vm.nav.go(Anime) }
             DockItem("Плейлисти", Ic.list, tab == Playlists) { vm.nav.go(Playlists) }
-            DockItem("Рейтинг", Ic.bars, tab == Top) { vm.nav.go(Top) }
         }
     }
 }

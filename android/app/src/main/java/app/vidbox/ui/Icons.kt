@@ -69,6 +69,7 @@ object Ic {
     val speed = make("speed", listOf("M4.5 17a8 8 0 1 1 15 0", "M12 13.5l3.5-4.5"))
     val fit = make("fit", listOf("M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"))
     val rotate = make("rotate", listOf("M4.5 12a7.5 7.5 0 0 1 13-5.1M19.5 12a7.5 7.5 0 0 1-13 5.1M17.5 3.5v3.5H14M6.5 20.5V17H10"))
+    val anime = make("anime", listOf(rect(5f, 3f, 14f, 18f, 2f), "M5 16l4-4 3 3 2-2 5 5", circle(14.5f, 8f, 1.6f)))
     val check = make("check", listOf("M5 12.5l4.5 4.5L19 7"))
     val external = make("external", listOf("M14 5h5v5M19 5l-8 8M18 14v4a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 5 18V8a1.5 1.5 0 0 1 1.5-1.5h4"))
     val wifi = make("wifi", listOf("M3 9.5a13 13 0 0 1 18 0M6 13a8.5 8.5 0 0 1 12 0M9 16.5a4 4 0 0 1 6 0", circle(12f, 19.5f, .6f)))

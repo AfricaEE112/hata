@@ -129,6 +129,8 @@ fun LibraryScreen(vm: AppVM) {
                 Text("Бібліотека", style = display(38.sp), color = p.fg)
                 Spacer(Modifier.width(12.dp))
                 Text(Fmt.videos(list.size), style = mono(13.sp), color = p.mute, modifier = Modifier.padding(bottom = 6.dp))
+                Spacer(Modifier.weight(1f))
+                app.vidbox.ui.Btn("Рейтинг", { vm.nav.go(app.vidbox.Top) }, icon = app.vidbox.ui.Ic.bars, kind = app.vidbox.ui.Kind.Ghost)
             }
         }
         full("search") { SearchField(vm) }

@@ -460,7 +460,7 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
             if (countdown == 0) goNext()
         } else if (q != null && next == null) {
             vm.queue = null
-            vm.say("Плейлист «${q.name}» завершено")
+            vm.say(if (q.anime != null) "Остання серія «${q.name}»" else "Плейлист «${q.name}» завершено")
         }
     }
 
@@ -575,7 +575,7 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
             AnimatedVisibility(controls || ended || failed != null || prep != null, enter = fadeIn(), exit = fadeOut()) {
                 Controls(
                     vm = vm, v = v, n = n, playing = playing, pos = pos, dur = dur, buffered = buffered, speed = speed,
-                    queueText = q?.let { "Плейлист «${it.name}», ${it.ids.indexOf(v.id) + 1} з ${it.ids.size}" },
+                    queueText = q?.let { (if (it.anime != null) "Аніме «" else "Плейлист «") + "${it.name}», ${it.ids.indexOf(v.id) + 1} з ${it.ids.size}" },
                     hasNext = next != null, landscape = landscape, center = failed == null && prep == null,
                     onBack = { vm.nav.back() },
                     onPlay = { togglePlay() },

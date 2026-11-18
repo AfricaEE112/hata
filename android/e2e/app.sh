@@ -74,6 +74,16 @@ open_route pl/short; sleep 3
 shot 08-playlist
 open_route top; sleep 3
 shot 09-top
+# ── аніме ──
+open_route anime; sleep 4
+shot 09b-anime
+SID=$(python3 -c "import json;print([t['sid'] for t in json.load(open('/tmp/anime.json'))['titles'] if 'Frieren' in t['title']][0])")
+open_route "anime/$SID"; sleep 4
+shot 09c-anime-title
+tap_text "Дивитися з першої"; sleep 3
+dismiss_hint; sleep 4
+shot 09d-anime-player
+adb shell input keyevent 4; sleep 2
 open_route "i/$(id_of 'Захід сонця')"; sleep 4
 shot 10-info
 adb shell input swipe 540 1900 540 700 350; sleep 1.5

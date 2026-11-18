@@ -13,11 +13,21 @@ gen -f lavfi -i "rgbtestsrc=s=640x360:r=25" -f lavfi -i "sine=f=770:r=44100" -t 
 gen -f lavfi -i "testsrc2=s=640x360:r=2" -f lavfi -i "sine=f=220:r=22050" -t 1500 -c:v libx264 -preset ultrafast -g 20 -c:a aac -b:a 32k -shortest "$V/Серіали/Серія 01.mp4"
 gen -f lavfi -i "smptebars=s=640x360:r=2" -f lavfi -i "sine=f=250:r=22050" -t 1620 -c:v libx264 -preset ultrafast -g 20 -c:a aac -b:a 32k -shortest "$V/Серіали/Серія 02.mp4"
 gen -f lavfi -i "smptehdbars=s=640x360:r=1" -f lavfi -i "sine=f=200:r=22050" -t 3900 -c:v libx264 -preset ultrafast -g 10 -c:a aac -b:a 32k -shortest "$V/Фільми/Фільм на вечір.mp4"
-ls -laR "$V"
+# аніме: окрема папка, тайтл = підпапка
+A="$HOME/anime/[SubsPlease] Sousou no Frieren (1080p)"
+mkdir -p "$A" "$HOME/anime/Cowboy Bebop"
+for n in 01 02 10; do
+  gen -f lavfi -i "testsrc2=s=1280x720:r=24" -f lavfi -i "sine=f=500:r=44100" -t 10 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest "$A/[SubsPlease] Sousou no Frieren - $n (1080p).mkv"
+done
+gen -f lavfi -i "smptebars=s=1280x720:r=24" -f lavfi -i "sine=f=300:r=44100" -t 10 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest "$HOME/anime/Cowboy Bebop/Cowboy Bebop - 01 - Asteroid Blues.mp4"
+ls -laR "$V" "$HOME/anime"
 
 nohup python3 vidbox.py "$V" --data "$HOME/vbdata" --no-browser > /tmp/vidbox-server.log 2>&1 &
 for i in $(seq 1 60); do curl -sf localhost:8800/api/hello && break; sleep 1; done
 echo
+curl -sf -XPOST localhost:8800/api/settings -d "{\"anime_folder\": \"$HOME/anime\"}"; echo
+sleep 3
+curl -sf localhost:8800/api/anime > /tmp/anime.json; cat /tmp/anime.json; echo
 
 # чекаємо, поки сервер прочитає файли й наріже кадри
 python3 - <<'EOF'

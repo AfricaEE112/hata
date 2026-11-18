@@ -83,7 +83,33 @@ data class WeekSection(val key: String, val title: String, val sub: String, val 
 data class Week(val week: String, val start: String, val end: String, val hero: String?, val sections: List<WeekSection>)
 data class Hello(val app: String, val version: String, val host: String, val port: Int, val auth: Boolean)
 data class Prep(val state: String, val progress: Double, val error: String, val enc: String)
-data class Queue(val pl: String, val name: String, val ids: List<String>, val shuffle: Boolean)
+data class Queue(val pl: String, val name: String, val ids: List<String>, val shuffle: Boolean, val anime: String? = null)
+
+/** Аніме: тайтл (підпапка) і серії. Серії — звичайні Video, плеєр грає їх так само. */
+data class AnimeCont(val id: String, val ep: Int, val pos: Double, val dur: Double)
+data class AnimeTitle(val sid: String, val title: String, val n: Int, val watched: Int, val cover: String,
+                      val lastAt: Double, val cont: AnimeCont?, val eps: List<AnimeEp> = emptyList())
+data class AnimeEp(val v: Video, val ep: Int, val name: String, val done: Boolean)
+data class AnimeList(val folder: String, val titles: List<AnimeTitle>)
+
+fun parseAnimeTitle(o: JSONObject): AnimeTitle {
+    val c = o.optJSONObject("cont")
+    val eps = o.optJSONArray("eps")
+    return AnimeTitle(
+        sid = o.optString("sid"), title = o.optString("title"), n = o.optInt("n"), watched = o.optInt("watched"),
+        cover = o.optString("cover"), lastAt = o.optDouble("lastAt", 0.0),
+        cont = c?.let { AnimeCont(it.optString("id"), it.optInt("ep"), it.optDouble("pos", 0.0), it.optDouble("dur", 0.0)) },
+        eps = if (eps == null) emptyList() else (0 until eps.length()).map {
+            val e = eps.getJSONObject(it)
+            AnimeEp(parseVideo(e), e.optInt("ep"), e.optString("etitle"), e.optBoolean("done"))
+        },
+    )
+}
+
+fun parseAnimeList(o: JSONObject): AnimeList {
+    val a = o.optJSONArray("titles") ?: JSONArray()
+    return AnimeList(o.optString("folder"), (0 until a.length()).map { parseAnimeTitle(a.getJSONObject(it)) })
+}
 
 class AuthException : Exception("auth")
 
