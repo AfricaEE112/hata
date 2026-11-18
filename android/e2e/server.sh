@@ -3,7 +3,8 @@
 set -euo pipefail
 V="$HOME/vids"
 mkdir -p "$V/Кліпи" "$V/Серіали" "$V/Фільми"
-gen() { ffmpeg -nostdin -v error -y "$@"; }
+# файл уже є (з кешу CI) — не генеруємо заново
+gen() { local out="${@: -1}"; [ -s "$out" ] && return 0; ffmpeg -nostdin -v error -y "$@"; }
 
 gen -f lavfi -i "testsrc2=s=1280x720:r=30" -f lavfi -i "sine=f=440:r=44100" -t 15 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest "$V/Кліпи/Захід сонця.mp4"
 gen -f lavfi -i "smptehdbars=s=1280x720:r=30" -f lavfi -i "sine=f=330:r=44100" -t 12 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest "$V/Кліпи/Кліп 1.mp4"

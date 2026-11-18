@@ -33,9 +33,15 @@ for m in re.finditer(r'<node [^>]*>', xml):
 " "$1")
   [ -n "$xy" ] && adb shell input tap $xy
 }
+# чекаємо, поки на екрані з'явиться текст (замість фіксованих пауз): швидше й надійніше
+wait_text() { local i; for i in $(seq 1 "${2:-20}"); do has_text "$1" && return 0; sleep 0.4; done; echo "no '$1' on screen" >> "$OUT/NOTES.txt"; return 0; }
+
 # лише падіння самої VidBox (системні апки емулятора теж іноді падають)
 crashed() { timeout 60 adb logcat -d | grep -A 30 "FATAL EXCEPTION" | grep -A 28 "Process: app.vidbox" | head -60; }
 
+# емулятор має повністю завантажитись, інакше системні діалоги «isn't responding» з'їдають натискання
+for i in $(seq 1 90); do [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break; sleep 1; done
+sleep 3
 adb install -r VidBox-*.apk || { echo "install failed" > "$OUT/FAIL"; exit 0; }
 adb shell settings put system screen_off_timeout 1800000
 adb shell svc power stayon true
@@ -64,43 +70,43 @@ shot 03-home-2
 adb shell input swipe 540 1900 540 500 350; sleep 1.5
 shot 04-home-3
 
-open_route lib; sleep 3
+open_route lib; wait_text "Тривалість"
 shot 05-library
 tap_text "Тривалість"; sleep 2
 shot 06-library-duration
 tap_text "Усі"; sleep 1
 
-open_route pl; sleep 3
+open_route pl; sleep 2
 shot 07-playlists
-open_route pl/short; sleep 3
+open_route pl/short; sleep 2
 shot 08-playlist
-open_route top; sleep 3
+open_route top; wait_text "sort -k score"
 shot 09-top
 # ── аніме ──
-open_route anime; sleep 4
+open_route anime; wait_text "Cowboy Bebop"
 shot 09b-anime
 SID=$(python3 -c "import json;print([t['sid'] for t in json.load(open('/tmp/anime.json'))['titles'] if 'Frieren' in t['title']][0])")
-open_route "anime/$SID"; sleep 4
+open_route "anime/$SID"; wait_text "Серія 10"
 shot 09c-anime-title
 tap_text "Дивитися з першої"; sleep 3
 dismiss_hint; sleep 4
 shot 09d-anime-player
 adb shell input keyevent 4; sleep 2
 # ── завантаження на телефон ──
-open_route "i/$(id_of 'Захід сонця')"; sleep 4
+open_route "i/$(id_of 'Захід сонця')"; wait_text "Дивитися"; sleep 0.5
 dismiss_anr; sleep 1
 tap_text "Завантажити" || { dismiss_anr; sleep 1; tap_text "Завантажити"; }; sleep 2
 shot 09f-download-quality
 tap_text "480p"; sleep 15
 dismiss_anr
-open_route downloads; sleep 3
+open_route downloads; wait_text "du -sh"
 dismiss_anr; sleep 1
 shot 09e-downloads
-open_route "i/$(id_of 'Захід сонця')"; sleep 4
+open_route "i/$(id_of 'Захід сонця')"; wait_text "Дивитися"; sleep 0.5
 shot 10-info
 adb shell input swipe 540 1900 540 700 350; sleep 1.5
 shot 11-info-2
-open_route settings; sleep 4
+open_route settings; sleep 3
 shot 12-settings
 adb shell input swipe 540 1900 540 600 350; sleep 1.5
 shot 13-settings-2
@@ -145,7 +151,7 @@ shot 19-player-avi
 adb shell input keyevent 4; sleep 2
 
 # плейлист: відтворення підряд
-open_route pl/short; sleep 3
+open_route pl/short; sleep 2
 tap_text "Відтворити все"; sleep 2; dismiss_hint; sleep 1
 shot 20-player-queue
 adb shell input keyevent 4; sleep 2

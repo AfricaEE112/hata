@@ -91,21 +91,55 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
 
+      # тестові відео однакові від запуску до запуску — беремо з кешу, генеруємо лише нові
+      - name: Test videos cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/vids
+            ~/anime
+          key: e2e-videos-${{ hashFiles('android/e2e/server.sh') }}
+
       - name: Start VidBox server with test videos
         run: bash android/e2e/server.sh
 
-      - name: Run app on emulator
+      # знімок уже ввімкненого емулятора: тест стартує за секунди, а не чекає повного завантаження Android
+      - name: Emulator snapshot cache
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-33-swangle-pixel6-v1
+
+      - name: Create emulator snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 33
           target: google_apis
           arch: x86_64
           profile: pixel_6
+          force-avd-creation: false
+          disable-animations: false
+          emulator-options: -no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
+          script: echo "Знімок емулятора збережено"
+
+      # Android 13 + swangle стабільний на GitHub; Android 14 зі swiftshader регулярно падав посеред тесту
+      - name: Run app on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          force-avd-creation: false
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swangle_indirect -no-snapshot-save -noaudio -no-boot-anim -camera-back none -no-metrics
           script: bash android/e2e/app.sh
 
-      # емулятор на GitHub іноді падає сам (gfxstream); тоді пробуємо ще раз з іншим рендерером і API 33
+      # емулятор на GitHub іноді падає сам; тоді ще одна спроба з чистого запуску
       - name: Retry if the emulator crashed
         id: retry
         shell: bash
@@ -123,7 +157,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          emulator-options: -no-window -gpu swangle_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -no-metrics
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -no-metrics
           script: bash android/e2e/app.sh
 
       - name: Publish screenshots and logs
