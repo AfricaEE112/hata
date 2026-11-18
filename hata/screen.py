@@ -116,14 +116,21 @@ def frame():
 
 def main():
     signal.signal(signal.SIGHUP, signal.SIG_IGN)   # tty1 перехоплюємо в getty — не падати від «відбою» термінала
-    sys.stdout.write('\033[9;1]')     # гасити екран через хвилину без натискань
+    print('hata-screen: старт, stdout=%s' % os.ttyname(1) if os.isatty(1) else 'hata-screen: stdout не термінал',
+          file=sys.stderr, flush=True)
+    first = True
     while True:
         try:
             text = frame()
         except Exception as e:   # екран не має падати через одну помилку
+            print('hata-screen: помилка кадру:', repr(e), file=sys.stderr, flush=True)
             text = 'Hata: %s' % e
-        sys.stdout.write('\033[2J\033[H\033[?25l' + text + '\n')
-        sys.stdout.flush()
+        try:
+            sys.stdout.write(('\033[9;1]' if first else '') + '\033[2J\033[H\033[?25l' + text + '\n')   # 9;1 — гасити екран через хвилину
+            sys.stdout.flush()
+            first = False
+        except OSError as e:
+            print('hata-screen: не вдалося писати на екран:', repr(e), file=sys.stderr, flush=True)
         time.sleep(10)
 
 

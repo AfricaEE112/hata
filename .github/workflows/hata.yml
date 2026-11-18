@@ -66,6 +66,7 @@ jobs:
           systemctl is-active vidbox || true
           grep hata /etc/fstab || true
           sudo gazda update || true
+          sudo journalctl -u hata-screen --no-pager -n 20 || true
           sudo journalctl -u gazda -u hata -u vidbox -u hata-screen --no-pager -n 200 > hata-out/journal.txt || true
           sudo cat /var/lib/hata/vidbox/config.json | python3 -c "import json,sys; c=json.load(sys.stdin); print({k: c[k] for k in ('folders','anime_folder')})" > hata-out/vidbox-config.txt || true
 
