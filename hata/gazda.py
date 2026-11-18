@@ -436,6 +436,9 @@ def cli(argv):
         return 0
     try:
         r = ask(simple[cmd])
+    except PermissionError:
+        print('gazda керує системою, тож потрібні права: sudo gazda %s' % ' '.join(argv))
+        return 1
     except (OSError, ValueError) as e:
         print('gazda не відповідає (%s). Перевір: systemctl status gazda' % e)
         return 1

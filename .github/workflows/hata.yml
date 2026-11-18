@@ -6,6 +6,9 @@ on:
     paths: ['hata/**', 'vidbox.py', 'web/**', '.github/workflows/hata.yml']
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: hata-${{ github.ref }}
   cancel-in-progress: true
@@ -18,14 +21,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # пакети apt з кешу: дзеркало Ubuntu на GitHub іноді віддає їх 15+ хвилин
+      - name: apt packages cache
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-cache
+          key: hata-apt-${{ hashFiles('hata/install.sh') }}
+          restore-keys: hata-apt-
+
       - name: Install Hata
-        run: sudo HATA_HOSTNAME=keep bash hata/install.sh
+        run: |
+          [ -d ~/apt-cache ] && sudo cp ~/apt-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+          sudo HATA_HOSTNAME=keep bash hata/install.sh
+          mkdir -p ~/apt-cache && cp /var/cache/apt/archives/*.deb ~/apt-cache/ 2>/dev/null || true
 
       - name: Services are running
         run: |
           systemctl is-active gazda hata
           systemctl status hata-screen --no-pager || true
-          gazda status
+          gazda status || true           # без sudo — має чемно попросити права
+          sudo gazda status
 
       # тестовий «зовнішній диск» з міткою media
       - name: Test disk
@@ -50,7 +65,7 @@ jobs:
           mkdir -p hata-out
           systemctl is-active vidbox || true
           grep hata /etc/fstab || true
-          gazda update || true
+          sudo gazda update || true
           sudo journalctl -u gazda -u hata -u vidbox -u hata-screen --no-pager -n 200 > hata-out/journal.txt || true
           sudo cat /var/lib/hata/vidbox/config.json | python3 -c "import json,sys; c=json.load(sys.stdin); print({k: c[k] for k in ('folders','anime_folder')})" > hata-out/vidbox-config.txt || true
 

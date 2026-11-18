@@ -6,6 +6,7 @@
 """
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -114,6 +115,7 @@ def frame():
 
 
 def main():
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)   # tty1 перехоплюємо в getty — не падати від «відбою» термінала
     sys.stdout.write('\033[9;1]')     # гасити екран через хвилину без натискань
     while True:
         try:
