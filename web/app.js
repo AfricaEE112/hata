@@ -11,6 +11,7 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem('vb_' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('vb_' + k, JSON.stringify(v)); } catch (e) {} }
 };
+const isLite = () => document.documentElement.classList.contains('lite');   // «Оптимізована версія» для слабких ПК
 const view = {folder: LS.get('folder', ''), q: ''};   // сортування й вигляд бібліотеки зберігаються на ПК (S.cfg.ui)
 
 // ── іконки ──
@@ -206,7 +207,7 @@ applyTheme(document.documentElement.dataset.theme || 'arch');
 // ── обкладинки й картки ──
 function hue(id) { return parseInt(id.slice(0, 4), 16) % 360; }
 function cover(v) {
-  if (v.thumb) return `<img loading="lazy" decoding="async" src="/thumb/${v.id}?v=${v.thumb}" alt="">`;
+  if (v.thumb) return `<img loading="${isLite() ? 'eager' : 'lazy'}" decoding="async" src="/thumb/${v.id}?v=${v.thumb}" alt="">`;
   if (hasSprite(v)) return `<div class="fill" style="${frameBg(v, 3)}"></div>`;
   return `<div class="ph" data-ph="${v.id}" style="--h:${hue(v.id)}"><span>${esc((v.title.trim()[0] || '?').toUpperCase())}</span></div>`;
 }
@@ -252,7 +253,7 @@ function scrubClear() {
   scrubEl = null;
 }
 document.addEventListener('mousemove', e => {
-  if (!FINE.matches) return;
+  if (!FINE.matches || isLite()) return;
   const th = e.target.closest ? e.target.closest('[data-scrub]') : null;
   if (th !== scrubEl) scrubClear();
   if (!th) return;
@@ -468,7 +469,7 @@ function mountSpot(list) {
     restart();
   }
   function restart() {
-    if (RM.matches) return;
+    if (RM.matches || isLite()) return;
     bar.classList.remove('run');
     void bar.offsetWidth;
     bar.classList.add('run');
@@ -748,6 +749,7 @@ async function renderSettings() {
     <p class="note" style="margin-top:0">Кольори всього сайту. Зберігається на ПК, тож тема однакова на всіх пристроях.</p>
     <div class="themes">${THEMES.map(t => `<button class="theme${st.theme === t.id ? ' on' : ''}" data-theme-pick="${t.id}" aria-pressed="${st.theme === t.id}" ` +
       `style="--t-bg:${t.bg};--t-p:${t.p};--t-a:${t.a};--t-a2:${t.a2}"><span class="tp"><i></i><i></i><i></i></span><b>${t.name}</b><small>${t.hint}</small></button>`).join('')}</div>
+    ${row('Оптимізована версія', 'Для слабких чи старих комп’ютерів: без розмиття, світіння й анімацій, без кадрів при наведенні на картку, обкладинки вантажаться заздалегідь. Діє лише на цьому пристрої.', `<label class="sw"><input type="checkbox" id="litesw"${isLite() ? ' checked' : ''}><i></i></label>`)}
   </div></section>
   <section class="set win">${winBar('~/.config/vidbox/папки')}<div class="win-body"><h2>Папки з відео</h2>
     <div class="flist">${st.folders.map((f, i) => `<div class="frow">${I.folder}<div><b>${esc(f.path)}</b><small>${f.exists ? f.count + ' відео' : 'Папку не знайдено. Можливо, диск від’єднано.'}</small></div>` +
@@ -793,6 +795,11 @@ async function renderSettings() {
   </div></section>
   <section class="set win">${winBar('terminal — <b>vidbox --about</b>')}<div class="win-body"><h2>Про програму</h2>${fetchHTML(st)}</div></section></div>`;
   loadAdmin(row);
+  $('#litesw').onchange = e => {
+    document.documentElement.classList.toggle('lite', e.target.checked);
+    LS.set('lite', e.target.checked);
+    toast(e.target.checked ? 'Оптимізовану версію увімкнено на цьому пристрої' : 'Повну версію увімкнено');
+  };
   const setAnime = async a => { const r = await save({anime_folder: a}, a ? 'Папку аніме збережено, сканую…' : 'Розділ аніме вимкнено');
     if (r.ok) setTimeout(() => { if (baseHash === '/settings') renderBase('/settings', true); }, 1500); };
   $('#animeset').onclick = () => setAnime($('#animef').value.trim());
