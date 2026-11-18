@@ -671,3 +671,11 @@ code{font:13px var(--mono);color:var(--fg);background:rgba(255,255,255,.07);padd
 .lite .card,.lite .acard,.lite .plcard,.lite .win,.lite .btn,.lite .poster,.lite .th{box-shadow:none!important}
 .lite .card,.lite .acard{content-visibility:auto;contain-intrinsic-size:auto 260px}
 .lite .scrub{display:none!important}
+
+.aalt{margin:2px 0 8px;color:var(--mute);font-size:14px}
+.ameta{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.ameta .tag{font:12px/1 var(--mono);padding:5px 8px;border-radius:6px;border:1px solid var(--line);color:var(--fg)}
+.ameta .tag.ghost{color:var(--mute)}
+.adesc{max-width:900px;margin:0 0 22px;color:var(--mute);font-size:14.5px;line-height:1.6}
+.adesc summary{cursor:pointer;color:var(--fg);font:600 14px/1.4 var(--sans);margin-bottom:8px}
+.adesc a{color:var(--acc2);font-size:13.5px}

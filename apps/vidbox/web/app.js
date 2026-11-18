@@ -969,7 +969,7 @@ const animeCard = t => {
   return `<a class="acard" href="#/anime/${t.sid}"><div class="poster"><img loading="lazy" decoding="async" src="${t.cover}" alt="" onerror="this.remove()"><span class="ph">${esc((t.title.trim()[0] || '?').toUpperCase())}</span>
     ${t.cont ? `<span class="aep">Серія ${t.cont.ep}</span>` : t.watched && t.watched === t.n ? '<span class="aep done">Переглянуто</span>' : ''}
     ${pct ? `<span class="pbar"><i style="width:${pct}%"></i></span>` : ''}</div>
-    <b>${esc(t.title)}</b><small>${t.n} ${plural(t.n, 'серія', 'серії', 'серій')}${t.watched && t.watched < t.n ? ` · переглянуто ${t.watched}` : ''}</small></a>`;
+    <b>${esc(t.title)}</b><small>${t.meta && t.meta.year ? t.meta.year + ' · ' : ''}${t.n} ${plural(t.n, 'серія', 'серії', 'серій')}${t.watched && t.watched < t.n ? ` · переглянуто ${t.watched}` : ''}</small></a>`;
 };
 async function renderAnime() {
   const d = await api('/api/anime');
@@ -984,6 +984,16 @@ async function renderAnime() {
     (cont.length ? `<section class="ashelf"><h2>Продовжити</h2><div class="agrid">${cont.map(animeCard).join('')}</div></section>` : '') +
     `<section class="ashelf">${cont.length ? '<h2>Усі тайтли</h2>' : ''}<div class="agrid">${d.titles.map(animeCard).join('')}</div></section>`;
 }
+const ANIME_FMT = {TV:'серіал',TV_SHORT:'короткий серіал',MOVIE:'фільм',OVA:'OVA',ONA:'ONA',SPECIAL:'спешл',MUSIC:'кліп'};
+function animeMeta(t) {
+  const m = t.meta;
+  if (!m) return '';
+  const alt = [m.english, m.romaji, m.native].filter((x, i, a) => x && x !== t.title && a.indexOf(x) === i).slice(0, 2);
+  const row = [m.year, ANIME_FMT[m.format] || m.format, m.episodes ? `${m.episodes} ${plural(m.episodes, 'серія', 'серії', 'серій')} у сезоні` : '', m.score ? `★ ${(m.score / 10).toFixed(1).replace('.', ',')}` : '']
+    .filter(Boolean).map(x => `<span class="tag">${esc(x)}</span>`).join('');
+  return (alt.length ? `<p class="aalt">${alt.map(esc).join(' · ')}</p>` : '') +
+    `<div class="ameta">${row}${(m.genres || []).map(g => `<span class="tag ghost">${esc(g)}</span>`).join('')}</div>`;
+}
 async function renderAnimeTitle(sid) {
   const t = await api('/api/anime/' + sid).catch(() => null);
   if (!t || !t.eps) { app.innerHTML = `<div class="empty"><h1 class="title">Тайтл не знайдено</h1><br><a class="btn" href="#/anime">До аніме</a></div>`; return; }
@@ -993,8 +1003,9 @@ async function renderAnimeTitle(sid) {
   const label = c ? (c.pos > 5 ? `Продовжити серію ${c.ep}` : `Дивитися серію ${c.ep}`) : 'Дивитися з першої серії';
   app.innerHTML = `${promptLine('~/аніме/' + esc(t.title), 'ls')}
     <div class="ahead"><div class="poster big"><img src="${t.cover}" alt="" onerror="this.remove()"><span class="ph">${esc((t.title.trim()[0] || '?').toUpperCase())}</span></div>
-    <div class="ainfo"><h1 class="title">${esc(t.title)}</h1><p class="lead">${t.n} ${plural(t.n, 'серія', 'серії', 'серій')}${t.watched ? ` · переглянуто ${t.watched} з ${t.n}` : ''}</p>
+    <div class="ainfo"><h1 class="title">${esc(t.title)}</h1>${animeMeta(t)}<p class="lead">${t.n} ${plural(t.n, 'серія', 'серії', 'серій')}${t.watched ? ` · переглянуто ${t.watched} з ${t.n}` : ''}</p>
     <div class="acts"><button class="btn primary" id="aplay">${I.play}${label}</button><a class="btn ghost" href="#/anime">Усі тайтли</a></div></div></div>
+    ${t.meta && t.meta.desc ? `<details class="adesc"><summary>Опис з AniList</summary><p>${esc(t.meta.desc).replace(/\n/g, '<br>')}</p><a href="${esc(t.meta.url)}" target="_blank" rel="noopener">Відкрити на AniList</a></details>` : ''}
     <ol class="eps">${t.eps.map(e => {
       const pct = e.dur && e.pos > 5 && !e.done ? Math.min(100, e.pos / e.dur * 100) : 0;
       return `<li><button class="ep${e.id === startId ? ' cur' : ''}${e.done ? ' done' : ''}" data-ep="${e.id}">

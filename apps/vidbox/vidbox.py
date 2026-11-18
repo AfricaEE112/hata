@@ -21,6 +21,7 @@ import urllib.request
 import zipfile
 import datetime
 import hashlib
+import html
 import hmac
 import http.cookies
 import http.server
@@ -40,6 +41,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.error
 import urllib.parse
 import webbrowser
 import zlib
@@ -309,7 +311,8 @@ def anime_info(sid, top, rows, st):
         i = eps.index(last)
         cont = last if not last['done'] else (eps[i + 1] if i + 1 < len(eps) else None)
     return {'sid': sid, 'title': anime_title(top) if top else 'Без папки', 'n': len(eps),
-            'watched': sum(e['done'] for e in eps), 'cover': '/anime/cover/' + sid,
+            'watched': sum(e['done'] for e in eps), 'cover': '/anime/cover/%s?v=%d' % (sid, anime_cover_version(sid, top)),
+            'meta': anime_meta_public(sid),
             'lastAt': max((max(e['posAt'] or 0, e['last'] or 0) for e in eps), default=0),
             'added': max((e['added'] or 0 for e in eps), default=0),
             'cont': cont and {'id': cont['id'], 'ep': cont['ep'], 'pos': cont['pos'], 'dur': cont['dur']}}, eps
@@ -317,7 +320,10 @@ def anime_info(sid, top, rows, st):
 
 def anime_list_json():
     st = stats()['data']
-    out = [anime_info(sid, top, rows, st)[0] for sid, (top, rows) in anime_series().items()]
+    series = anime_series()
+    for sid, (top, _) in series.items():
+        anilist_want(sid, top)      # у фоні, по черзі
+    out = [anime_info(sid, top, rows, st)[0] for sid, (top, rows) in series.items()]
     out.sort(key=lambda a: nat_key(a['title']))
     return {'folder': C.anime, 'titles': out}
 
@@ -333,40 +339,167 @@ def anime_title_json(key, by_ep=False):
     return info
 
 
-ANILIST_BUSY, ANILIST_FAIL = set(), {}
+# ── AniList: обкладинки й метадані тайтлів ──
+# Одна черга з паузою між запитами: AniList пропускає лише кілька десятків запитів на хвилину,
+# а сітка аніме просить обкладинки всіх тайтлів разом. Результат кешується в data/anime/<sid>.json
+# (+ <sid>.jpg). Підказка для неточних назв: файл anilist.txt у теці тайтлу — ID з AniList або точна назва.
+ANILIST_V = 2
+ANILIST_Q = queue.Queue()
+ANILIST_PENDING, ANILIST_FAIL = set(), {}
+ANILIST_LOCK = threading.Lock()
+ANILIST_FIELDS = ('id siteUrl title{romaji english native} coverImage{extraLarge large color} '
+                  'description(asHtml:false) genres seasonYear episodes averageScore format')
+SEASON_RE = re.compile(r'\b(s\d{1,2}|season\s*\d+|\d+(st|nd|rd|th)\s*season|part\s*\d+|сезон\s*\d+|\d+\s*сезон|tv|complete)\b', re.I)
 
 
-def anilist_cover(sid, title):
-    """Обкладинка з AniList у фоні; кешується в data/anime (або .none, якщо не знайшли)."""
-    d = os.path.join(C.data, 'anime')
-    if sid in ANILIST_BUSY or os.path.exists(os.path.join(d, sid + '.none')) \
-            or time.time() - ANILIST_FAIL.get(sid, 0) < 3600:   # без мережі — не смикати щоразу
+def anilist_dir():
+    return os.path.join(C.data, 'anime')
+
+
+def anilist_meta(sid):
+    try:
+        with open(os.path.join(anilist_dir(), sid + '.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def anilist_hint(top):
+    try:
+        with open(os.path.join(C.anime, top, 'anilist.txt'), encoding='utf-8-sig') as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+
+def anilist_want(sid, top):
+    """Поставити тайтл у чергу, якщо метаданих ще немає (або невдача стара / підказка змінилась)."""
+    if not top:
         return
-    ANILIST_BUSY.add(sid)
+    m = anilist_meta(sid)
+    hint = anilist_hint(top)
+    if m and m.get('v') == ANILIST_V and m.get('hint', '') == hint and (m.get('id') or time.time() - m.get('at', 0) < 7 * 86400):
+        return
+    if time.time() - ANILIST_FAIL.get(sid, 0) < 600:
+        return
+    with ANILIST_LOCK:
+        if sid in ANILIST_PENDING:
+            return
+        ANILIST_PENDING.add(sid)
+        start = not getattr(anilist_want, 'worker', None)
+        if start:
+            anilist_want.worker = threading.Thread(target=anilist_worker, daemon=True)
+    ANILIST_Q.put((sid, top))
+    if start:
+        anilist_want.worker.start()
 
-    def go():
+
+def anilist_queries(top):
+    hint = anilist_hint(top)
+    if hint:
+        return [hint]
+    t = anime_title(top)
+    t = re.sub(r'\(\s*\d{4}\s*\)|\b(19|20)\d{2}\b', ' ', t)
+    out = [re.sub(r'\s{2,}', ' ', t).strip(' -.')]
+    s = re.sub(r'\s{2,}', ' ', SEASON_RE.sub(' ', t)).strip(' -.')
+    if s and s not in out:
+        out.append(s)
+    return [q for q in out if q]
+
+
+def anilist_post(query, variables):
+    body = json.dumps({'query': query, 'variables': variables}).encode()
+    for attempt in range(4):
+        req = urllib.request.Request('https://graphql.anilist.co', data=body, headers={
+            'Content-Type': 'application/json', 'Accept': 'application/json',
+            'User-Agent': 'VidBox/%s (+https://github.com/AfricaEE112/hata)' % VERSION})
         try:
-            os.makedirs(d, exist_ok=True)
-            q = 'query($s:String){Media(search:$s,type:ANIME){coverImage{extraLarge large}}}'
-            req = urllib.request.Request('https://graphql.anilist.co', data=json.dumps(
-                {'query': q, 'variables': {'s': title}}).encode(),
-                headers={'Content-Type': 'application/json', 'Accept': 'application/json'})
-            media = (json.loads(urllib.request.urlopen(req, timeout=15).read()).get('data') or {}).get('Media')
-            url = media and (media['coverImage'].get('extraLarge') or media['coverImage'].get('large'))
-            if not url:
-                open(os.path.join(d, sid + '.none'), 'w').close()
-                return
-            img = urllib.request.urlopen(url, timeout=30).read()
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429:      # забагато запитів — чекаємо, скільки просять, і пробуємо ще
+                wait = int(e.headers.get('Retry-After') or 60)
+                print('AniList: ліміт запитів, чекаю %d с' % wait)
+                time.sleep(min(wait, 120) + 1)
+                continue
+            if e.code == 404:      # «не знайдено» AniList віддає як 404
+                return {'data': {'Media': None}}
+            raise
+    raise RuntimeError('AniList не відповідає (ліміт запитів)')
+
+
+def anilist_fetch(sid, top):
+    d = anilist_dir()
+    os.makedirs(d, exist_ok=True)
+    media, used = None, ''
+    for q in anilist_queries(top):
+        used = q
+        if q.isdigit():
+            res = anilist_post('query($i:Int){Media(id:$i,type:ANIME){%s}}' % ANILIST_FIELDS, {'i': int(q)})
+        else:
+            res = anilist_post('query($s:String){Media(search:$s,type:ANIME,sort:SEARCH_MATCH){%s}}' % ANILIST_FIELDS, {'s': q})
+        media = (res.get('data') or {}).get('Media')
+        time.sleep(2.2)
+        if media:
+            break
+    meta = {'v': ANILIST_V, 'at': time.time(), 'q': used, 'hint': anilist_hint(top)}
+    if media:
+        url = (media.get('coverImage') or {}).get('extraLarge') or (media.get('coverImage') or {}).get('large')
+        if url:
+            req = urllib.request.Request(url, headers={'User-Agent': 'VidBox/%s' % VERSION})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                img = r.read()
             with open(os.path.join(d, sid + '.part'), 'wb') as f:
                 f.write(img)
             os.replace(os.path.join(d, sid + '.part'), os.path.join(d, sid + '.jpg'))
-            print('Обкладинка з AniList: %s' % title)
+        desc = re.sub(r'<br\s*/?>', '\n', media.get('description') or '', flags=re.I)
+        desc = html.unescape(re.sub(r'<[^>]+>', '', desc))
+        desc = re.sub(r'\n{3,}', '\n\n', desc.replace('\r', '')).strip()
+        t = media.get('title') or {}
+        meta.update(id=media.get('id'), url=media.get('siteUrl'), romaji=t.get('romaji'), english=t.get('english'),
+                    native=t.get('native'), year=media.get('seasonYear'), episodes=media.get('episodes'),
+                    score=media.get('averageScore'), format=media.get('format'), genres=media.get('genres') or [],
+                    desc=desc, color=(media.get('coverImage') or {}).get('color'))
+        print('AniList: «%s» → %s' % (anime_title(top), t.get('romaji') or t.get('english')))
+    else:
+        meta['none'] = True
+        print('AniList: «%s» не знайдено (шукав: %s). Підказка: anilist.txt з ID у теці тайтлу' % (anime_title(top), used))
+    with open(os.path.join(d, sid + '.json'), 'w', encoding='utf-8') as f:
+        json.dump(meta, f, ensure_ascii=False)
+
+
+def anilist_worker():
+    while True:
+        sid, top = ANILIST_Q.get()
+        try:
+            anilist_fetch(sid, top)
         except Exception as e:
             ANILIST_FAIL[sid] = time.time()
-            print('AniList: не вдалося отримати обкладинку для «%s» (%s)' % (title, e))
+            print('AniList: не вдалося для «%s» (%s)' % (anime_title(top), e))
+            time.sleep(5)
         finally:
-            ANILIST_BUSY.discard(sid)
-    threading.Thread(target=go, daemon=True).start()
+            with ANILIST_LOCK:
+                ANILIST_PENDING.discard(sid)
+
+
+def anime_cover_version(sid, top):
+    """Змінюється, коли з'являється обкладинка — щоб браузер і апка взяли нову."""
+    if top:
+        for name in ('cover', 'poster', 'folder'):
+            for ext in ('.jpg', '.jpeg', '.png', '.webp'):
+                f = os.path.join(C.anime, top, name + ext)
+                if os.path.isfile(f):
+                    return int(os.path.getmtime(f))
+    f = os.path.join(anilist_dir(), sid + '.jpg')
+    return int(os.path.getmtime(f)) if os.path.isfile(f) else 0
+
+
+def anime_meta_public(sid):
+    m = anilist_meta(sid)
+    if not m or not m.get('id'):
+        return None
+    return {k: m.get(k) for k in ('id', 'url', 'romaji', 'english', 'native', 'year', 'episodes', 'score',
+                                  'format', 'genres', 'desc', 'color')}
 
 
 RELINK_COPY = ('vote', 'position', 'position_at', 'added', 'first_seen', 'duration', 'width', 'height',
@@ -1753,8 +1886,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         cached = os.path.join(C.data, 'anime', sid + '.jpg')
         if os.path.isfile(cached):
             return self.send_file(cached, 'image/jpeg')
-        if top:
-            anilist_cover(sid, anime_title(top))
+        anilist_want(sid, top)
         first = next((r for r in rows if r['thumb'] and os.path.isfile(thumb_path(r['id']))), None)
         if first:
             return self.send_file(thumb_path(first['id']), 'image/jpeg')
