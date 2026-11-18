@@ -72,6 +72,7 @@ SPRITE_N, FRAME_W, FRAME_H = 20, 320, 180      # нарізка: 20 кадрів
 
 class Cfg:
     roots = []
+    anime = ''
     data = ''
     web = ''
     ffmpeg = None
@@ -185,7 +186,7 @@ def scan():
                     for r in DB.q('SELECT id, size, mtime FROM videos')}
         seen, rows, changed = set(), [], []
         now = time.time()
-        for root in C.roots:
+        for root in list(C.roots) + ([C.anime] if C.anime else []):
             label = os.path.basename(os.path.normpath(root)) or root.rstrip('\\/:') or root
             for dirpath, dirnames, filenames in os.walk(root):
                 dirnames[:] = sorted(d for d in dirnames
@@ -241,6 +242,131 @@ def scan():
         DB.bump()
         MEDIA_EVENT.set()
         return len(seen), len([r for r in rows if r[0] not in existing])
+
+
+# ───────────────────────────── аніме ─────────────────────────────
+# Окрема папка: кожна підпапка — тайтл, файли в ній — серії. Повністю окремо від бібліотеки.
+
+def is_anime(r):
+    return bool(C.anime) and r['root'] == C.anime
+
+
+def nat_key(s):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', s)]
+
+
+def anime_title(top):
+    t = clean_title(re.sub(r'\[[^\]]*\]', ' ', top))   # [SubsPlease], [1080p] тощо
+    t = re.sub(r'\b(BD|BluRay|WEB-?DL|WEBRip|HEVC|x26[45]|AV1|10 ?bit|Dual Audio|Batch)\b', ' ', t, flags=re.I)
+    return re.sub(r'\s{2,}', ' ', t).strip(' -.') or top
+
+
+def anime_series():
+    if not C.anime:
+        return {}
+    groups = {}
+    for r in DB.q('SELECT * FROM videos WHERE missing=0 AND root=?', (C.anime,)):
+        parts = os.path.relpath(r['path'], C.anime).split(os.sep)
+        groups.setdefault(parts[0] if len(parts) > 1 else '', []).append(r)
+    out = {}
+    for top, rows in groups.items():
+        rows.sort(key=lambda r: nat_key(os.path.relpath(r['path'], C.anime)))
+        out[hashlib.sha1(('anime:' + top).encode('utf-8', 'surrogateescape')).hexdigest()[:12]] = (top, rows)
+    return out
+
+
+def ep_name(r, series):
+    """«[SubsPlease] Sousou no Frieren - 10 (1080p)» → (10, '') ; «Episode 5 - Назва» → (5, 'Назва')."""
+    t = clean_title(re.sub(r'\[[^\]]*\]', ' ', os.path.splitext(os.path.basename(r['path']))[0]))
+    if series and t.lower().startswith(series.lower()):
+        t = t[len(series):]
+    t = t.strip(' -_.')
+    m = re.match(r'^(?:(?:episode|ep|e|серія|s\d{1,2}e)\s*)?(\d{1,4})(?:v\d)?(?:\s*[-–—:.]\s*|\s+|$)(.*)$', t, re.I)
+    return (int(m.group(1)), m.group(2).strip(' -_.')) if m else (None, t)
+
+
+def ep_dict(r, s, i, series=''):
+    dur, pos = r['duration'] or 0, r['position'] or 0
+    num, name = ep_name(r, series)
+    num = num if num is not None else i + 1
+    title = '%s · Серія %d%s' % (series, num, ' — ' + name if name else '') if series else (name or r['title'])
+    return {'id': r['id'], 'title': title, 'etitle': name, 'folder': r['folder'], 'ext': r['ext'][1:], 'size': r['size'],
+            'added': r['added'], 'dur': r['duration'], 'w': r['width'], 'h': r['height'], 'thumb': r['thumb'],
+            'prep': needs_prepare(r), 'ready': os.path.isfile(prepared_path(r['id'])), 'vote': r['vote'],
+            'pos': pos, 'posAt': r['position_at'], 'score': 30, 'views': s.get('views', 0), 'avg': s.get('avg'),
+            'cmp': 0.5, 'pop': 0.0, 'last': s.get('last', 0), 'weekSec': 0, 'sprite': r['sprite'] or 0,
+            'file': os.path.basename(r['path']), 'vc': r['vcodec'], 'ac': r['acodec'], 'anime': 1, 'ep': num,
+            'done': bool(dur and pos >= dur * 0.9) or (s.get('views', 0) > 0 and pos < 5)}
+
+
+def anime_info(sid, top, rows, st):
+    series = anime_title(top) if top else ''
+    eps = [ep_dict(r, st.get(r['id'], {}), i, series) for i, r in enumerate(rows)]
+    seen = [e for e in eps if e['pos'] > 5 or e['done']]
+    last = max(seen, key=lambda e: max(e['posAt'] or 0, e['last'] or 0)) if seen else None
+    cont = None
+    if last:
+        i = eps.index(last)
+        cont = last if not last['done'] else (eps[i + 1] if i + 1 < len(eps) else None)
+    return {'sid': sid, 'title': anime_title(top) if top else 'Без папки', 'n': len(eps),
+            'watched': sum(e['done'] for e in eps), 'cover': '/anime/cover/' + sid,
+            'lastAt': max((max(e['posAt'] or 0, e['last'] or 0) for e in eps), default=0),
+            'added': max((e['added'] or 0 for e in eps), default=0),
+            'cont': cont and {'id': cont['id'], 'ep': cont['ep'], 'pos': cont['pos'], 'dur': cont['dur']}}, eps
+
+
+def anime_list_json():
+    st = stats()['data']
+    out = [anime_info(sid, top, rows, st)[0] for sid, (top, rows) in anime_series().items()]
+    out.sort(key=lambda a: nat_key(a['title']))
+    return {'folder': C.anime, 'titles': out}
+
+
+def anime_title_json(key, by_ep=False):
+    series = anime_series()
+    if by_ep:
+        key = next((sid for sid, (_, rows) in series.items() if any(r['id'] == key for r in rows)), None)
+    if key not in series:
+        return None
+    info, eps = anime_info(key, *series[key], stats()['data'])
+    info['eps'] = eps
+    return info
+
+
+ANILIST_BUSY, ANILIST_FAIL = set(), {}
+
+
+def anilist_cover(sid, title):
+    """Обкладинка з AniList у фоні; кешується в data/anime (або .none, якщо не знайшли)."""
+    d = os.path.join(C.data, 'anime')
+    if sid in ANILIST_BUSY or os.path.exists(os.path.join(d, sid + '.none')) \
+            or time.time() - ANILIST_FAIL.get(sid, 0) < 3600:   # без мережі — не смикати щоразу
+        return
+    ANILIST_BUSY.add(sid)
+
+    def go():
+        try:
+            os.makedirs(d, exist_ok=True)
+            q = 'query($s:String){Media(search:$s,type:ANIME){coverImage{extraLarge large}}}'
+            req = urllib.request.Request('https://graphql.anilist.co', data=json.dumps(
+                {'query': q, 'variables': {'s': title}}).encode(),
+                headers={'Content-Type': 'application/json', 'Accept': 'application/json'})
+            media = (json.loads(urllib.request.urlopen(req, timeout=15).read()).get('data') or {}).get('Media')
+            url = media and (media['coverImage'].get('extraLarge') or media['coverImage'].get('large'))
+            if not url:
+                open(os.path.join(d, sid + '.none'), 'w').close()
+                return
+            img = urllib.request.urlopen(url, timeout=30).read()
+            with open(os.path.join(d, sid + '.part'), 'wb') as f:
+                f.write(img)
+            os.replace(os.path.join(d, sid + '.part'), os.path.join(d, sid + '.jpg'))
+            print('Обкладинка з AniList: %s' % title)
+        except Exception as e:
+            ANILIST_FAIL[sid] = time.time()
+            print('AniList: не вдалося отримати обкладинку для «%s» (%s)' % (title, e))
+        finally:
+            ANILIST_BUSY.discard(sid)
+    threading.Thread(target=go, daemon=True).start()
 
 
 RELINK_COPY = ('vote', 'position', 'position_at', 'added', 'first_seen', 'duration', 'width', 'height',
@@ -984,7 +1110,8 @@ WEEK_TEXT = {
 def build_week(key, start, end, n):
     rng = random.Random('%s#%d' % (key, n))
     st = stats()['data']
-    rows = DB.q('SELECT id, added, duration FROM videos WHERE missing=0 AND vote >= 0')
+    rows = [r for r in DB.q('SELECT id, added, duration, root FROM videos WHERE missing=0 AND vote >= 0')
+            if not is_anime(r)]
     now = time.time()
     used = set()
     blank = {'score': 30, 'views': 0, 'last': 0, 'week_sec': 0}
@@ -1059,6 +1186,8 @@ def library_json():
     lost_spr, lost_th = [], []          # кеш почистили вручну → перегенерувати
     vids, pending, sprites = [], 0, 0
     for r in DB.q('SELECT * FROM videos WHERE missing=0'):
+        if is_anime(r):   # аніме — окремий розділ, у бібліотеку не потрапляє
+            continue
         if (r['sprite'] or 0) > 0 and r['id'] not in have_spr:
             lost_spr.append(r['id'])
         if r['thumb'] and r['id'] not in have_th:
@@ -1129,7 +1258,7 @@ def video_stats(vid):
 # і підхоплюється при наступному запуску.
 
 DEFAULTS = {
-    'folders': [], 'port': 8800, 'open_browser': True, 'rescan_min': 10,
+    'folders': [], 'anime_folder': '', 'port': 8800, 'open_browser': True, 'rescan_min': 10,
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},
@@ -1241,13 +1370,28 @@ def apply_settings(d):
                 cfg['ui']['dir'] = u['dir']
             if u.get('group') in ('all', 'folders', 'duration'):
                 cfg['ui']['group'] = u['group']
+        if 'anime_folder' in d:
+            a = str(d['anime_folder'] or '').strip()
+            if a:
+                a = os.path.abspath(os.path.expanduser(a))
+                if not os.path.isdir(a):
+                    return {'ok': False, 'error': 'Папку для аніме не знайдено: ' + a}
+                na = os.path.normcase(a).rstrip('\\/') + os.sep
+                for f in cfg['folders']:
+                    nf = os.path.normcase(f).rstrip('\\/') + os.sep
+                    if nf.startswith(na) or na.startswith(nf):
+                        return {'ok': False, 'error': 'Папка аніме не може бути всередині папки з відео (і навпаки): ' + f}
+            if a != cfg.get('anime_folder', ''):
+                cfg['anime_folder'] = a
+                C.anime = a
+                changed_folders = True
         if 'folders' in d:
             folders, err = check_folders(d['folders'] if isinstance(d['folders'], list) else [])
             if err:
                 return {'ok': False, 'error': err}
             if folders != cfg['folders']:
                 cfg['folders'] = folders
-                C.roots = folders
+                C.roots = list(folders)
                 changed_folders = True
         save_config()
     if changed_folders:
@@ -1329,6 +1473,8 @@ def settings_json():
         folders=[{'path': f, 'count': counts.get(os.path.normcase(f), 0), 'exists': os.path.isdir(f)}
                  for f in cfg['folders']],
         caches={k: dir_size(os.path.join(C.data, k)) for k in ('thumbs', 'sprites', 'frames', 'prepared')},
+        animeCount=counts.get(os.path.normcase(C.anime), 0) if C.anime else 0,
+        animeExists=bool(cfg.get('anime_folder')) and os.path.isdir(cfg['anime_folder']),
         orphans=len(orphan_ids()), hasPassword=bool(cfg['password_hash']),
         ffmpeg=C.ffmpeg, data=C.data, version=VERSION, portNow=C.port,
         urls=['http://%s:%d' % (ip, C.port) for ip in lan_ips()])
@@ -1531,6 +1677,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ctype = WEB_TYPES.get(ext, 'application/octet-stream')
         cache = 'max-age=31536000, immutable' if ext in ('.woff', '.woff2') else 'no-cache'
         return self.send_file(full, ctype, cache)
+
+    def send_anime_cover(self, sid):
+        ser = anime_series().get(sid)
+        if not ser:
+            return self.send_json({'error': 'not found'}, 404)
+        top, rows = ser
+        if top:
+            folder = os.path.join(C.anime, top)
+            for name in ('cover', 'poster', 'folder'):
+                for ext in ('.jpg', '.jpeg', '.png', '.webp'):
+                    f = os.path.join(folder, name + ext)
+                    if os.path.isfile(f):
+                        return self.send_file(f, 'image/' + ('jpeg' if ext in ('.jpg', '.jpeg') else ext[1:]))
+        cached = os.path.join(C.data, 'anime', sid + '.jpg')
+        if os.path.isfile(cached):
+            return self.send_file(cached, 'image/jpeg')
+        if top:
+            anilist_cover(sid, anime_title(top))
+        first = next((r for r in rows if r['thumb'] and os.path.isfile(thumb_path(r['id']))), None)
+        if first:
+            return self.send_file(thumb_path(first['id']), 'image/jpeg')
+        return self.send_json({'error': 'no cover'}, 404)
 
     def redirect(self, to, extra=None):
         h = {'Location': to}
@@ -1755,6 +1923,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.send_json(status_json())
                 if path == '/api/admin':
                     return self.send_json(admin_json())
+                if path == '/api/anime':
+                    return self.send_json(anime_list_json())
+                m = re.fullmatch(r'/api/anime/(ep/)?(\w+)', path)
+                if m:
+                    d = anime_title_json(m.group(2), by_ep=bool(m.group(1)))
+                    return self.send_json(d or {'error': 'not found'}, 200 if d else 404)
+                m = re.fullmatch(r'/anime/cover/(\w+)', path)
+                if m:
+                    return self.send_anime_cover(m.group(1))
                 if path == '/api/fs':
                     return self.send_json(list_dirs(qs.get('path', [''])[0]))
                 return self.send_web(path)
@@ -2014,6 +2191,8 @@ def main():
     save_config()
 
     C.roots = folders
+    a = C.cfg.get('anime_folder') or ''
+    C.anime = a if a and os.path.isdir(a) else ''
     C.port = int(C.cfg['port'])
     C.ffmpeg = find_tool('ffmpeg', args.ffmpeg)
     C.ffprobe = find_tool('ffprobe', args.ffmpeg or C.ffmpeg)

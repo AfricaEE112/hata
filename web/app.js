@@ -107,6 +107,7 @@ async function load() {
   for (const v of d.videos) v._r = (S.by[v.id] && S.by[v.id]._r) || Math.random();
   S.videos = d.videos;
   S.by = Object.fromEntries(d.videos.map(v => [v.id, v]));
+  Object.assign(S.by, S.animeBy || {});   // серії аніме живуть окремо, але плеєр шукає відео тут
   Object.assign(S, {folders: d.folders, ffmpeg: d.ffmpeg, pending: d.pending, spritesPending: d.spritesPending, N: d.spriteN || 20, weekSec: d.weekSec, loaded: true});
   if (d.cfg) {
     const localUi = S.cfg.ui;
@@ -190,7 +191,7 @@ document.addEventListener('keydown', e => {
   const onPlayer = (baseHash || '').startsWith('/v/');
   if (e.key === '/' || e.code === 'Slash') { e.preventDefault(); $('#q').focus(); return; }
   if (onPlayer) return;
-  if (/^Digit[1-5]$/.test(e.code)) { e.preventDefault(); go(['#/', '#/lib', '#/pl', '#/top', '#/settings'][+e.code.slice(5) - 1]); }
+  if (/^Digit[1-6]$/.test(e.code)) { e.preventDefault(); go(['#/', '#/lib', '#/anime', '#/pl', '#/top', '#/settings'][+e.code.slice(5) - 1]); }
   else if (e.code === 'KeyR') { e.preventDefault(); randomVideo(false); }
 });
 
@@ -377,6 +378,7 @@ async function renderBase(h, keep) {
     if (parts[0] === 'v') await renderPlayer(parts[1], parts[2] != null ? +parts[2] : null);
     else if (parts[0] === 'lib') await renderLib();
     else if (parts[0] === 'top') await renderTop();
+    else if (parts[0] === 'anime') await (parts[1] ? renderAnimeTitle(parts[1]) : renderAnime());
     else if (parts[0] === 'pl') await (parts[1] ? renderPlaylist(parts[1]) : renderPlaylists());
     else if (parts[0] === 'settings') await renderSettings();
     else await renderHome();
@@ -620,7 +622,7 @@ async function renderLib() {
   if (view.folder && !S.folders.includes(view.folder)) view.folder = '';
   if (!SORTS[ui().sort]) ui().sort = 'score';
   const u = ui(), seg = (id, icon, text) => `<button data-group="${id}" class="${u.group === id || (id === 'all' && !['folders', 'duration'].includes(u.group)) ? 'on' : ''}">${icon}${text}</button>`;
-  app.innerHTML = `${promptLine('~/бібліотека', libCmd(), 'libPrompt')}<div class="page-head"><h1 class="title">Бібліотека</h1><span class="count" id="cnt"></span></div>
+  app.innerHTML = `${promptLine('~/бібліотека', libCmd(), 'libPrompt')}<div class="page-head"><h1 class="title">Бібліотека</h1><span class="count" id="cnt"></span><a class="btn ghost" style="margin-left:auto" href="#/top">${I.list}Рейтинг</a></div>
     <div class="toolbar">
       <div class="seg" role="group" aria-label="Вигляд бібліотеки">${seg('all', I.grid, 'Усі разом')}${seg('folders', I.folder, 'По папках')}${seg('duration', I.clock, 'За тривалістю')}</div>
       <span class="grow"></span>
@@ -756,6 +758,10 @@ async function renderSettings() {
     ${row('Пересканувати зараз', 'Знайде нові файли й прибере видалені.', `<button class="btn" id="rescanNow">${I.refresh}Пересканувати</button>`)}
     ${row('Пересканувати автоматично', 'Як часто VidBox сам перевіряє папки.', num('rescan_min', st.rescan_min, 1, 1440, 1, 'хв'))}
   </div></section>
+  <section class="set win">${winBar('~/.config/vidbox/аніме')}<div class="win-body"><h2>Аніме</h2>
+    ${row('Папка з аніме', st.anime_folder ? (st.animeExists ? `${st.animeCount} серій. Кожна підпапка — окремий тайтл. Аніме не потрапляє в бібліотеку, рейтинг і «Продовжити».` : 'Папку не знайдено — можливо, диск відключено.') : 'Окремий розділ: кожна підпапка — тайтл, файли в ній — серії. Обкладинка — cover.jpg у папці тайтлу, інакше з AniList.',
+      `<input id="animef" value="${esc(st.anime_folder || '')}" placeholder="Напр. E:\\Anime" aria-label="Папка з аніме"><button class="btn" id="animeset">Зберегти</button>${st.anime_folder ? '<button class="btn ghost" id="animeoff">Прибрати</button>' : ''}`)}
+  </div></section>
   <section class="set win">${winBar('~/.config/vidbox/перегляд')}<div class="win-body"><h2>Перегляд</h2>
     ${row('Продовжувати з місця, де зупинився', 'Якщо вимкнути, відео щоразу починається спочатку.', sw('resume', st.resume))}
     ${row('Вмикати наступне відео', 'Коли відео закінчилось, вмикається наступне з тієї ж папки.', sw('autoplay_next', st.autoplay_next))}
@@ -787,6 +793,11 @@ async function renderSettings() {
   </div></section>
   <section class="set win">${winBar('terminal — <b>vidbox --about</b>')}<div class="win-body"><h2>Про програму</h2>${fetchHTML(st)}</div></section></div>`;
   loadAdmin(row);
+  const setAnime = async a => { const r = await save({anime_folder: a}, a ? 'Папку аніме збережено, сканую…' : 'Розділ аніме вимкнено');
+    if (r.ok) setTimeout(() => { if (baseHash === '/settings') renderBase('/settings', true); }, 1500); };
+  $('#animeset').onclick = () => setAnime($('#animef').value.trim());
+  $('#animef').onkeydown = e => { if (e.key === 'Enter') setAnime(e.target.value.trim()); };
+  if ($('#animeoff')) $('#animeoff').onclick = () => setAnime('');
 
   $$('[data-theme-pick]').forEach(b => b.onclick = () => {
     applyTheme(b.dataset.themePick);
@@ -930,6 +941,63 @@ function plItems(id) {
   const g = LEN_GROUPS.find(x => x.id === id);
   return g ? S.videos.filter(g.test).sort(inOrder) : [];
 }
+// ───────── Аніме: окремий розділ, тайтл = підпапка, серії по порядку ─────────
+S.animeBy = {};
+function animeRegister(t) {
+  for (const e of t.eps) { e._r = Math.random(); S.animeBy[e.id] = e; S.by[e.id] = e; }
+}
+function playAnime(t, id) {
+  setQueue({pl: 'anime', anime: t.sid, name: t.title, ids: t.eps.map(e => e.id)});
+  go('#/v/' + id);
+}
+async function loadAnimeEp(id) {
+  const t = await api('/api/anime/ep/' + id).catch(() => null);
+  if (!t || !t.eps) return;
+  animeRegister(t);
+  const q = getQueue();
+  if (!(q && q.ids && q.ids.includes(id))) setQueue({pl: 'anime', anime: t.sid, name: t.title, ids: t.eps.map(e => e.id)});
+}
+const animeCard = t => {
+  const pct = t.cont && t.cont.dur ? Math.min(100, t.cont.pos / t.cont.dur * 100) : 0;
+  return `<a class="acard" href="#/anime/${t.sid}"><div class="poster"><img loading="lazy" decoding="async" src="${t.cover}" alt="" onerror="this.remove()"><span class="ph">${esc((t.title.trim()[0] || '?').toUpperCase())}</span>
+    ${t.cont ? `<span class="aep">Серія ${t.cont.ep}</span>` : t.watched && t.watched === t.n ? '<span class="aep done">Переглянуто</span>' : ''}
+    ${pct ? `<span class="pbar"><i style="width:${pct}%"></i></span>` : ''}</div>
+    <b>${esc(t.title)}</b><small>${t.n} ${plural(t.n, 'серія', 'серії', 'серій')}${t.watched && t.watched < t.n ? ` · переглянуто ${t.watched}` : ''}</small></a>`;
+};
+async function renderAnime() {
+  const d = await api('/api/anime');
+  const head = `${promptLine('~/аніме', 'ls')}<div class="page-head"><h1 class="title">Аніме</h1>${d.titles.length ? `<span class="count">${d.titles.length}</span>` : ''}</div>`;
+  if (!d.folder) {
+    app.innerHTML = head + `<div class="empty"><p>Вкажи папку з аніме в налаштуваннях. Кожна підпапка в ній стане окремим тайтлом, а файли в ній — серіями.</p><br><a class="btn primary" href="#/settings">Відкрити налаштування</a></div>`;
+    return;
+  }
+  if (!d.titles.length) { app.innerHTML = head + `<div class="empty"><p>У папці <code>${esc(d.folder)}</code> поки немає відео. Поклади кожен тайтл в окрему підпапку.</p></div>`; return; }
+  const cont = d.titles.filter(t => t.cont).sort((a, b) => b.lastAt - a.lastAt);
+  app.innerHTML = head +
+    (cont.length ? `<section class="ashelf"><h2>Продовжити</h2><div class="agrid">${cont.map(animeCard).join('')}</div></section>` : '') +
+    `<section class="ashelf">${cont.length ? '<h2>Усі тайтли</h2>' : ''}<div class="agrid">${d.titles.map(animeCard).join('')}</div></section>`;
+}
+async function renderAnimeTitle(sid) {
+  const t = await api('/api/anime/' + sid).catch(() => null);
+  if (!t || !t.eps) { app.innerHTML = `<div class="empty"><h1 class="title">Тайтл не знайдено</h1><br><a class="btn" href="#/anime">До аніме</a></div>`; return; }
+  animeRegister(t);
+  const c = t.cont, first = t.eps[0];
+  const startId = c ? c.id : first.id;
+  const label = c ? (c.pos > 5 ? `Продовжити серію ${c.ep}` : `Дивитися серію ${c.ep}`) : 'Дивитися з першої серії';
+  app.innerHTML = `${promptLine('~/аніме/' + esc(t.title), 'ls')}
+    <div class="ahead"><div class="poster big"><img src="${t.cover}" alt="" onerror="this.remove()"><span class="ph">${esc((t.title.trim()[0] || '?').toUpperCase())}</span></div>
+    <div class="ainfo"><h1 class="title">${esc(t.title)}</h1><p class="lead">${t.n} ${plural(t.n, 'серія', 'серії', 'серій')}${t.watched ? ` · переглянуто ${t.watched} з ${t.n}` : ''}</p>
+    <div class="acts"><button class="btn primary" id="aplay">${I.play}${label}</button><a class="btn ghost" href="#/anime">Усі тайтли</a></div></div></div>
+    <ol class="eps">${t.eps.map(e => {
+      const pct = e.dur && e.pos > 5 && !e.done ? Math.min(100, e.pos / e.dur * 100) : 0;
+      return `<li><button class="ep${e.id === startId ? ' cur' : ''}${e.done ? ' done' : ''}" data-ep="${e.id}">
+        <span class="thumb">${e.thumb ? `<img decoding="async" src="/thumb/${e.id}?v=${e.thumb}" alt="">` : ''}${pct ? `<span class="pbar"><i style="width:${pct}%"></i></span>` : ''}</span>
+        <span class="n">${e.ep}</span><span class="et"><b>Серія ${e.ep}${e.etitle ? ' · ' + esc(e.etitle) : ''}</b><small>${e.dur ? fmtLen(e.dur) : ''}${e.done ? ' · переглянуто' : pct ? ` · залишилось ${fmtLen(e.dur - e.pos)}` : ''}</small></span></button></li>`;
+    }).join('')}</ol>`;
+  $('#aplay').onclick = () => playAnime(t, startId);
+  $$('[data-ep]').forEach(b => b.onclick = () => playAnime(t, b.dataset.ep));
+}
+
 function getQueue() { try { return JSON.parse(sessionStorage.getItem('vb_queue')); } catch (e) { return null; } }
 function setQueue(q) { try { if (q) sessionStorage.setItem('vb_queue', JSON.stringify(q)); else sessionStorage.removeItem('vb_queue'); } catch (e) {} }
 function shuffled(arr) {
@@ -1560,6 +1628,7 @@ function nextOf(v) {
 }
 async function renderPlayer(id, startAt) {
   if (!S.loaded) await load();
+  if (!S.by[id]) await loadAnimeEp(id);
   const v = S.by[id];
   if (!v) { app.innerHTML = `<div class="empty"><h1 class="title">Відео не знайдено</h1>Можливо, файл перемістили або видалили.<br><br><a class="btn" href="#/">На головну</a></div>`; return; }
   window.scrollTo(0, 0);
@@ -1582,7 +1651,7 @@ async function renderPlayer(id, startAt) {
       `<button class="fcell" data-i="${i}" aria-label="Перейти до ${fmtDur(frameT(v, i))}"><span class="fimg" style="${frameBg(v, i)}"></span>${fmtDur(frameT(v, i))}</button>`).join('')}</div></section>` : ''}
     <p class="keys"><span><kbd>Пробіл</kbd>пауза</span><span><kbd>←</kbd><kbd>→</kbd>5 с</span><span><kbd>J</kbd><kbd>L</kbd>10 с</span><span><kbd>↑</kbd><kbd>↓</kbd>гучність</span>
       <span><kbd>F</kbd>весь екран</span><span><kbd>M</kbd>звук</span><span><kbd>Shift</kbd><kbd>&lt;</kbd><kbd>&gt;</kbd>швидкість</span><span><kbd>0</kbd>…<kbd>9</kbd>перейти</span>${next ? '<span><kbd>N</kbd>наступне</span>' : ''}</p>
-    ${q ? `<div class="qbar">${I.list}<span>Плейлист <a href="#/pl/${q.pl}">${esc(q.name)}</a>${q.shuffle ? ', перемішаний' : ''}</span><b>${qi + 1} з ${q.ids.length}</b><button class="btn ghost" id="qexit">Вийти з плейлиста</button></div>` : ''}
+    ${q ? `<div class="qbar">${I.list}<span>${q.anime ? `Аніме <a href="#/anime/${q.anime}">` : `Плейлист <a href="#/pl/${q.pl}">`}${esc(q.name)}</a>${q.shuffle ? ', перемішаний' : ''}</span><b>${qi + 1} з ${q.ids.length}</b><button class="btn ghost" id="qexit">${q.anime ? 'Вийти зі серій' : 'Вийти з плейлиста'}</button></div>` : ''}
     ${shelf(q ? 'Далі в плейлисті' : 'Ще з цієї папки', '', more)}
   </div>`;
   const qx = $('#qexit');
