@@ -49,12 +49,12 @@ with sync_playwright() as p:
         sh(f'sudo ffmpeg -nostdin -v error -y -f lavfi -i "testsrc2=s=640x360:r=25,noise=alls=20:allf=t" -t 6 -pix_fmt yuv420p "{d}"')
 
     pg.click('#next'); pg.wait_for_selector('[data-go]')
-    pg.click('[data-go]:has-text("/srv/disks")'); pg.wait_for_selector('[data-go]:has-text("media/")')
-    pg.click('[data-go]:has-text("media/")'); pg.wait_for_selector('[data-go]:has-text("Фільми/")')
-    pg.click('[data-go]:has-text("Фільми/")'); pg.wait_for_selector('#asVideo'); pg.click('#asVideo')
-    pg.wait_for_selector('[data-rm="/srv/disks/media/Фільми"]')
-    pg.click('[data-go]:has-text("..")'); pg.wait_for_selector('.crumbs:text-is("/srv/disks/media")')
-    pg.click('[data-go]:has-text("Аніме/")'); pg.wait_for_selector('#asAnime'); pg.click('#asAnime'); shot('folders')
+    def into(name, path):    # кнопки «Тут відео/аніме» є на кожному рівні — чекаємо, поки справді відкрилась потрібна тека
+        pg.click(f'[data-go]:has-text("{name}")'); pg.wait_for_selector(f'.crumbs:text-is("{path}")')
+    into('/srv/disks', '/srv/disks'); into('media/', '/srv/disks/media'); into('Фільми/', '/srv/disks/media/Фільми')
+    pg.click('#asVideo'); pg.wait_for_selector('[data-rm="/srv/disks/media/Фільми"]')
+    into('..', '/srv/disks/media'); into('Аніме/', '/srv/disks/media/Аніме')
+    pg.click('#asAnime'); pg.wait_for_selector('[data-rma]'); shot('folders')
     pg.click('#next'); pg.wait_for_selector('#tsUp'); shot('tailscale')
     pg.click('#next'); pg.wait_for_selector('.win .row'); shot('laptop')
     pg.click('#next'); pg.wait_for_selector('.kv'); shot('summary')

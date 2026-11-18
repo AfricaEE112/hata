@@ -33,6 +33,12 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # номер версії = номер прогону + 100: після перейменування workflow (android.yml → vidbox-android.yml)
+      # GitHub почав рахувати прогони з 1, а апки вже були 0.6.23 — нові мають бути «новішими»
+      - name: Version
+        shell: bash
+        run: echo "VIDBOX_BUILD=$(( ${{ github.run_number }} + 100 ))" >> "$GITHUB_ENV"
+
       - name: Build APK
         working-directory: apps/vidbox/android
         shell: bash
@@ -51,7 +57,7 @@ jobs:
         id: apk
         shell: bash
         run: |
-          v="0.6.${{ github.run_number }}"
+          v="0.6.$VIDBOX_BUILD"
           echo "version=$v" >> "$GITHUB_OUTPUT"
           cp apps/vidbox/android/app/build/outputs/apk/release/app-release.apk "VidBox-$v.apk"
           ls -la VidBox-*.apk
