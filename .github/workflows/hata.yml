@@ -1,0 +1,74 @@
+name: hata
+
+on:
+  push:
+    branches: [main]
+    paths: ['hata/**', 'vidbox.py', 'web/**', '.github/workflows/hata.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: hata-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Справжня перевірка: інсталятор Hata на чистій Ubuntu 24.04 → майстер у браузері → VidBox з диском
+  install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Hata
+        run: sudo HATA_HOSTNAME=keep bash hata/install.sh
+
+      - name: Services are running
+        run: |
+          systemctl is-active gazda hata
+          systemctl status hata-screen --no-pager || true
+          gazda status
+
+      # тестовий «зовнішній диск» з міткою media
+      - name: Test disk
+        run: |
+          truncate -s 400M /tmp/media.img
+          mkfs.ext4 -q -L media /tmp/media.img
+          sudo losetup -fP --show /tmp/media.img
+          sudo udevadm settle
+          lsblk -f
+
+      - name: Playwright
+        run: |
+          pip install -q playwright
+          python -m playwright install --with-deps chromium > /dev/null
+
+      - name: Go through the setup wizard
+        run: python hata/ci/wizard.py hata-out
+
+      - name: After setup
+        if: always()
+        run: |
+          mkdir -p hata-out
+          systemctl is-active vidbox || true
+          grep hata /etc/fstab || true
+          gazda update || true
+          sudo journalctl -u gazda -u hata -u vidbox -u hata-screen --no-pager -n 200 > hata-out/journal.txt || true
+          sudo cat /var/lib/hata/vidbox/config.json | python3 -c "import json,sys; c=json.load(sys.stdin); print({k: c[k] for k in ('folders','anime_folder')})" > hata-out/vidbox-config.txt || true
+
+      - name: Reinstall is safe (idempotent)
+        run: sudo HATA_HOSTNAME=keep bash hata/install.sh && systemctl is-active gazda hata vidbox
+
+      - name: Publish screenshots
+        if: always()
+        shell: bash
+        run: |
+          cd hata-out
+          git init -q -b hata-report
+          git config user.name "hata-ci"
+          git config user.email "hata-ci@users.noreply.github.com"
+          echo "run ${{ github.run_number }} (${{ github.sha }})" > RUN.txt
+          git add -A
+          git commit -q -m "Hata CI report ${{ github.run_number }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" hata-report
+
+      - name: Fail if the wizard check failed
+        run: test -f hata-out/OK

@@ -2415,6 +2415,9 @@ def restart_later(delay=0.6):
     """Новий процес з тими самими аргументами; він дочекається, поки звільниться порт."""
     def go():
         time.sleep(delay)
+        if os.environ.get('INVOCATION_ID'):   # під systemd (Hata): служба з Restart=always підніме нас сама
+            print('Перезапуск…')
+            os._exit(0)
         args = [a for a in sys.argv[1:] if a != '--pick']
         if '--no-browser' not in args:
             args.append('--no-browser')
@@ -2433,6 +2436,8 @@ def restart_later(delay=0.6):
 
 
 def update_from_github():
+    if os.environ.get('VIDBOX_MANAGED') == 'hata':
+        return {'ok': False, 'error': 'VidBox оновлюється разом із Hata — кнопка «Оновити» в панелі Hata'}
     d = app_dir()
     if not UPDATE_LOCK.acquire(blocking=False):
         return {'ok': False, 'error': 'Оновлення вже триває'}

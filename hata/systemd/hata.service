@@ -1,0 +1,20 @@
+[Unit]
+Description=Hata: панель домашнього сервера
+After=gazda.service network-online.target
+Wants=gazda.service network-online.target
+
+[Service]
+User=hata
+Group=hata
+Environment=HATA_DATA=/var/lib/hata
+ExecStart=/usr/bin/python3 /opt/hata/src/hata/hata.py
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hata
+PrivateTmp=yes
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

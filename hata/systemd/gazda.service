@@ -1,0 +1,12 @@
+[Unit]
+Description=Hata: gazda — системні дії для панелі (root, білий список)
+After=local-fs.target network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/hata/src/hata/gazda.py serve
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
