@@ -52,8 +52,8 @@ adb shell am start -W -n $PKG/.MainActivity
 sleep 2.5
 shot 01-connect
 connected=0
-for i in $(seq 1 25); do
-  sleep 2
+for i in $(seq 1 8); do   # ~20 с: далі вводимо адресу вручну (автопошук записуємо в NOTES)
+  sleep 1.5
   if ! has_text "Знайди свій ПК"; then connected=1; break; fi
 done
 if [ $connected = 0 ]; then

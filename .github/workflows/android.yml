@@ -126,7 +126,8 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-33-swangle-pixel6-v1
+            /usr/local/lib/android/sdk/system-images/android-33
+          key: avd-33-swangle-pixel6-v2
 
       - name: Create emulator snapshot
         if: steps.avd-cache.outputs.cache-hit != 'true'
