@@ -51,6 +51,9 @@ jobs:
           sudo udevadm settle
           lsblk -f
 
+      - name: Laptop screen before setup
+        run: sleep 12; mkdir -p hata-out; sudo python3 hata/ci/tty.py | tee hata-out/screen-before.txt
+
       - name: Playwright
         run: |
           pip install -q playwright
@@ -67,6 +70,7 @@ jobs:
           grep hata /etc/fstab || true
           sudo gazda update || true
           sudo journalctl -u hata-screen --no-pager -n 20 || true
+          sleep 12; sudo python3 hata/ci/tty.py > hata-out/screen-after.txt || true; cat hata-out/screen-after.txt
           sudo journalctl -u gazda -u hata -u vidbox -u hata-screen --no-pager -n 200 > hata-out/journal.txt || true
           sudo cat /var/lib/hata/vidbox/config.json | python3 -c "import json,sys; c=json.load(sys.stdin); print({k: c[k] for k in ('folders','anime_folder')})" > hata-out/vidbox-config.txt || true
 
