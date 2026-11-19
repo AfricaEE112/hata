@@ -32,6 +32,7 @@ VB_PORT = 8800
 PORT = int(os.environ.get('HATA_PORT', '80'))
 DEMO = os.environ.get('HATA_DEMO') == '1'       # без gazda: для перевірки інтерфейсу на будь-якому комп'ютері
 BROWSE_ROOTS = ('/srv/disks', '/media', '/mnt', '/home')
+SCHEMES = ('чай', 'ніч', 'lain', 'ягода', 'nothing', 'папір')    # кольорові схеми; ті самі імена в hata.css і screen.py
 LOCK = threading.Lock()
 
 
@@ -124,6 +125,17 @@ def demo_gazda(req):
     if d == 'battery_limit':
         DEMO_STATE['limit'] = req['value']
         return {'ok': True, 'limit': req['value']}
+    if d == 'journal':
+        now = int(time.time())
+        return {'ok': True, 'lines': [
+            {'t': now - 1600, 'unit': 'hata', 'msg': 'Hata: панель на порту 80'},
+            {'t': now - 1300, 'unit': 'vidbox', 'msg': 'anilist: Frieren — опис і жанри збережено'},
+            {'t': now - 340, 'unit': 'gazda', 'msg': 'mount media → /srv/disks/media'},
+            {'t': now - 2, 'unit': 'vidbox', 'msg': 'GET /api/anime 200'}]}
+    if d == 'update_check':
+        return {'ok': True, 'version': 'eea496d 2026-11-18T22:10:00+02:00', 'commits': [
+            {'hash': 'a1f3c2e', 'msg': 'Аніме: опис і жанри в апці'},
+            {'hash': '7b9e011', 'msg': 'Майстер: швидкі кліки по теках'}]}
     if d == 'status':
         return {'ok': True, 'host': 'hata', 'uptime': 93784, 'load': 0.42, 'cpus': 8, 'temp': 47.5,
                 'mem': {'total': 8 * G, 'avail': 5.6 * G}, 'os': 'Ubuntu 24.04.1 LTS', 'version': 'demo',
@@ -174,6 +186,82 @@ def list_dirs(path):
         names = []
     up = os.path.dirname(path) if path not in roots else ''
     return {'path': path, 'up': up, 'dirs': [{'name': n, 'path': os.path.join(path, n)} for n in names[:500]]}
+
+
+# ───────────────────────── живі цифри для панелі ─────────────────────────
+# Читаємо /proc і /sys самі (без gazda) — це дешево, тож панель питає щосекунди-дві.
+
+CPU_LAST = [0, 0]
+
+
+def cpu_percent():
+    try:
+        with open('/proc/stat') as f:
+            v = [int(x) for x in f.readline().split()[1:]]
+    except (OSError, ValueError):
+        return None
+    idle, total = v[3] + (v[4] if len(v) > 4 else 0), sum(v)
+    with LOCK:
+        di, dt = idle - CPU_LAST[0], total - CPU_LAST[1]
+        CPU_LAST[:] = [idle, total]
+    return round(100 * (1 - di / dt)) if dt > 0 else None
+
+
+def read_int(path):
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def live():
+    mem = {}
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                k, _, v = line.partition(':')
+                if k in ('MemTotal', 'MemAvailable', 'SwapTotal', 'SwapFree'):
+                    mem[k] = int(v.split()[0]) * 1024
+    except OSError:
+        pass
+    temp = None
+    base = '/sys/class/thermal'
+    for z in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+        t = read_int(os.path.join(base, z, 'temp'))
+        try:
+            kind = open(os.path.join(base, z, 'type')).read().strip()
+        except OSError:
+            kind = ''
+        if t is not None and (temp is None or kind.startswith('x86_pkg')):
+            temp = round(t / 1000, 1)
+            if kind.startswith('x86_pkg'):
+                break
+    rx = tx = 0
+    try:
+        with open('/proc/net/dev') as f:
+            for line in f.readlines()[2:]:
+                name, _, v = line.partition(':')
+                name, v = name.strip(), v.split()
+                if name != 'lo' and not name.startswith(('docker', 'veth', 'br-')) and len(v) > 8:
+                    rx += int(v[0])
+                    tx += int(v[8])
+    except (OSError, ValueError):
+        pass
+    return {'cpu': cpu_percent(), 'temp': temp, 'time': int(time.time()), 'net': {'rx': rx, 'tx': tx},
+            'mem': {'total': mem.get('MemTotal', 0), 'avail': mem.get('MemAvailable', 0)},
+            'swap': {'total': mem.get('SwapTotal', 0), 'free': mem.get('SwapFree', 0)}}
+
+
+UPDATES = {'at': 0, 'data': None}
+
+
+def updates(force=False):
+    """Що нового на GitHub — питаємо gazda не частіше ніж раз на 10 хвилин."""
+    if force or not UPDATES['data'] or time.time() - UPDATES['at'] > 600:
+        UPDATES['data'] = gazda({'do': 'update_check'}, 60)
+        UPDATES['at'] = time.time()
+    return UPDATES['data']
 
 
 def lan_ips():
@@ -255,7 +343,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json({'ok': True})
         if p == '/api/state':
             return self.json({'setup': CONF['setup_done'], 'hasPassword': bool(CONF['password_hash']),
-                              'authed': self.authed(), 'host': socket.gethostname(), 'demo': DEMO})
+                              'authed': self.authed(), 'host': socket.gethostname(), 'demo': DEMO,
+                              'scheme': CONF.get('scheme', SCHEMES[0]), 'schemes': SCHEMES})
         if not p.startswith('/api/'):
             return self.static(p)
         if not self.authed():
@@ -272,6 +361,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json(list_dirs(qs.get('path', [''])[0]))
         if p == '/api/tailscale':
             return self.json(gazda({'do': 'tailscale', 'op': 'status'}, 30))
+        if p == '/api/live':
+            return self.json(live())
+        if p == '/api/journal':
+            return self.json(gazda({'do': 'journal', 'n': 14}, 30))
+        if p == '/api/updates':
+            return self.json(updates('force' in qs))
         return self.json({'error': 'not found'}, 404)
 
     def do_POST(self):
@@ -310,7 +405,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p == '/api/power':
             return self.json(gazda({'do': 'power', 'op': d.get('op')}, 30))
         if p == '/api/update':
-            return self.json(gazda({'do': 'update'}, 300))
+            r = gazda({'do': 'update'}, 300)
+            UPDATES['data'] = None
+            return self.json(r)
+        if p == '/api/scheme':
+            if d.get('scheme') not in SCHEMES:
+                return self.json({'ok': False, 'error': 'Невідома схема'})
+            with LOCK:
+                CONF['scheme'] = d['scheme']
+                save(CONF)
+            return self.json({'ok': True})
         if p == '/api/finish':
             folders = [f for f in d.get('folders') or [] if isinstance(f, str) and os.path.isdir(f)]
             anime = d.get('anime') if isinstance(d.get('anime'), str) and os.path.isdir(d.get('anime')) else ''

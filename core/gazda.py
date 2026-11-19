@@ -8,6 +8,7 @@ gazda через unix-сокет /run/hata/gazda.sock, а gazda виконує �
 Запит і відповідь — один рядок JSON:  {"do": "status"}  →  {"ok": true, ...}
 
 Те саме з терміналу:  gazda status | gazda disks | gazda update | gazda help
+Забув пароль панелі:  sudo gazda password
 """
 import json
 import os
@@ -358,6 +359,85 @@ def do_update(_):
         return {'changed': True, 'from': before[:7], 'version': git_version()}
 
 
+def do_update_check(_):
+    """Що прийде з оновленням: список нових комітів (без зміни коду)."""
+    with LOCK:
+        r = git('fetch', '--quiet', 'origin')
+        if r.returncode:
+            raise Fail('Немає зв\'язку з GitHub')
+        log = git('log', '--format=%h%x09%s', '-n', '20', 'HEAD..@{u}', timeout=10).stdout
+    commits = [dict(zip(('hash', 'msg'), l.split('\t', 1))) for l in log.splitlines() if '\t' in l]
+    return {'version': git_version(), 'commits': commits}
+
+
+# ───────────────────────── журнал ─────────────────────────
+
+JOURNAL_UNITS = ('hata', 'vidbox', 'gazda', 'hata-screen')
+
+
+def do_journal(a):
+    """Останні рядки журналу служб Hata — для блоку «журнал» у панелі."""
+    n = min(max(int(a.get('n') or 14), 1), 100)
+    cmd = ['journalctl', '--no-pager', '-o', 'json', '-n', str(n)]
+    for u in JOURNAL_UNITS:
+        cmd += ['-u', u]
+    lines = []
+    for raw in run(cmd, 20).stdout.splitlines():
+        try:
+            j = json.loads(raw)
+        except ValueError:
+            continue
+        msg = j.get('MESSAGE')
+        if isinstance(msg, list):          # не-UTF-8 повідомлення journald віддає байтами
+            msg = bytes(msg).decode('utf-8', 'replace')
+        unit = (j.get('_SYSTEMD_UNIT') or j.get('SYSLOG_IDENTIFIER') or '').replace('.service', '')
+        lines.append({'t': int(j.get('__REALTIME_TIMESTAMP', 0)) // 1000000, 'unit': unit,
+                      'msg': str(msg or '')[:300]})
+    return {'lines': lines}
+
+
+# ───────────────────────── пароль (лише з термінала) ─────────────────────────
+
+def reset_password():
+    """sudo gazda password — новий пароль для панелі, VidBox і апки, якщо старий забуто."""
+    import getpass
+    import hashlib
+    cfg = '/var/lib/hata/hata.json'
+    try:
+        with open(cfg, encoding='utf-8') as f:
+            c = json.load(f)
+    except (OSError, ValueError):
+        print('Hata ще не налаштована — відкрий панель у браузері, там майстер.')
+        return 1
+    a = getpass.getpass('Новий пароль: ')
+    if len(a) < 6:
+        print('Щонайменше 6 символів.')
+        return 1
+    if getpass.getpass('Ще раз: ') != a:
+        print('Паролі не збігаються.')
+        return 1
+    h = hashlib.pbkdf2_hmac('sha256', a.encode('utf-8'), c['secret'].encode(), 120000).hex()
+    uid, gid = USER_IDS()
+    for path, key_secret in ((cfg, False), ('/var/lib/hata/vidbox/config.json', True)):
+        try:
+            with open(path, encoding='utf-8') as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            continue
+        d['password_hash'] = h
+        if key_secret:
+            d['secret'] = c['secret']
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+        os.chown(tmp, uid, gid)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    run(['systemctl', 'try-restart', 'hata', 'vidbox'], 60)
+    print('Готово. Увійди з новим паролем; телефони й апка попросять його ще раз.')
+    return 0
+
+
 ACTIONS = {
     'ping': lambda a: {'pong': True},
     'status': do_status,
@@ -369,6 +449,8 @@ ACTIONS = {
     'power': do_power,
     'tailscale': do_tailscale,
     'update': do_update,
+    'update_check': do_update_check,
+    'journal': do_journal,
 }
 
 
@@ -427,12 +509,17 @@ def cli(argv):
     cmd = argv[0] if argv else 'help'
     if cmd == 'serve':
         return serve()
+    if cmd == 'password':
+        if os.geteuid():
+            print('Потрібні права: sudo gazda password')
+            return 1
+        return reset_password()
     simple = {'status': {'do': 'status'}, 'disks': {'do': 'disks'}, 'update': {'do': 'update'},
               'tailscale': {'do': 'tailscale', 'op': argv[1] if len(argv) > 1 else 'status'},
               'restart': {'do': 'service', 'name': argv[1] if len(argv) > 1 else 'vidbox', 'op': 'restart'}}
     if cmd not in simple:
         print(__doc__.strip())
-        print('\nКоманди: status, disks, update, tailscale [up|down], restart [vidbox|hata|hata-screen]')
+        print('\nКоманди: status, disks, update, password, tailscale [up|down], restart [vidbox|hata|hata-screen]')
         return 0
     try:
         r = ask(simple[cmd])

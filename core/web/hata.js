@@ -1,12 +1,15 @@
 'use strict';
-// Hata: майстер першого налаштування і панель сервера. Без бібліотек і збирачів.
+// Hata: вхід, майстер першого налаштування і панель сервера. Без бібліотек і збирачів.
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const app = $('#app');
+const bar = $('#top');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 const size = b => { if (!b) return '0'; const u = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']; let i = 0; while (b >= 1024 && i < 4) { b /= 1024; i++; } return (b >= 100 || i < 3 ? Math.round(b) : b.toFixed(1)).toString().replace('.', ',') + ' ' + u[i]; };
+const short = b => { if (!b) return '0'; const u = ['B', 'K', 'M', 'G', 'T']; let i = 0; while (b >= 1024 && i < 4) { b /= 1024; i++; } return (b >= 10 || i === 0 ? Math.round(b) : b.toFixed(1)) + u[i]; };
 const uptime = s => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d ? `${d} д ${h} год` : h ? `${h} год ${m} хв` : `${m} хв`; };
+const typing = () => /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
 let HOST = 'hata';
 
 async function api(url, body) {
@@ -28,31 +31,91 @@ function toast(msg) {
   clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 4000);
 }
 
-const prompt = (path, cmd) => `<p class="prompt"><span class="u">[hata@${esc(HOST)} ${esc(path)}]$</span> <span class="c">${esc(cmd)}</span><span class="cur"></span></p>`;
-const win = (path, body, bold = '') => `<section class="win"><div class="wbar"><i></i><i></i><i></i><span>${esc(path)}<b>${esc(bold)}</b></span></div><div class="wbody">${body}</div></section>`;
-const meter = (used, total) => { const p = total ? Math.round(used / total * 100) : 0; return `<div class="meter"><i class="${p > 90 ? 'bad' : p > 75 ? 'warn' : ''}" style="width:${p}%"></i></div>`; };
+// ───────────────────────── кольорові схеми ─────────────────────────
+// [фон, акцент] — лише для кружечків-перемикачів; самі кольори в hata.css.
+const SCHEMES = {'чай': ['#191713', '#7cc6b1'], 'ніч': ['#1e1e2e', '#89b4fa'], 'lain': ['#1c1e25', '#b4c3f0'],
+  'ягода': ['#2a1022', '#f4a6d7'], 'nothing': ['#000', '#f2f2f2'], 'папір': ['#e9e1cf', '#2f7d6d']};
+const scheme = () => document.documentElement.dataset.scheme || 'чай';
+function setScheme(name, save) {
+  if (!SCHEMES[name]) return;
+  document.documentElement.dataset.scheme = name;
+  try { localStorage.setItem('hata_scheme', name); } catch (e) {}
+  $$('.schemes button').forEach(b => { b.classList.toggle('on', b.dataset.scheme === name); b.setAttribute('aria-pressed', b.dataset.scheme === name); });
+  $$('.schemes summary i').forEach(i => { i.style.setProperty('--b', SCHEMES[name][0]); i.style.setProperty('--a', SCHEMES[name][1]); });
+  $$('details.schemes').forEach(d => d.open = false);
+  if (save) api('/api/scheme', {scheme: name});
+}
+// Ряд кружечків (на вході) або компактне меню «колір» (у верхньому рядку).
+const schemeBtns = names => Object.entries(SCHEMES).map(([n, [b, a]]) =>
+  `<button type="button" data-scheme="${n}" title="${n}" aria-label="Схема ${n}" aria-pressed="${n === scheme()}" class="${n === scheme() ? 'on' : ''}" style="--b:${b};--a:${a}"><i></i>${names ? n : ''}</button>`).join('');
+const schemePicker = inline => inline
+  ? `<div class="schemes" role="group" aria-label="Кольорова схема">${schemeBtns(false)}</div>`
+  : `<details class="schemes"><summary title="Кольорова схема" aria-label="Кольорова схема"><i style="--b:${SCHEMES[scheme()][0]};--a:${SCHEMES[scheme()][1]}"></i></summary>` +
+    `<div class="pop" role="group" aria-label="Кольорова схема">${schemeBtns(true)}</div></details>`;
+function bindSchemes(save) { $$('.schemes button').forEach(b => b.onclick = () => setScheme(b.dataset.scheme, save)); }
+
+// ───────────────────────── дрібні будівельні блоки ─────────────────────────
+const who = () => `<span class="who"><b>хата</b><i>@</i>${esc(HOST)}<span class="cur" aria-hidden="true">▌</span></span>`;
+const prompt = (path, cmd) => `<p class="prompt"><span class="u">хата@${esc(HOST)}:${esc(path)}$</span> <span class="c">${esc(cmd)}</span></p>`;
+// Рамка з назвою в лінії: win('диски', тіло, {n: '²', c: 'yel', id: 'disks', cls: 'w2'})
+const win = (label, body, o = {}) => `<section class="win ${o.cls || ''}"${o.id ? ` id="${o.id}"` : ''}${o.c ? ` style="--c:var(--${o.c})"` : ''} aria-label="${esc(label)}">` +
+  `<div class="lbl">${o.n ? `<sup>${o.n}</sup>` : ''}${esc(label)}${o.badge ? `<span class="badge">${esc(o.badge)}</span>` : ''}</div><div class="wbody">${body}</div></section>`;
+// Сегментована смужка: до 60% — акцент, до 85% — жовтий, далі — червоний.
+const segs = (pct, n = 24, cls = '') => `<span class="segs ${cls}" aria-hidden="true">${Array.from({length: n}, (_, i) => {
+  const f = (i + .5) / n; return `<i class="${f > pct / 100 ? '' : f < .6 ? 'a' : f < .85 ? 'y' : 'r'}"></i>`; }).join('')}</span>`;
+const heat = v => v < 35 ? 'acc' : v < 60 ? 'yel' : 'red';
+
+// Точковий годинник 5×7.
+const FONT = {'0': '01110100011001110101110011000101110', '1': '00100011000010000100001000010001110', '2': '01110100010000100010001000100011111',
+  '3': '11110000010000101110000010000111110', '4': '00010001100101010010111110001000010', '5': '11111100001111000001000011000101110',
+  '6': '00110010001000011110100011000101110', '7': '11111000010001000100010000100001000', '8': '01110100011000101110100011000101110',
+  '9': '01110100011000101111000010001001100', ':': '0010100', ' ': '0000000'};
+const dots = (text, big) => `<div class="dots${big ? ' big' : ''}" role="img" aria-label="${esc(text.replace(' ', ':'))}">${[...text].map(ch => {
+  const bits = FONT[ch] || FONT[' ']; const cols = bits.length / 7;
+  return `<div style="grid-template-columns:repeat(${cols},var(--d,7px))">${[...bits].map(b => `<i${b === '1' ? ' class="on"' : ''}></i>`).join('')}</div>`; }).join('')}</div>`;
+const hhmm = (sep = ':') => { const d = new Date(); return String(d.getHours()).padStart(2, '0') + sep + String(d.getMinutes()).padStart(2, '0'); };
+const weekday = () => new Date().toLocaleDateString('uk-UA', {weekday: 'long'}).toUpperCase();
+const today = () => new Date().toLocaleDateString('uk-UA', {day: 'numeric', month: 'long', year: 'numeric'});
+setInterval(() => {   // годинники на сторінці; двокрапка блимає
+  const blink = new Date().getSeconds() % 2 ? ' ' : ':';
+  $$('[data-clock]').forEach(el => el.innerHTML = dots(hhmm(blink), el.dataset.clock === 'big'));
+  $$('.clock').forEach(el => el.textContent = hhmm());
+}, 1000);
 
 // ───────────────────────── старт ─────────────────────────
 let STATE = null;
 async function start() {
+  stopPanel();
   STATE = await api('/api/state');
-  if (STATE.ok === false && !STATE.setup) { app.innerHTML = win('~/', `<p>Сервер Hata не відповідає. Спробуй оновити сторінку за хвилину.</p>`); return; }
+  if (STATE.ok === false && !STATE.setup) { app.innerHTML = `<div class="wrap">${win('помилка', '<p>Сервер Hata не відповідає. Спробуй оновити сторінку за хвилину.</p>', {c: 'red'})}</div>`; return; }
   HOST = STATE.host || 'hata';
-  $('#hostTag').textContent = HOST + (STATE.demo ? ' · демо' : '');
-  document.title = STATE.setup ? `Hata — ${HOST}` : 'Hata — налаштування';
+  if (STATE.scheme) setScheme(STATE.scheme);
+  document.title = STATE.setup ? `Хата — ${HOST}` : 'Хата — налаштування';
   if (STATE.hasPassword && !STATE.authed) return login();
   if (!STATE.setup) return wizard(STATE.hasPassword ? Math.max(W.step, 2) : W.step);
   return panel();
 }
 
+// ───────────────────────── вхід ─────────────────────────
 function login() {
-  app.innerHTML = prompt('~', 'login') + `<h1 class="title">Вхід</h1><p class="lead">Пароль, який ти задав під час налаштування Hata.</p>` +
-    win('~/', `<form id="lf"><label class="f" for="pw">пароль</label><input id="pw" type="password" autocomplete="current-password" autofocus>
-      <div class="err" id="le"></div><div class="acts"><button class="btn primary">Увійти</button></div></form>`, 'login');
+  bar.hidden = true;
+  app.innerHTML = `<div class="login">
+    <div data-clock="big">${dots(hhmm(), true)}</div>
+    <p class="day">${weekday()}</p><p class="date">${today()}</p>
+    ${win('вхід', `<h1>${who()}</h1><div class="dash"></div>
+      <dl class="kv"><dt>хост</dt><dd>${esc(HOST)}</dd><dt>адреса</dt><dd>${esc(location.host)}</dd><dt>пароль</dt><dd>той, що задав у майстрі</dd></dl>
+      <form id="lf"><label class="field"><span aria-hidden="true">❯</span><input id="pw" type="password" autocomplete="current-password" placeholder="пароль" aria-label="Пароль" autofocus></label>
+      <button class="btn primary">Увійти</button></form><div class="err" id="le" role="alert"></div>`)}
+    <div class="foot">${schemePicker(true)}<span>забув пароль — <code>sudo gazda password</code> на самій Хаті</span></div>
+  </div>`;
+  let picked = false;     // вибрав колір до входу — збережемо його після входу
+  $$('.schemes button').forEach(x => x.onclick = () => { picked = true; setScheme(x.dataset.scheme, false); });
   $('#lf').onsubmit = async e => {
     e.preventDefault();
+    $('#le').textContent = '';
     const r = await api('/api/login', {password: $('#pw').value});
-    if (r.ok) start(); else $('#le').textContent = r.error || 'Не вдалося увійти';
+    if (r.ok) { if (picked) await api('/api/scheme', {scheme: scheme()}); start(); }
+    else $('#le').textContent = r.error || 'Не вдалося увійти';
   };
 }
 
@@ -60,11 +123,19 @@ function login() {
 const STEPS = ['вітання', 'пароль', 'диски', 'папки', 'tailscale', 'ноутбук', 'готово'];
 const W = Object.assign({step: 0, folders: [], anime: ''}, JSON.parse(sessionStorage.getItem('hata_wiz') || '{}'));
 const saveW = () => sessionStorage.setItem('hata_wiz', JSON.stringify(W));
+let fromPanel = false;    // крок майстра відкрито з панелі (диски, Tailscale): без кроків, «До панелі»
+
+function wizTop() {
+  bar.hidden = false;
+  bar.innerHTML = `${who()}<span class="tag">${fromPanel ? 'панель' : 'налаштування'}</span><span class="sp"></span>${schemePicker()}`;
+  bindSchemes(!!STATE.hasPassword);
+}
 
 function frame(i, title, lead, body) {
-  const steps = STEPS.map((s, k) => `<span class="${k === i ? 'on' : k < i ? 'done' : ''}">${k < i ? '✓ ' : ''}${s}</span>`).join('');
-  return prompt('~/setup', `hata-setup --step ${i + 1}/${STEPS.length}`) + `<div class="steps">${steps}</div>` +
-    `<h1 class="title">${title}</h1><p class="lead">${lead}</p>` + body;
+  wizTop();
+  const steps = fromPanel ? '' : `<div class="steps">${STEPS.map((s, k) => `<span class="${k === i ? 'on' : k < i ? 'done' : ''}">${k < i ? '✓ ' : ''}${s}</span>`).join('')}</div>`;
+  return `<div class="wrap">${prompt('~/setup', fromPanel ? `hata ${STEPS[i]}` : `hata-setup --step ${i + 1}/${STEPS.length}`)}${steps}` +
+    `<h1 class="title">${title}</h1><p class="lead">${lead}</p>${body}</div>`;
 }
 
 function wizard(i) {
@@ -74,24 +145,27 @@ function wizard(i) {
 }
 const next = () => wizard(W.step + 1);
 const back = () => wizard(Math.max(STATE.hasPassword ? 2 : 0, W.step - 1));
-const nav = (nextLabel = 'Далі', extra = '') => `<div class="acts">${W.step > (STATE.hasPassword ? 2 : 0) ? '<button class="btn ghost" id="back">Назад</button>' : ''}<span class="sp"></span>${extra}<button class="btn primary" id="next">${nextLabel}</button></div>`;
+const nav = (nextLabel = 'Далі', extra = '') => fromPanel
+  ? `<div class="acts"><span class="sp"></span>${extra}<button class="btn primary" id="next">До панелі</button></div>`
+  : `<div class="acts">${W.step > (STATE.hasPassword ? 2 : 0) ? '<button class="btn ghost" id="back">Назад</button>' : ''}<span class="sp"></span>${extra}<button class="btn primary" id="next">${nextLabel}</button></div>`;
 function bindNav(onNext) {
   if ($('#back')) $('#back').onclick = back;
-  $('#next').onclick = onNext || next;
+  $('#next').onclick = fromPanel ? () => { clearTimeout(tsTimer); fromPanel = false; panel(); } : (onNext || next);
 }
+function openFromPanel(step) { stopPanel(); fromPanel = true; W.step = step; ({2: stepDisks, 4: stepTailscale})[step](); window.scrollTo(0, 0); }
 
 function stepHello() {
-  app.innerHTML = frame(0, 'Привіт, це Hata', 'Твій домашній сервер майже готовий. Кілька кроків — і він сам підключить диски, запустить VidBox і, якщо захочеш, буде доступний звідусіль через Tailscale.',
-    win('~/setup/', `<dl class="kv"><dt>сервер</dt><dd>${esc(HOST)}</dd><dt>адреса</dt><dd>${esc(location.host)}</dd><dt>кроки</dt><dd>пароль → диски → папки → Tailscale → ноутбук</dd></dl>
-      <p class="note">Будь-який крок можна змінити пізніше в панелі.</p>`, 'readme') + nav('Почати'));
+  app.innerHTML = frame(0, 'Привіт, це Хата', 'Твій домашній сервер майже готовий. Кілька кроків — і він сам підключить диски, запустить VidBox і, якщо захочеш, буде доступний звідусіль через Tailscale.',
+    win('про хату', `<dl class="kv"><dt>сервер</dt><dd>${esc(HOST)}</dd><dt>адреса</dt><dd>${esc(location.host)}</dd><dt>кроки</dt><dd>пароль → диски → папки → Tailscale → ноутбук</dd></dl>
+      <p class="note">Будь-який крок можна змінити пізніше в панелі. Колір — кружечки вгорі праворуч.</p>`) + nav('Почати'));
   bindNav();
 }
 
 function stepPassword() {
-  app.innerHTML = frame(1, 'Пароль', 'Один пароль на все: панель Hata, VidBox і Android-апку. Кожен пристрій вводить його один раз.',
-    win('~/setup/', `<form id="pf"><label class="f" for="p1">новий пароль</label><input id="p1" type="password" autocomplete="new-password" autofocus>
+  app.innerHTML = frame(1, 'Пароль', 'Один пароль на все: панель Хати, VidBox і Android-апку. Кожен пристрій вводить його один раз.',
+    win('пароль', `<form id="pf"><label class="f" for="p1">новий пароль</label><input id="p1" type="password" autocomplete="new-password" autofocus>
       <label class="f" for="p2">ще раз</label><input id="p2" type="password" autocomplete="new-password">
-      <div class="err" id="pe"></div></form>`, 'password') + nav('Зберегти'));
+      <div class="err" id="pe" role="alert"></div></form>`) + nav('Зберегти'));
   bindNav(async () => {
     const a = $('#p1').value, b = $('#p2').value;
     if (a.length < 6) return $('#pe').textContent = 'Щонайменше 6 символів';
@@ -99,14 +173,15 @@ function stepPassword() {
     const r = await api('/api/setup/password', {password: a});
     if (!r.ok) return $('#pe').textContent = r.error;
     STATE.hasPassword = true; STATE.authed = true;
+    api('/api/scheme', {scheme: scheme()});
     next();
   });
   $('#pf').onsubmit = e => { e.preventDefault(); $('#next').click(); };
 }
 
 async function stepDisks() {
-  app.innerHTML = frame(2, 'Диски', 'Обери диски з фільмами й аніме. Hata підключатиме їх сама після кожного вмикання — за назвою, тож шляхи не зміняться, навіть якщо переставиш кабелі.',
-    win('~/setup/', '<p class="note"><span class="spin"></span> Шукаю диски…</p>', 'disks') + nav());
+  app.innerHTML = frame(2, 'Диски', 'Обери диски з фільмами й аніме. Хата підключатиме їх сама після кожного вмикання — за назвою, тож шляхи не зміняться, навіть якщо переставиш кабелі.',
+    win('диски', '<p class="note"><span class="spin"></span> Шукаю диски…</p>', {c: 'yel'}) + nav());
   bindNav();
   const r = await api('/api/disks');
   const list = (r.disks || []);
@@ -118,8 +193,8 @@ async function stepDisks() {
        d.name ? `<span class="tag ok">/srv/disks/${esc(d.name)}</span>` :
        `<input type="text" value="${esc(name)}" aria-label="Назва диска" data-name="${esc(d.uuid)}"><button class="btn" data-mount="${esc(d.uuid)}">Підключити</button>`) +
       '</div></div>';
-  }).join('') : '<p class="note">Дисків з даними не знайдено. Підключи диск і натисни «Оновити».</p>';
-  $('.win .wbody').innerHTML = body + `<div class="err" id="de"></div><div class="acts"><button class="btn ghost" id="rescan">Оновити список</button></div>`;
+  }).join('') : '<p class="note">Дисків з даними не знайдено. Підключи диск і натисни «Оновити список».</p>';
+  $('.win .wbody').innerHTML = body + `<div class="err" id="de" role="alert"></div><div class="acts"><button class="btn ghost" id="rescan">Оновити список</button></div>`;
   $('#rescan').onclick = stepDisks;
   $$('[data-mount]').forEach(b => b.onclick = async () => {
     const uuid = b.dataset.mount, name = $(`[data-name="${uuid}"]`).value.trim().toLowerCase();
@@ -143,8 +218,8 @@ async function stepFolders(path) {
     (r.dirs || []).map(d => `<div class="row"><div class="l"><b><a href="#" data-go="${esc(d.path)}">${esc(d.name)}/</a></b></div></div>`).join('') ||
     '<p class="note">Тут порожньо. Спершу підключи диск на попередньому кроці.</p>';
   app.innerHTML = frame(3, 'Папки', 'Покажи, де лежать відео, а де аніме. Аніме буде окремим розділом з постерами: кожна підпапка — тайтл, файли в ній — серії.',
-    win('~/setup/', chosen ? chosen : '<p class="note">Поки нічого не вибрано.</p>', 'library') +
-    win('~/setup/', `<div class="crumbs">${esc(r.path || 'диски')}</div>${dirs}${here}<div class="err" id="fe"></div>`, 'browse') + nav());
+    win('вибрано', chosen ? chosen : '<p class="note">Поки нічого не вибрано.</p>') +
+    win('огляд', `<div class="crumbs">${esc(r.path || 'диски')}</div>${dirs}${here}<div class="err" id="fe" role="alert"></div>`, {c: 'yel'}) + nav());
   bindNav(() => { if (!W.folders.length) return $('#fe').textContent = 'Обери хоча б одну папку з відео'; next(); });
   $$('[data-go]').forEach(a => a.onclick = e => { e.preventDefault(); stepFolders(a.dataset.go); });
   $$('[data-rm]').forEach(b => b.onclick = () => { W.folders = W.folders.filter(f => f !== b.dataset.rm); saveW(); stepFolders(r.path); });
@@ -160,7 +235,7 @@ async function stepFolders(path) {
   };
 }
 
-let tsTimer, tsFromPanel = false;
+let tsTimer;
 async function stepTailscale() {
   clearTimeout(tsTimer);
   const st = await api('/api/tailscale');
@@ -169,33 +244,32 @@ async function stepTailscale() {
     ? `<p><span class="okdot"></span>Підключено як <b class="link">${esc(st.name)}</b></p><p class="note">Тепер VidBox і панель доступні звідусіль, де на пристрої ввімкнено Tailscale.</p>`
     : st.url
       ? `<p>Відкрий посилання й увійди у свій акаунт Tailscale — і сервер з'явиться у твоїй мережі:</p><p><a class="btn primary" href="${esc(st.url)}" target="_blank" rel="noopener">Увійти в Tailscale</a></p><p class="note link">${esc(st.url)}</p><p class="note"><span class="spin"></span> Чекаю на вхід…</p>`
-      : `<p>Tailscale — приватна мережа між твоїми пристроями. З ним VidBox працює не лише вдома, а й з мобільного інтернету, без відкритих портів на роутері.</p><div class="acts"><button class="btn" id="tsUp">Підключити Tailscale</button></div><div class="err" id="te"></div>`;
-  app.innerHTML = frame(4, 'Доступ звідусіль', 'Необов’язково — можна пропустити й увімкнути пізніше в панелі.', win('~/setup/', body, 'tailscale') + nav(running ? 'Далі' : 'Пропустити'));
+      : `<p>Tailscale — приватна мережа між твоїми пристроями. З ним VidBox працює не лише вдома, а й з мобільного інтернету, без відкритих портів на роутері.</p><div class="acts"><button class="btn" id="tsUp">Підключити Tailscale</button></div><div class="err" id="te" role="alert"></div>`;
+  app.innerHTML = frame(4, 'Доступ звідусіль', 'Необов’язково — можна пропустити й увімкнути пізніше в панелі.', win('tailscale', body, {c: 'vio'}) + nav(running ? 'Далі' : 'Пропустити'));
   bindNav(() => { clearTimeout(tsTimer); next(); });
-  if (tsFromPanel) {   // відкрили з панелі: без кроків майстра, «Далі» веде назад у панель
-    $('.steps').remove(); if ($('#back')) $('#back').remove();
-    $('#next').textContent = 'До панелі';
-    $('#next').onclick = () => { clearTimeout(tsTimer); tsFromPanel = false; panel(); };
-  }
   if ($('#tsUp')) $('#tsUp').onclick = async () => {
     $('#tsUp').disabled = true; $('#tsUp').innerHTML = '<span class="spin"></span> Встановлюю й запускаю…';
     const r = await api('/api/tailscale', {op: 'up'});
     if (r.ok === false) { $('#te').textContent = r.error; $('#tsUp').disabled = false; $('#tsUp').textContent = 'Спробувати ще'; return; }
     stepTailscale();
   };
-  if (!running && st.url) tsTimer = setTimeout(() => { if (W.step === 4 || tsFromPanel) stepTailscale(); }, 3000);
+  if (!running && st.url) tsTimer = setTimeout(() => { if (W.step === 4) stepTailscale(); }, 3000);
 }
 
 async function stepLaptop() {
   const st = await api('/api/status');
   const b = st.battery;
   const lim = b && b.limitSupported ? `<div class="row"><div class="l"><b>Межа заряду батареї</b><small>Ноутбук весь час на зарядці — з межею 60–80% батарея живе в рази довше.</small></div>
-     <div class="r"><div class="seg" id="lim">${[60, 80, 100].map(v => `<button data-v="${v}" class="${(b.limit || 100) === v ? 'on' : ''}">${v}%</button>`).join('')}</div></div></div>` : '';
-  app.innerHTML = frame(5, 'Ноутбук', 'Сервер працює й із закритою кришкою — Hata вже це налаштувала.',
-    win('~/setup/', `<div class="row"><div class="l"><b>Закрита кришка</b><small>Ноутбук не засинає, екран гасне.</small></div><div class="r"><span class="tag ok">увімкнено</span></div></div>` +
+     <div class="r"><div class="seg" id="lim" role="group" aria-label="Межа заряду">${[60, 80, 100].map(v => `<button data-v="${v}" class="${(b.limit || 100) === v ? 'on' : ''}">${v}%</button>`).join('')}</div></div></div>` : '';
+  app.innerHTML = frame(5, 'Ноутбук', 'Сервер працює й із закритою кришкою — Хата вже це налаштувала.',
+    win('ноутбук', `<div class="row"><div class="l"><b>Закрита кришка</b><small>Ноутбук не засинає, екран гасне.</small></div><div class="r"><span class="tag ok">увімкнено</span></div></div>` +
       (b ? lim + `<div class="row"><div class="l"><b>Батарея</b><small>${b.ac ? 'від мережі' : 'від батареї'}</small></div><div class="r"><span class="tag">${b.pct}%</span></div></div>`
-         : `<div class="row"><div class="l"><b>Батарея</b><small>Не знайдено — схоже, це стаціонарний ПК.</small></div></div>`), 'laptop') + nav());
+         : `<div class="row"><div class="l"><b>Батарея</b><small>Не знайдено — схоже, це стаціонарний ПК.</small></div></div>`), {c: 'yel'}) + nav());
   bindNav();
+  bindLimit();
+}
+
+function bindLimit() {
   $$('#lim button').forEach(x => x.onclick = async () => {
     const r = await api('/api/battery', {value: +x.dataset.v});
     if (!r.ok) return toast(r.error);
@@ -204,68 +278,196 @@ async function stepLaptop() {
 }
 
 function stepDone() {
-  app.innerHTML = frame(6, 'Готово', 'Перевір і натисни «Завершити» — Hata запустить VidBox з твоїми папками.',
-    win('~/setup/', `<dl class="kv"><dt>відео</dt><dd>${W.folders.map(esc).join('<br>') || '—'}</dd><dt>аніме</dt><dd>${esc(W.anime) || 'не вибрано'}</dd><dt>пароль</dt><dd>встановлено</dd></dl><div class="err" id="ce"></div>`, 'summary') + nav('Завершити'));
+  app.innerHTML = frame(6, 'Готово', 'Перевір і натисни «Завершити» — Хата запустить VidBox з твоїми папками.',
+    win('підсумок', `<dl class="kv"><dt>відео</dt><dd>${W.folders.map(esc).join('<br>') || '—'}</dd><dt>аніме</dt><dd>${esc(W.anime) || 'не вибрано'}</dd><dt>пароль</dt><dd>встановлено</dd><dt>колір</dt><dd>${esc(scheme())}</dd></dl><div class="err" id="ce" role="alert"></div>`) + nav('Завершити'));
   bindNav(async () => {
     $('#next').disabled = true; $('#next').innerHTML = '<span class="spin"></span> Запускаю…';
     const r = await api('/api/finish', {folders: W.folders, anime: W.anime});
     if (!r.ok) { $('#ce').textContent = r.error || 'Не вдалося'; $('#next').disabled = false; $('#next').textContent = 'Завершити'; return; }
     sessionStorage.removeItem('hata_wiz');
-    STATE.setup = true; toast('Hata налаштована');
+    STATE.setup = true; toast('Хата налаштована');
     panel();
   });
 }
 
 // ───────────────────────── панель ─────────────────────────
-let panelTimer;
+const SECTIONS = [['1', 'огляд', 'sys'], ['2', 'диски', 'disks'], ['3', 'служби', 'svc'], ['4', 'мережа', 'net'], ['5', 'живлення', 'pwr'], ['6', 'журнал', 'log']];
+const SVC = {vidbox: 'відео й аніме', hata: 'ця панель', 'hata-screen': 'екран на ноутбуці'};
+const HIST = {cpu: [], net: [], lastNet: null};
+let panelTimer, liveTimer, LAST = null, UPD = null;
+
+function stopPanel() { clearTimeout(panelTimer); clearTimeout(liveTimer); }
+
+function panelTop(s) {
+  bar.hidden = false;
+  const b = s.battery;
+  bar.innerHTML = `${who()}<nav aria-label="Розділи">${SECTIONS.map(([k, l, id]) => `<a href="#${id}" data-k="${k}"><span>${k}</span>${l}</a>`).join('')}` +
+    `<a class="ext" href="${esc(vidboxUrl(s))}">VidBox ↗</a></nav><span class="sp"></span>
+    <dl class="stats"><div><dt>cpu</dt><dd id="tCpu">—</dd></div><div><dt>ram</dt><dd id="tRam">—</dd></div><div><dt>t°</dt><dd id="tTemp">—</dd></div>` +
+    (b ? `<div><dt>бат</dt><dd style="display:flex;gap:6px;align-items:center">${segs(b.pct, 10).replace('class="segs ', 'style="width:52px;flex:none" class="segs ')}${b.pct}%</dd></div>` : '') +
+    `<div><dt class="sr">час</dt><dd class="clock">${hhmm()}</dd></div></dl>${schemePicker()}`;
+  bindSchemes(true);
+  $$('.top nav a[data-k]').forEach(a => a.onclick = () => { $$('.top nav a').forEach(x => x.classList.toggle('on', x === a)); });
+}
+const vidboxUrl = s => `${location.protocol}//${location.hostname}:${s.vidbox.port}`;
+
 async function panel() {
-  clearTimeout(panelTimer);
+  stopPanel();
+  fromPanel = false;
   const s = await api('/api/status');
-  if (s.ok === false) { app.innerHTML = prompt('~', 'gazda status') + win('~/', `<p class="err">${esc(s.error)}</p>`, 'error'); return; }
-  const vb = `${location.protocol}//${location.hostname}:${s.vidbox.port}`;
-  const svc = (n, t) => { const on = s.services[n] === 'active'; return `<div class="row"><div class="l"><b><span class="okdot ${on ? '' : 'off'}"></span>${t}</b><small>${esc(s.services[n] || '—')}</small></div><div class="r"><button class="btn ghost" data-svc="${n}">Перезапустити</button></div></div>`; };
+  if (s.ok === false) { app.innerHTML = `<div class="wrap">${prompt('~', 'gazda status')}${win('помилка', `<p class="err">${esc(s.error)}</p>`, {c: 'red'})}</div>`; return; }
+  LAST = s;
+  panelTop(s);
   const ts = s.tailscale || {};
-  const bat = s.battery ? `${s.battery.pct}% · ${s.battery.ac ? 'від мережі' : 'від батареї'}${s.battery.limit && s.battery.limit < 100 ? ` · межа ${s.battery.limit}%` : ''}` : '—';
-  const used = s.mem.total - s.mem.avail;
-  app.innerHTML = prompt('~', 'gazda status') + `<h1 class="title">${esc(s.host)}</h1><p class="lead">${esc(s.os)} · працює ${uptime(s.uptime)}</p>` +
-    `<div class="acts" style="margin:-8px 0 18px"><a class="btn primary" href="${vb}">Відкрити VidBox</a></div>` +
-    '<div class="grid">' +
-    win('~/', `<dl class="kv"><dt>процесор</dt><dd>${s.cpus} ядер · навантаження ${s.load.toFixed(2).replace('.', ',')}</dd>
-      <dt>температура</dt><dd>${s.temp != null ? s.temp.toString().replace('.', ',') + ' °C' : '—'}</dd>
-      <dt>пам’ять</dt><dd>${size(used)} з ${size(s.mem.total)}${meter(used, s.mem.total)}</dd>
-      <dt>батарея</dt><dd>${bat}</dd><dt>версія</dt><dd>${esc(s.version || '—')}</dd></dl>`, 'system') +
-    win('~/', ([{name: 'система', path: '/', mounted: true, ...(s.root || {})}].concat(s.disks)).map(d => `<div class="row"><div class="l"><b>${esc(d.name)}</b>
-      <small>${d.mounted ? `${size(d.total - d.free)} з ${size(d.total)} · вільно ${size(d.free)}` : 'не підключено'}</small>${d.mounted ? meter(d.total - d.free, d.total) : ''}</div>
-      ${d.mounted ? '' : '<div class="r"><span class="tag bad">відключено</span></div>'}</div>`).join(''), 'disks') +
-    win('~/', svc('vidbox', 'VidBox') + svc('hata-screen', 'Екран ноутбука'), 'services') +
-    win('~/', `<dl class="kv"><dt>вдома</dt><dd>${(s.ips || []).map(esc).join(', ') || '—'}</dd>
+  const ver = (s.version || '').split(' ')[0] || '—';
+
+  const sys = `<div class="when"><div data-clock="small">${dots(hhmm())}</div><p><span class="wd">${weekday()}</span><span class="dt">${today()}</span></p></div>
+    <dl class="kv"><dt>хост</dt><dd>${esc(s.host)}${(s.ips || []).length ? ' · ' + s.ips.map(esc).join(', ') : ''}</dd>
+      <dt>працює</dt><dd>${uptime(s.uptime)}</dd><dt>система</dt><dd>${esc(s.os)} · Хата ${esc(ver)}</dd></dl>
+    <div class="gh"><span>cpu · ${s.cpus} ядер</span><b id="cpuNow">—</b></div><div class="graph" id="cpuG" aria-hidden="true"></div>
+    <div class="meters" style="margin-top:14px" id="mem"></div>`;
+
+  const disks = [{name: 'система', path: '/', mounted: true, ...(s.root || {})}].concat(s.disks || []);
+  const dsk = `<div class="disks"><div class="drow h"><span>диск</span><span>заповнено</span><span style="text-align:right">зайнято</span></div>` +
+    disks.map(d => {
+      const used = (d.total || 0) - (d.free || 0), p = d.total ? used / d.total * 100 : 0;
+      return `<div class="drow"><span class="n"><b>${esc(d.name)}</b><small>${esc(d.path || '')}</small></span>` +
+        (d.mounted ? `${segs(p, 30)}<span class="v">${size(used)} <span>/ ${size(d.total)}</span></span>`
+                   : `<span class="note" style="margin:0">диск не знайдено — він вимкнений або від'єднаний</span><span class="v"><span class="tag bad">відключено</span></span>`) + '</div>';
+    }).join('') + `</div><div class="dock"><span>Новий диск у доці чи USB? Його можна підключити тут.</span><button class="btn" id="findDisks">Знайти диски</button></div>`;
+
+  const svcRow = (name, desc, state, btns) => `<div class="row svc ${state === 'active' ? '' : 'off'}"><div class="l"><b><span class="okdot ${state === 'active' ? '' : 'off'}"></span>${esc(name)}</b><small>${esc(desc)}</small></div>` +
+    `<div class="r"><span class="st">${state === 'active' ? 'працює' : esc(state || 'зупинена')}</span>${btns}</div></div>`;
+  const svc = Object.entries(s.services || {}).map(([n, st]) => svcRow(n, SVC[n] || '', st, n === 'hata' ? '' :
+      `<button class="btn" data-op="${st === 'active' ? 'stop' : 'start'}" data-name="${n}" aria-label="${st === 'active' ? 'Зупинити' : 'Запустити'} ${n}">${st === 'active' ? '■' : '▶'}</button>` +
+      `<button class="btn" data-svc="${n}" aria-label="Перезапустити ${n}">↻</button>`)).join('') +
+    svcRow('tailscale', ts.state === 'Running' ? 'доступ звідусіль' : ts.installed ? 'не підключено' : 'не встановлено', ts.state === 'Running' ? 'active' : 'вимкнено', '') +
+    `<div class="row svc"><div class="l"><b><span class="okdot always"></span>gazda</b><small>керує системою, не зупиняється</small></div><div class="r"><span class="st" style="color:var(--yel)">завжди</span></div></div>`;
+
+  const net = `<dl class="kv"><dt>вдома</dt><dd>${(s.ips || []).map(esc).join(', ') || '—'}</dd><dt>ім'я</dt><dd>${esc(s.host)}.local</dd>
       <dt>tailscale</dt><dd>${ts.state === 'Running' ? `<span class="okdot"></span>${esc(ts.name)}` : ts.installed ? 'не підключено' : 'не встановлено'}</dd></dl>
-      ${ts.state === 'Running' ? '' : '<div class="acts"><button class="btn" id="tsOn">Підключити Tailscale</button></div>'}`, 'network') +
-    '</div>' +
-    win('~/', `<div class="acts" style="margin-top:0"><button class="btn" id="upd">Оновити Hata і VidBox</button><span class="sp"></span>
-      <button class="btn danger" data-power="reboot">Перезавантажити</button><button class="btn danger" data-power="poweroff">Вимкнути</button></div>
-      <p class="note">Оновлення беруть нову версію з GitHub; якщо вона не запуститься, Hata сама повернеться на попередню.</p>`, 'actions');
-  $$('[data-svc]').forEach(b => b.onclick = async () => { b.disabled = true; const r = await api('/api/service', {name: b.dataset.svc, op: 'restart'}); toast(r.ok ? 'Перезапущено' : r.error); panel(); });
-  $$('[data-power]').forEach(b => b.onclick = async () => {
-    const off = b.dataset.power === 'poweroff';
+    <div class="gh"><span>трафік</span><b id="netNow">—</b></div><div class="graph net" id="netG" aria-hidden="true"></div>
+    ${ts.state === 'Running' ? '' : '<div class="acts"><button class="btn" id="tsOn">Підключити Tailscale</button></div>'}`;
+
+  const b = s.battery;
+  const pwr = (b ? `<div class="gh" style="margin-top:0"><span>батарея · ${b.ac ? 'від мережі' : 'від батареї'}</span><b>${b.pct}%</b></div>${segs(b.pct, 20, 'tall')}` +
+      (b.limitSupported ? `<p class="note" style="margin-top:16px">заряджати до</p><div class="seg" id="lim" role="group" aria-label="Межа заряду" style="margin-top:6px">${[60, 80, 100].map(v => `<button data-v="${v}" class="${(b.limit || 100) === v ? 'on' : ''}">${v}%</button>`).join('')}</div>` : '')
+      : '<p class="note" style="margin-top:0">Батареї немає — живлення від мережі.</p>') +
+    `<p class="note" style="margin-top:16px">кришка закрита — <span style="color:var(--fg)">не засинає</span></p>
+    <div class="acts"><button class="btn" data-power="reboot">Перезавантажити</button><button class="btn danger" data-power="poweroff">Вимкнути</button></div>`;
+
+  app.innerHTML = `<div class="wrap wide">
+    <div class="cols">${win('система', sys, {n: '¹', id: 'sys'})}${win('диски', dsk, {n: '²', c: 'yel', id: 'disks', cls: 'w2'})}</div>
+    <div class="cols">${win('служби', svc, {n: '³', c: 'red', id: 'svc'})}${win('мережа', net, {n: '⁴', c: 'vio', id: 'net'})}${win('живлення', pwr, {n: '⁵', c: 'yel', id: 'pwr'})}</div>
+    <div class="cols">${win('журнал', '<p class="note" style="margin:0"><span class="spin"></span></p>', {n: '⁶', c: 'dim', id: 'log', cls: 'w9'})}<div id="updBox" style="flex:1 1 340px;min-width:0">${updBox()}</div></div>
+  </div>`;
+
+  $$('[data-svc]').forEach(x => x.onclick = () => service(x, x.dataset.svc, 'restart'));
+  $$('[data-op]').forEach(x => x.onclick = () => service(x, x.dataset.name, x.dataset.op));
+  $$('[data-power]').forEach(x => x.onclick = async () => {
+    const off = x.dataset.power === 'poweroff';
     if (!confirm(off ? 'Вимкнути сервер? Увімкнути знову можна лише кнопкою на ноутбуці.' : 'Перезавантажити сервер? Він повернеться за хвилину-дві.')) return;
-    const r = await api('/api/power', {op: b.dataset.power});
+    const r = await api('/api/power', {op: x.dataset.power});
     toast(r.ok ? (off ? 'Вимикаю…' : 'Перезавантажую…') : r.error);
   });
-  $('#upd').onclick = async () => {
-    $('#upd').disabled = true; $('#upd').innerHTML = '<span class="spin"></span> Оновлюю…';
-    const r = await api('/api/update', {});
-    toast(!r.ok ? r.error : r.changed ? `Оновлено до ${r.version}` : 'Уже встановлено останню версію');
-    setTimeout(panel, r.changed ? 4000 : 0);
-  };
-  if ($('#tsOn')) $('#tsOn').onclick = () => { W.step = 4; stepTailscaleFromPanel(); };
-  panelTimer = setTimeout(() => { if (STATE.setup && !document.hidden) panel(); }, 15000);
+  $('#findDisks').onclick = () => openFromPanel(2);
+  if ($('#tsOn')) $('#tsOn').onclick = () => openFromPanel(4);
+  bindLimit();
+  bindUpd();
+  live();
+  journal();
+  if (!UPD) checkUpdates();
+  panelTimer = setTimeout(() => { if (STATE.setup && !document.hidden && !typing()) panel(); else panelTimer = setTimeout(panel, 30000); }, 30000);
 }
 
-async function stepTailscaleFromPanel() {
-  clearTimeout(panelTimer);
-  tsFromPanel = true;
-  await stepTailscale();
+async function service(btn, name, op) {
+  btn.disabled = true;
+  const r = await api('/api/service', {name, op});
+  toast(r.ok ? ({restart: 'Перезапущено', stop: 'Зупинено', start: 'Запущено'})[op] + ': ' + name : r.error);
+  panel();
 }
+
+// Живі цифри: процесор, пам'ять, температура, трафік — раз на 2 секунди, поки сторінку видно.
+async function live() {
+  clearTimeout(liveTimer);
+  if (!document.hidden && $('#cpuG')) {
+    const l = await api('/api/live');
+    if (l.cpu != null) { HIST.cpu.push(l.cpu); HIST.cpu = HIST.cpu.slice(-48); }
+    if (l.net && HIST.lastNet) {
+      const dt = Math.max(1, l.time - HIST.lastNet.time) || 2;
+      HIST.net.push(Math.max(0, (l.net.rx - HIST.lastNet.rx) / dt)); HIST.net = HIST.net.slice(-40);
+    }
+    if (l.net) HIST.lastNet = {...l.net, time: l.time};
+    drawLive(l);
+  }
+  liveTimer = setTimeout(live, 2000);
+}
+
+function drawLive(l) {
+  if (!$('#cpuG')) return;
+  const pad = (a, n) => Array(Math.max(0, n - a.length)).fill(0).concat(a);
+  $('#cpuG').innerHTML = pad(HIST.cpu, 48).map(v => `<i style="height:${v}%;--c:var(--${heat(v)})"></i>`).join('');
+  const nmax = Math.max(64 * 1024, ...HIST.net);
+  $('#netG').innerHTML = pad(HIST.net, 40).map(v => `<i style="height:${Math.round(v / nmax * 100)}%"></i>`).join('');
+  const cur = HIST.net[HIST.net.length - 1] || 0;
+  $('#netNow').textContent = `↓ ${short(cur)}/с`;
+  if (l.cpu != null) { $('#cpuNow').textContent = l.cpu + '%'; $('#tCpu').textContent = l.cpu + '%'; }
+  const m = l.mem || {}, used = (m.total || 0) - (m.avail || 0);
+  const sw = l.swap || {}, swUsed = (sw.total || 0) - (sw.free || 0);
+  $('#tRam').textContent = `${short(used)}/${short(m.total)}`;
+  $('#tTemp').textContent = l.temp != null ? Math.round(l.temp) + '°C' : '—';
+  $('#mem').innerHTML = `<span>ram</span>${segs(m.total ? used / m.total * 100 : 0)}<span class="v">${size(used)} / ${size(m.total)}</span>` +
+    (sw.total ? `<span>swap</span>${segs(swUsed / sw.total * 100)}<span class="v">${size(swUsed)} / ${size(sw.total)}</span>` : '') +
+    (l.temp != null ? `<span>t°</span>${segs(Math.min(100, l.temp))}<span class="v">${Math.round(l.temp)} °C</span>` : '');
+}
+
+async function journal() {
+  const r = await api('/api/journal');
+  if (!$('#log')) return;
+  const lines = (r.lines || []).slice().reverse();
+  const col = u => u === 'gazda' ? 'yel' : u === 'hata' ? 'vio' : u === 'vidbox' ? 'acc' : 'dim';
+  $('#log .wbody').innerHTML = lines.length ? `<ol class="log">${lines.map(l => `<li><span class="t">${new Date(l.t * 1000).toLocaleTimeString('uk-UA')}</span>` +
+    `<span class="u" style="color:var(--${col(l.unit)})">${esc(l.unit)}</span><span>${esc(l.msg)}</span></li>`).join('')}</ol>`
+    : `<p class="note" style="margin:0">${esc(r.error || 'Журнал порожній.')}</p>`;
+}
+
+// Оновлення: що нового на GitHub, і кнопка, яка оновлює з відкатом.
+function updBox() {
+  const u = UPD;
+  if (!u) return win('оновлення', `<p class="note" style="margin:0"><span class="spin"></span> Дивлюсь, що нового на GitHub…</p><div class="acts"><button class="btn" id="upd" disabled>Оновити</button></div>`, {n: '⁷'});
+  if (u.ok === false) return win('оновлення', `<p class="note" style="margin:0">${esc(u.error)}</p><div class="acts"><button class="btn" id="upd" data-check>Перевірити ще раз</button></div>`, {n: '⁷'});
+  const ver = (u.version || '').split(' ')[0];
+  const c = u.commits || [];
+  if (!c.length) return win('оновлення', `<dl class="kv"><dt>хата</dt><dd>${esc(ver)} · остання версія</dd></dl><div class="acts"><button class="btn" id="upd" data-check>Перевірити</button></div>`, {n: '⁷'});
+  return win('оновлення', `<dl class="kv"><dt>зараз</dt><dd>${esc(ver)}</dd><dt>нових змін</dt><dd>${c.length}</dd></dl>
+    <ul class="commits">${c.slice(0, 6).map(x => `<li><b>${esc(x.hash)}</b><span>${esc(x.msg)}</span></li>`).join('')}${c.length > 6 ? `<li><span style="color:var(--dim)">і ще ${c.length - 6}</span></li>` : ''}</ul>
+    <p class="note">Якщо після оновлення щось не запуститься, Хата сама повернеться до ${esc(ver)}.</p>
+    <div class="acts"><button class="btn primary" id="upd">Оновити</button></div>`, {n: '⁷', cls: 'hot', badge: String(c.length)});
+}
+function bindUpd() {
+  const b = $('#upd'); if (!b) return;
+  b.onclick = async () => {
+    if (b.dataset.check !== undefined) { b.disabled = true; b.innerHTML = '<span class="spin"></span> Перевіряю…'; return checkUpdates(true); }
+    b.disabled = true; b.innerHTML = '<span class="spin"></span> Оновлюю…';
+    const r = await api('/api/update', {});
+    toast(!r.ok ? r.error : r.changed ? `Оновлено до ${r.version.split(' ')[0]}` : 'Уже встановлено останню версію');
+    UPD = null;
+    setTimeout(panel, r.changed ? 4000 : 0);
+  };
+}
+async function checkUpdates(force) {
+  UPD = await api('/api/updates' + (force ? '?force' : ''));
+  if ($('#updBox')) { $('#updBox').innerHTML = updBox(); bindUpd(); }
+}
+
+// Клавіші 1–6 — до розділу панелі, як у btop.
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || typing() || !$('#sys')) return;
+  const s = SECTIONS.find(x => x[0] === e.key);
+  if (!s) return;
+  $('#' + s[2]).scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
+  $$('.top nav a').forEach(a => a.classList.toggle('on', a.dataset.k === s[0]));
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden && $('#cpuG')) live(); });
 
 start();
