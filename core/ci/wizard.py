@@ -62,13 +62,15 @@ with sync_playwright() as p:
     m = b.new_page(viewport={'width': 390, 'height': 844}, device_scale_factor=2)
     m.context.add_cookies(pg.context.cookies())
     m.goto('http://localhost/'); m.wait_for_selector('#upd'); m.wait_for_timeout(600)
-    m.screenshot(path=f'{OUT}/{n[0] + 1:02d}-panel-phone.png', full_page=True)
+    n[0] += 1
+    m.screenshot(path=f'{OUT}/{n[0]:02d}-panel-phone.png', full_page=True)
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="папір"]'); shot('panel-paper')
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="чай"]')
     lp = b.new_context(viewport={'width': 1100, 'height': 800}).new_page()
     lp.on('pageerror', lambda e: errs.append(str(e)))
     lp.goto('http://localhost/'); lp.wait_for_selector('#pw'); lp.wait_for_timeout(600)
-    lp.screenshot(path=f'{OUT}/{n[0] + 2:02d}-login.png')
+    n[0] += 1
+    lp.screenshot(path=f'{OUT}/{n[0]:02d}-login.png')
     lp.fill('#pw', PW); lp.click('#lf button'); lp.wait_for_selector('#upd', timeout=30000)
     print('JS errors:', errs)
     b.close()

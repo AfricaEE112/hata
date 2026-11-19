@@ -390,7 +390,10 @@ def do_journal(a):
         msg = j.get('MESSAGE')
         if isinstance(msg, list):          # не-UTF-8 повідомлення journald віддає байтами
             msg = bytes(msg).decode('utf-8', 'replace')
-        unit = (j.get('_SYSTEMD_UNIT') or j.get('SYSLOG_IDENTIFIER') or '').replace('.service', '')
+        unit = j.get('_SYSTEMD_UNIT') or j.get('SYSLOG_IDENTIFIER') or ''
+        if unit == 'init.scope':         # повідомлення самого systemd про службу («Started vidbox.service…»)
+            unit = j.get('UNIT') or unit
+        unit = unit.replace('.service', '')
         lines.append({'t': int(j.get('__REALTIME_TIMESTAMP', 0)) // 1000000, 'unit': unit,
                       'msg': str(msg or '')[:300]})
     return {'lines': lines}
