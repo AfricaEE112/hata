@@ -12,6 +12,7 @@ import hmac
 import http.cookies
 import http.server
 import json
+import math
 import mimetypes
 import os
 import re
@@ -112,7 +113,7 @@ def demo_gazda(req):
         DEMO_STATE['mounted'][req['uuid']] = req['name']
         os.makedirs(os.path.join(DEMO_ROOT, req['name'], 'Фільми'), exist_ok=True)
         os.makedirs(os.path.join(DEMO_ROOT, req['name'], 'Аніме'), exist_ok=True)
-        return {'ok': True, 'path': os.path.join(DEMO_ROOT, req['name'])}
+        return {'ok': True, 'path': '/srv/disks/' + req['name']}
     if d == 'tailscale':   # off → (up) чекає входу → (up ще раз) працює
         if req.get('op') == 'up':
             DEMO_STATE['ts'] = 'Running' if DEMO_STATE['ts'] == 'NeedsLogin' else 'NeedsLogin'
@@ -133,16 +134,16 @@ def demo_gazda(req):
             {'t': now - 340, 'unit': 'gazda', 'msg': 'mount media → /srv/disks/media'},
             {'t': now - 2, 'unit': 'vidbox', 'msg': 'GET /api/anime 200'}]}
     if d == 'update_check':
-        return {'ok': True, 'version': 'eea496d 2026-11-18T22:10:00+02:00', 'commits': [
+        return {'ok': True, 'version': 'cd4bff2 2026-11-19T15:00:00+02:00', 'commits': [
             {'hash': 'a1f3c2e', 'msg': 'Аніме: опис і жанри в апці'},
             {'hash': '7b9e011', 'msg': 'Майстер: швидкі кліки по теках'}]}
     if d == 'status':
         return {'ok': True, 'host': 'hata', 'uptime': 93784, 'load': 0.42, 'cpus': 8, 'temp': 47.5,
-                'mem': {'total': 8 * G, 'avail': 5.6 * G}, 'os': 'Ubuntu 24.04.1 LTS', 'version': 'demo',
+                'mem': {'total': 8 * G, 'avail': 5.6 * G}, 'os': 'Ubuntu 24.04.1 LTS', 'version': 'cd4bff2 2026-11-19T15:00:00+02:00',
                 'battery': {'pct': 80, 'ac': True, 'status': 'Not charging', 'limit': DEMO_STATE['limit'], 'limitSupported': True},
                 'root': {'total': 512 * G, 'free': 430 * G},
-                'disks': [{'name': n, 'path': os.path.join(DEMO_ROOT, n), 'mounted': True, 'total': 2000 * G, 'free': 600 * G}
-                          for n in DEMO_STATE['mounted'].values()],
+                'disks': [{'name': n, 'path': '/srv/disks/' + n, 'mounted': True, 'total': 2000 * G, 'free': (600 + 900 * i) * G}
+                          for i, n in enumerate(DEMO_STATE['mounted'].values())],
                 'services': {'vidbox': 'active' if CONF.get('setup_done') else 'inactive', 'hata': 'active', 'hata-screen': 'active'}}
     return {'ok': True}
 
@@ -248,12 +249,17 @@ def live():
                     tx += int(v[8])
     except (OSError, ValueError):
         pass
+    if DEMO:                      # у демо — вигаданий трафік і температура, щоб графіки жили
+        temp = temp if temp is not None else 41.0
+        DEMO_NET[0] += int(abs(math.sin(time.time() / 9)) * 6e6 + secrets.randbelow(1500000))
+        rx += DEMO_NET[0]
     return {'cpu': cpu_percent(), 'temp': temp, 'time': int(time.time()), 'net': {'rx': rx, 'tx': tx},
             'mem': {'total': mem.get('MemTotal', 0), 'avail': mem.get('MemAvailable', 0)},
             'swap': {'total': mem.get('SwapTotal', 0), 'free': mem.get('SwapFree', 0)}}
 
 
 UPDATES = {'at': 0, 'data': None}
+DEMO_NET = [0]
 
 
 def updates(force=False):
@@ -265,6 +271,8 @@ def updates(force=False):
 
 
 def lan_ips():
+    if DEMO:
+        return ['192.168.1.20']
     ips = []
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -343,7 +351,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json({'ok': True})
         if p == '/api/state':
             return self.json({'setup': CONF['setup_done'], 'hasPassword': bool(CONF['password_hash']),
-                              'authed': self.authed(), 'host': socket.gethostname(), 'demo': DEMO,
+                              'authed': self.authed(), 'host': 'hata' if DEMO else socket.gethostname(), 'demo': DEMO,
                               'scheme': CONF.get('scheme', SCHEMES[0]), 'schemes': SCHEMES})
         if not p.startswith('/api/'):
             return self.static(p)

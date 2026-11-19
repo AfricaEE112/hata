@@ -200,3 +200,4 @@ dl.kv dt{color:var(--yel)}dl.kv dd{margin:0;overflow-wrap:anywhere}
 .top[hidden]{display:none}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .win[id]{scroll-margin-top:72px}
+.when .dots i:not(.on){opacity:.6}
