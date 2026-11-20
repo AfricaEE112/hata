@@ -52,6 +52,9 @@ with sync_playwright() as p:
         sh(f'sudo mkdir -p "/srv/disks/media/IMG.Manga/Тест/Chapter {ch:03d}"')
         for pgn in (1, 2, 3):
             sh(f'sudo ffmpeg -nostdin -v error -y -f lavfi -i "testsrc2=s=600x900" -frames:v 1 "/srv/disks/media/IMG.Manga/Тест/Chapter {ch:03d}/{pgn}.webp"')
+    for v in (1, 2):    # томи в окремих теках — мають зібратись в один тайтл
+        sh(f'sudo mkdir -p "/srv/disks/media/IMG.Manga/Серія Vol. 0{v}"')
+        sh(f'sudo ffmpeg -nostdin -v error -y -f lavfi -i "testsrc2=s=600x900" -frames:v 1 "/srv/disks/media/IMG.Manga/Серія Vol. 0{v}/1.jpg"')
     sh('cd "/srv/disks/media/IMG.Manga/Тест/Chapter 001" && sudo python3 -c "import zipfile,glob; z=zipfile.ZipFile(\'/srv/disks/media/IMG.Manga/Архів.zip\',\'w\'); [z.write(f) for f in glob.glob(\'*.webp\')]"')
 
     pg.click('#next'); pg.wait_for_selector('[data-go]')
@@ -123,11 +126,11 @@ assert '/srv/disks/media/IMG.Manga' in st.get('mangaSuggest', []), 'теку з 
 assert get('http://localhost:8800/api/settings', {'manga_folder': '/srv/disks/media/IMG.Manga'}, cookie=ck)['ok']
 for i in range(20):
     manga = get('http://localhost:8800/api/manga', cookie=ck)
-    if len(manga['titles']) == 2:
+    if len(manga['titles']) == 3:
         break
     time.sleep(1)
 print('VidBox manga:', [(t['title'], t['n'], t['pages']) for t in manga['titles']])
-assert sorted((t['title'], t['n'], t['pages']) for t in manga['titles']) == [('Архів', 1, 3), ('Тест', 2, 6)], 'манга не підхопилась'
+assert sorted((t['title'], t['n'], t['pages']) for t in manga['titles']) == [('Архів', 1, 3), ('Серія', 2, 2), ('Тест', 2, 6)], 'манга не підхопилась'
 t = next(x for x in manga['titles'] if x['title'] == 'Тест')
 mt = get('http://localhost:8800/api/manga/t/' + t['tid'], cookie=ck)
 cid = mt['chapters'][1]['cid']

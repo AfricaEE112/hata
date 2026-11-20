@@ -1088,10 +1088,12 @@ function mgProgress(t) {
   if (t.single) return t.cont ? t.cont.page / t.cont.pages : (t.read ? 1 : 0);
   return Math.min(1, (t.read + (t.cont && t.cont.pages ? (t.cont.page - 1) / t.cont.pages : 0)) / t.n);
 }
+// томи, зібрані з окремих тек, називаємо томами, а не розділами
+const mgUnits = (t, n) => `${n} ${t.vols ? plural(n, 'том', 'томи', 'томів') : plural(n, 'розділ', 'розділи', 'розділів')}`;
 function mgSub(t) {
-  if (t.read >= t.n) return t.single ? `${t.pages} стор. · прочитано` : `${t.n} ${plural(t.n, 'розділ', 'розділи', 'розділів')} · прочитано`;
+  if (t.read >= t.n) return t.single ? `${t.pages} стор. · прочитано` : `${mgUnits(t, t.n)} · прочитано`;
   if (t.single) return t.cont ? `стор. ${t.cont.page} / ${t.pages}` : `${t.pages} ${plural(t.pages, 'сторінка', 'сторінки', 'сторінок')}`;
-  return t.lastAt ? `гл. ${t.read} / ${t.n}` : `${t.n} ${plural(t.n, 'розділ', 'розділи', 'розділів')}`;
+  return t.lastAt ? `${t.vols ? 'т.' : 'гл.'} ${t.read} / ${t.n}` : mgUnits(t, t.n);
 }
 const mangaCard = t => {
   const p = mgProgress(t), st = mgState(t);
@@ -1175,7 +1177,7 @@ async function renderMangaTitle(tid) {
         <span class="msegs" aria-hidden="true">${Array.from({length: segs}, (_, i) => `<i class="${(i + 1) / segs <= p + 1e-9 ? 'on' : (i / segs < p ? 'part' : '')}"></i>`).join('')}</span></div>
     </div></div>
     ${t.single ? '' : `<section class="win mch">${winBar('~/манга/' + esc(t.folder))}<div class="win-body">
-      <div class="mch-head"><h2>Розділи</h2><span class="count">${t.n}</span><span class="sp"></span>
+      <div class="mch-head"><h2>${t.vols ? 'Томи' : 'Розділи'}</h2><span class="count">${t.n}</span><span class="sp"></span>
         <button class="btn ghost" id="mflip">${MG.newest ? I.arrDown + 'нові зверху' : I.arrUp + 'з першої'}</button></div>
       <ol class="mlist" id="mlist"></ol></div></section>`}
     <section class="msrc"><p>${t.meta ? `Опис і обкладинка з <a href="${esc(t.meta.url)}" target="_blank" rel="noopener">${src}</a>.` : 'AniList і MangaUpdates цей тайтл поки не знайшли, тому обкладинка — перша сторінка.'}

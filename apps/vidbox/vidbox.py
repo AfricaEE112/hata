@@ -567,13 +567,21 @@ def manga_label(name):
     return clean_title(base), None, ''
 
 
+def manga_chapter_label(rel, name, prefix=''):
+    """Підпис з усього шляху: «Vol 1/Ch 3.cbz» → «Том 1 · Глава 3». prefix — назва теки-тому, коли томи зібрано в один тайтл."""
+    full = re.sub(r'\.(zip|cbz)(?=$|[/\\!])', '', rel, flags=re.I).replace('!', '/').replace('\\', '/')
+    parts = ([prefix] if prefix else []) + [x for x in full.split('/') if x]
+    if not parts:
+        return '', None, ''
+    label, n, sub = manga_label(' / '.join(parts))
+    if not n and name:
+        label, n, sub = manga_label(name)
+    return label, n, sub
+
+
 def manga_chapter(top, rel, kind, path, pages, name):
     pages.sort(key=nat_key)
-    # підпис з усього шляху: «Vol 1/Ch 3.cbz» → «Том 1 · Глава 3»
-    full = re.sub(r'\.(zip|cbz)(?=$|[/\\!])', '', rel, flags=re.I).replace('!', '/').replace('\\', '/')
-    label, n, sub = manga_label(' / '.join(x for x in full.split('/') if x)) if name else ('', None, '')
-    if name and not n:
-        label, n, sub = manga_label(name)
+    label, n, sub = manga_chapter_label(rel, name)
     return {'cid': manga_id('manga', top, rel)[:16], 'rel': rel, 'kind': kind, 'path': path, 'pages': pages,
             'label': label, 'num': n, 'sub': sub, 'name': name}
 
@@ -637,6 +645,26 @@ def manga_dir_chapters(tdir, top):
     return out
 
 
+SERIES_NUM_RE = re.compile(r'(?:^|(?<=[\s_.\-\[(]))(?:vol(?:ume)?s?|v|tome|том|т|ch(?:apter)?|глава|розділ|part|#)\.?\s*_?\d+(?:[.,]\d+)?(?:\s*-\s*\d+)?\b'
+                           r'|第\s*\d+\s*[巻卷話话]', re.I)
+
+
+def manga_series_key(top):
+    """«Yo-Shu Tamagotei Vol. 03 - Spring Strawberry Vol. 1» → «yoshutamagoteispringstrawberry» (і «Berserk» з «Berserk v02»)."""
+    t = manga_title(top)
+    stripped = SERIES_NUM_RE.sub(' ', t)
+    if stripped == t:
+        stripped = re.sub(r'(?<=\D)\s+\d{1,3}\s*$', ' ', t)     # «Назва 03»
+    return norm_title(stripped)
+
+
+def manga_series_title(items):
+    t = SERIES_NUM_RE.sub(' ', manga_title(items[0][0]))
+    t = re.sub(r'(?<=\D)\s+\d{1,3}\s*$', ' ', t)
+    t = re.sub(r'\s*[-–—:]\s*(?=[-–—:]|$)', ' ', t)
+    return re.sub(r'\s{2,}', ' ', t).strip(' -–—:.,') or manga_title(items[0][0])
+
+
 def manga_scan():
     """Переглядає папку манги й будує покажчик тайтлів і розділів (у пам'яті, без копіювання)."""
     global MANGA
@@ -647,7 +675,7 @@ def manga_scan():
     with MANGA_LOCK:
         MANGA['scanning'] = True
         t0 = time.time()
-        titles, chapters = {}, {}
+        titles, chapters, found = {}, {}, []
         try:
             entries = sorted(os.scandir(root), key=lambda e: nat_key(e.name))
         except OSError as e:
@@ -668,12 +696,30 @@ def manga_scan():
                 continue
             if not chs:
                 continue
-            tid = manga_id('mangat', e.name)[:12]
+            found.append((e.name, e.path, e.is_dir(), chs))
+        # теки-томи одного тайтлу («Назва Vol. 03», «Назва Vol. 04») — в один тайтл, томи стають розділами.
+        # id розділів не змінюються, тож прогрес читання лишається.
+        groups = {}
+        for item in found:
+            groups.setdefault(manga_series_key(item[0]) or '\x00' + item[0], []).append(item)
+        for key, items in groups.items():
+            if len(items) > 1:
+                tid = manga_id('mangas', key)[:12]
+                chs = []
+                for name, path, isdir, part in items:
+                    for c in part:
+                        c['label'], c['num'], c['sub'] = manga_chapter_label(c['rel'], c['name'], prefix=name)
+                        c['vol'] = name
+                    chs += part
+                name, path, isdir = manga_series_title(items), items[0][1], items[0][2]
+            else:
+                name, path, isdir, chs = items[0]
+                tid = manga_id('mangat', name)[:12]
             for c in chs:
                 c['tid'] = tid
                 chapters[c['cid']] = c
-            titles[tid] = {'tid': tid, 'top': e.name, 'path': e.path, 'isdir': e.is_dir(),
-                           'title': manga_title(e.name), 'chapters': [c['cid'] for c in chs]}
+            titles[tid] = {'tid': tid, 'top': name, 'path': path, 'isdir': isdir, 'parts': len(items),
+                           'title': manga_title(name) if len(items) == 1 else name, 'chapters': [c['cid'] for c in chs]}
         seen = {r['cid']: r['first'] for r in DB.q('SELECT cid, first FROM manga_seen')}
         known = {r['tid'] for r in DB.q('SELECT DISTINCT tid FROM manga_seen')}
         now, new = time.time(), []
@@ -754,7 +800,7 @@ def manga_info(t, idx, prog, sets):
     f = manga_cover_file(t)
     s = sets.get(t['tid'])
     return {'tid': t['tid'], 'title': t['title'], 'n': len(chs), 'pages': sum(len(c['pages']) for c in chs),
-            'single': len(chs) == 1, 'read': read, 'lastAt': last_at,
+            'single': len(chs) == 1, 'read': read, 'lastAt': last_at, 'vols': t.get('parts', 1) > 1 and len(chs) == t['parts'],
             # нові — ті, що з'явились у папці вже після того, як почав читати, і ще не прочитані
             'new': sum(1 for c in chs if start_at and c['first'] > start_at and not done(c)), 'startAt': start_at,
             'added': max((c['first'] for c in chs), default=0),
@@ -1056,6 +1102,9 @@ def manga_queries(title):
     out = [t] if t else []
     if title not in out:
         out.append(title)
+    head = re.split(r'\s+[-–—:]\s+', t)[0].strip()      # «Yo-Shu Tamagotei - Spring Strawberry» → «Yo-Shu Tamagotei»
+    if head and len(head) > 3 and head not in out:
+        out.append(head)
     return out
 
 
