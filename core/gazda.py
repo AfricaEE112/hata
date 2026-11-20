@@ -581,7 +581,8 @@ def parse_smart(j):
     s = {'state': 'active', 'model': j.get('model_name') or j.get('model_family') or '', 'serial': j.get('serial_number') or '',
          'firmware': j.get('firmware_version') or '', 'rpm': j.get('rotation_rate'),
          'passed': (j.get('smart_status') or {}).get('passed'), 'temp': (j.get('temperature') or {}).get('current'),
-         'hours': (j.get('power_on_time') or {}).get('hours'), 'cycles': j.get('power_cycle_count')}
+         'hours': (j.get('power_on_time') or {}).get('hours'), 'cycles': j.get('power_cycle_count'),
+         'form': (j.get('form_factor') or {}).get('name')}
     for a in (j.get('ata_smart_attributes') or {}).get('table') or []:
         k = ATTR.get(a.get('id'))
         if not k:

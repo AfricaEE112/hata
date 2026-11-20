@@ -195,9 +195,9 @@ def demo_gazda(req):
                   'smart': {'state': 'active', 'passed': True, 'temp': 41, 'hours': 6120, 'cycles': 1830, 'life': 96, 'media_errors': 0, 'spare': 100, 'at': time.time() - 120}}]
         if names:
             disks.append({'dev': '/dev/sda', 'names': names[:1], 'model': 'WDC WD20SPZX-22UA7T0', 'serial': 'WD-WX1', 'size': 2000 * G, 'rot': True,
-                          'usb': True, 'system': False, 'loop': False, 'sleep': sl.get('/dev/sda', 0), 'tuned': True, 'idle': 140, 'sleepable': True,
+                          'usb': True, 'system': False, 'loop': False, 'sleep': sl.get('/dev/sda', -1), 'tuned': None, 'idle': 140, 'sleepable': True,
                           'usage': {names[0]: {'total': 2000 * G, 'free': 640 * G}},
-                          'smart': {'state': 'active', 'passed': True, 'temp': 38, 'hours': 21450, 'cycles': 4210, 'load_cycles': 61240, 'realloc': 0, 'pending': 0, 'uncorrect': 0, 'crc': 0, 'at': time.time() - 200}})
+                          'smart': {'state': 'active', 'passed': True, 'temp': 38, 'hours': 14656, 'cycles': 6256, 'load_cycles': 599144, 'crc': 3, 'form': '2.5 inches', 'realloc': 0, 'pending': 0, 'uncorrect': 0, 'at': time.time() - 200}})
         if len(names) > 1:
             disks.append({'dev': '/dev/sdb', 'names': names[1:2], 'model': 'TOSHIBA MQ04ABF100', 'serial': 'TOS1', 'size': 1000 * G, 'rot': True,
                           'usb': True, 'system': False, 'loop': False, 'sleep': sl.get('/dev/sdb', -1), 'tuned': None, 'idle': 5400, 'sleepable': True,

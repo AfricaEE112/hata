@@ -901,6 +901,8 @@ const DK = {health: null, bk: null, pick: null, picking: false};
 let disksTimer;
 const hoursText = h => h == null ? '—' : `${h.toLocaleString('uk-UA')} год` + (h >= 8760 ? ` ≈ ${(h / 8760).toFixed(1).replace('.', ',')} р.` : '');
 const agoText = t => { const s = Math.max(0, Math.round(Date.now() / 1000 - t)); return s < 90 ? 'щойно' : s < 3600 ? `${Math.round(s / 60)} хв тому` : s < 86400 ? `${Math.round(s / 3600)} год тому` : new Date(t * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'short'}); };
+const pl = (n, one, few, many) => { n = Math.abs(n) % 100; const d = n % 10; return n > 10 && n < 20 ? many : d === 1 ? one : d > 1 && d < 5 ? few : many; };
+const razy = n => pl(n, 'раз', 'рази', 'разів');
 const minsText = m => m < 0 ? 'як є' : !m ? 'ніколи' : m < 60 ? `${m} хв` : `${m / 60} год`;
 
 // Висновок про диск звичайними словами: [рівень, текст]
@@ -910,15 +912,20 @@ function diskVerdict(d) {
   const out = [];
   if (s.passed === false) out.push(['red', 'SMART каже, що диск відмовляє. Скопіюй важливе якнайшвидше й заміни диск.']);
   if (s.failing && s.failing.length) out.push(['red', `Показники нижче межі: ${s.failing.join(', ')}.`]);
-  if (s.pending > 0 || s.uncorrect > 0) out.push(['red', `${(s.pending || 0) + (s.uncorrect || 0)} нестабільних чи нечитабельних секторів — диск може втрачати дані. Зроби копію важливого.`]);
-  if (s.realloc > 0) out.push(['yel', `${s.realloc} перепризначених секторів: диск почав зношуватись. Поки працює, але стеж, чи число не росте.`]);
-  if (s.media_errors > 0) out.push(['red', `${s.media_errors} помилок носія — SSD може втрачати дані.`]);
+  if (s.pending > 0 || s.uncorrect > 0) out.push(['red', `${(s.pending || 0) + (s.uncorrect || 0)} ${pl((s.pending || 0) + (s.uncorrect || 0), 'нестабільний чи нечитабельний сектор', 'нестабільні чи нечитабельні сектори', 'нестабільних чи нечитабельних секторів')} — диск може втрачати дані. Зроби копію важливого.`]);
+  if (s.realloc > 0) out.push(['yel', `${s.realloc} ${pl(s.realloc, 'перепризначений сектор', 'перепризначені сектори', 'перепризначених секторів')}: диск почав зношуватись. Поки працює, але стеж, чи число не росте.`]);
+  if (s.media_errors > 0) out.push(['red', `${s.media_errors} ${pl(s.media_errors, 'помилка', 'помилки', 'помилок')} носія — SSD може втрачати дані.`]);
   if (s.life != null && s.life <= 10) out.push(['yel', `Ресурс SSD майже вичерпано (лишилось ${s.life}%).`]);
   if (s.temp >= 55) out.push(['red', `Гарячий: ${s.temp} °C. Дай йому повітря або перестав з-під ноутбука.`]);
   else if (s.temp >= 50) out.push(['yel', `Теплий: ${s.temp} °C — вище за комфортні для HDD 50 °C.`]);
-  if (s.crc > 0) out.push(['yel', `${s.crc} помилок передачі — зазвичай винен кабель чи USB-адаптер, а не сам диск.`]);
-  if (s.load_cycles >= 300000) out.push(['yel', `Головки запаркувались ${s.load_cycles.toLocaleString('uk-UA')} разів — більше за типовий ресурс (300 тис.). Диск ще може довго працювати, але копії тримай свіжими.`]);
-  else if (d.sleep < 0 && s.load_cycles > 1000 && s.hours > 0 && s.load_cycles / s.hours > 20) out.push(['yel', `Головки паркуються ~${Math.round(s.load_cycles / s.hours)} разів на годину — так ресурс швидко вичерпається. Вибери нижче «ніколи» або час сну: Хата вимкне це паркування.`]);
+  // Ресурс паркувань: 2,5" (WD Blue, Toshiba MQ04 …) — 600 тис., звичайні 3,5" — 300 тис.
+  const lim = /^2\.5/.test(s.form || '') || !s.form && d.usb && d.size < 2.2e12 ? 600000 : 300000;
+  const lc = s.load_cycles, rate = lc && s.hours > 0 ? Math.round(lc / s.hours) : 0;
+  const nice = n => n.toLocaleString('uk-UA');
+  if (lc >= lim) out.push(['yel', `Головки запаркувались ${nice(lc)} ${razy(lc)} — більше за ресурс від виробника (${nice(lim / 1000)} тис.). Диск ще може довго працювати, але копії тримай свіжими.`]);
+  else if (lc >= lim * .8) out.push(['yel', `Головки запаркувались ${nice(lc)} ${razy(lc)} — майже весь ресурс від виробника (${nice(lim / 1000)} тис.). Копії тримай свіжими.`]);
+  if (d.sleep < 0 && lc > 1000 && rate > 20) out.push(['yel', `Головки паркуються ~${rate} ${razy(rate)} на годину. Вибери нижче «ніколи» або час сну — Хата вимкне це паркування.`]);
+  if (s.crc > 0) out.push(['yel', `${s.crc} ${pl(s.crc, 'помилка', 'помилки', 'помилок')} передачі — зазвичай винен кабель чи USB-адаптер, а не сам диск.${s.crc < 10 ? ' Кілька штук за роки — не страшно, якщо число не росте.' : ''}`]);
   if (!out.length) return ['acc', s.state === 'standby' ? 'Здоровий, зараз спить.' : 'Диск здоровий.'];
   return out.sort((a, b) => (a[0] === 'red' ? 0 : 1) - (b[0] === 'red' ? 0 : 1))[0].concat([out.slice(1).map(x => x[1])]);
 }
