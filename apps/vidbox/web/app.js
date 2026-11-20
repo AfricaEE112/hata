@@ -178,7 +178,7 @@ function renderMods(st) {
   else if (st.probe || st.sprites) m.push(`<span class="mod act" title="Готую обкладинки й нарізки кадрів у фоні">${I.refresh}кадри ${st.probe + st.sprites}</span>`);
   if (st.queue) m.push(`<span class="mod" title="Відео в черзі на конвертацію">${I.queue}${st.queue}</span>`);
   m.push(`<span class="mod hw" title="${esc(st.gpu || 'Відеокарта')}${st.hardware ? '' : ' (кодує процесор)'}">${I.chip}${st.hwChecked ? esc(st.enc) : '…'}</span>`);
-  if (st.disk) m.push(`<span class="mod disk" title="Вільно на диску, де лежить кеш VidBox">${I.disk}${fmtSize(st.disk.free)}</span>`);
+  if (st.disk) m.push(`<span class="mod disk" title="Вільно на ${st.disk.count > 1 ? `${st.disk.count} дисках` : 'диску'} з відео: ${fmtSize(st.disk.free)} з ${fmtSize(st.disk.total)}">${I.disk}${fmtSize(st.disk.free)}</span>`);
   $('#mods').innerHTML = m.join('');
   statusFast = !!(st.conv || st.queue);
 }

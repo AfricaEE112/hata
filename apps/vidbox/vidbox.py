@@ -1700,11 +1700,7 @@ def status_json():
                 'fps': st.get('fps'), 'enc': st.get('enc')}
     c = DB.one('SELECT COUNT(*) AS n, COALESCE(SUM(probed=0), 0) AS probe, COALESCE(SUM(sprite=0 AND duration>0), 0) AS spr '
                'FROM videos WHERE missing=0')
-    try:
-        du = shutil.disk_usage(C.data)
-        disk = {'free': du.free, 'total': du.total}
-    except OSError:
-        disk = None
+    disk = media_disks()
     enc = pick_encoder()
     with HW_LOCK:
         gpu, checked = HW.get('gpu', ''), HW.get('checked')
@@ -2546,6 +2542,22 @@ def git_info():
         return {'commit': h, 'date': date, 'msg': msg}
     except Exception:
         return None
+
+
+def media_disks():
+    """Вільне місце на дисках з відео й аніме — кожна файлова система один раз (кілька папок можуть бути на одному диску)."""
+    seen, free, total = set(), 0, 0
+    for root in list(C.roots) + ([C.anime] if C.anime else []):
+        try:
+            dev = os.stat(root).st_dev
+            if dev in seen:
+                continue
+            seen.add(dev)
+            du = shutil.disk_usage(root)
+            free, total = free + du.free, total + du.total
+        except OSError:
+            continue
+    return {'free': free, 'total': total, 'count': len(seen)} if seen else None
 
 
 def admin_json():

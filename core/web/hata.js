@@ -329,13 +329,18 @@ function panelTop(s) {
 }
 const vidboxUrl = s => `${location.protocol}//${location.hostname}:${s.vidbox.port}`;
 
-async function panel() {
+// Панель. soft = тихе оновлення раз на 30 с: міняємо лише блоки, де щось змінилось, без перемальовування сторінки.
+async function panel(soft) {
   stopPanel();
   fromPanel = false;
   const s = await api('/api/status');
-  if (s.ok === false) { app.innerHTML = `<div class="wrap">${prompt('~', 'gazda status')}${win('помилка', `<p class="err">${esc(s.error)}</p>`, {c: 'red'})}</div>`; return; }
+  if (soft && !$('#sys')) return;                    // поки чекали, користувач пішов на іншу сторінку
+  if (s.ok === false) {
+    if (soft) { panelTimer = setTimeout(() => panel(true), 30000); return; }   // сервер на мить зайнятий — не лякаємо
+    app.innerHTML = `<div class="wrap">${prompt('~', 'gazda status')}${win('помилка', `<p class="err">${esc(s.error)}</p>`, {c: 'red'})}</div>`; return;
+  }
   LAST = s;
-  panelTop(s);
+  if (!soft) panelTop(s);
   // Сервер ще в UTC (так ставить Ubuntu) — беремо часовий пояс з браузера, щоб годинник на ноутбуці й журнал були місцеві.
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (tz && ['UTC', 'Etc/UTC', 'Universal', ''].includes(s.tz || '') && tz !== s.tz)
@@ -380,12 +385,35 @@ async function panel() {
     `<p class="note" style="margin-top:16px">кришка закрита — <span style="color:var(--fg)">не засинає</span></p>
     <div class="acts"><button class="btn" data-power="reboot">Перезавантажити</button><button class="btn danger" data-power="poweroff">Вимкнути</button></div>`;
 
+  if (soft) {
+    const swap = (id, html) => { const b = $(`#${id} .wbody`); if (b && b.dataset.html !== html) { b.innerHTML = html; b.dataset.html = html; } };
+    swap('disks', dsk); swap('svc', svc); swap('pwr', pwr);
+    bindPanel(); netInfo(); journal(); live();
+    panelTimer = setTimeout(nextPanel, 30000);
+    return;
+  }
   app.innerHTML = `<div class="wrap wide">
     <div class="cols">${win('система', sys, {n: '¹', id: 'sys'})}${win('диски', dsk, {n: '²', c: 'yel', id: 'disks', cls: 'w2'})}</div>
     <div class="cols">${win('служби', svc, {n: '³', c: 'red', id: 'svc'})}${win('мережа', net, {n: '⁴', c: 'vio', id: 'net'})}${win('живлення', pwr, {n: '⁵', c: 'yel', id: 'pwr'})}</div>
     <div class="cols">${win('журнал', '<p class="note" style="margin:0"><span class="spin"></span></p>', {n: '⁶', c: 'dim', id: 'log', cls: 'w9'})}<div id="updBox" style="flex:1 1 340px;min-width:0">${updBox()}</div></div>
   </div>`;
 
+  for (const [id, html] of [['disks', dsk], ['svc', svc], ['pwr', pwr]]) $(`#${id} .wbody`).dataset.html = html;
+  bindPanel();
+  $('#wifiBtn').onclick = () => wifiPage();
+  $('#speed').onclick = speedTest;
+  if ($('#tsOn')) $('#tsOn').onclick = () => openFromPanel(4);
+  if (SPEED) $('#speedRes').innerHTML = SPEED;
+  netInfo();
+  bindUpd();
+  live();
+  journal();
+  if (!UPD) checkUpdates();
+  panelTimer = setTimeout(nextPanel, 30000);
+}
+const nextPanel = () => { if (STATE.setup && !document.hidden && !typing() && !$('details.schemes[open]')) panel(true); else panelTimer = setTimeout(nextPanel, 30000); };
+
+function bindPanel() {
   $$('[data-svc]').forEach(x => x.onclick = () => service(x, x.dataset.svc, 'restart'));
   $$('[data-op]').forEach(x => x.onclick = () => service(x, x.dataset.name, x.dataset.op));
   $$('[data-power]').forEach(x => x.onclick = async () => {
@@ -395,24 +423,14 @@ async function panel() {
     toast(r.ok ? (off ? 'Вимикаю…' : 'Перезавантажую…') : r.error);
   });
   $('#findDisks').onclick = () => openFromPanel(2);
-  if ($('#tsOn')) $('#tsOn').onclick = () => openFromPanel(4);
-  $('#wifiBtn').onclick = () => wifiPage();
-  $('#speed').onclick = speedTest;
-  if (SPEED) $('#speedRes').innerHTML = SPEED;
-  netInfo();
   bindLimit();
-  bindUpd();
-  live();
-  journal();
-  if (!UPD) checkUpdates();
-  panelTimer = setTimeout(() => { if (STATE.setup && !document.hidden && !typing()) panel(); else panelTimer = setTimeout(panel, 30000); }, 30000);
 }
 
 async function service(btn, name, op) {
   btn.disabled = true;
   const r = await api('/api/service', {name, op});
   toast(r.ok ? ({restart: 'Перезапущено', stop: 'Зупинено', start: 'Запущено'})[op] + ': ' + name : r.error);
-  panel();
+  panel(true);
 }
 
 // ───────────────────────── мережа ─────────────────────────
@@ -423,7 +441,7 @@ let SPEED = '';
 
 async function netInfo() {
   const r = await api('/api/net');
-  if (!$('#ifaces')) return;
+  if (!$('#ifaces') || (r.ok === false && $('#ifaces').dataset.html)) return;
   const w = r.wifi || {};
   const rows = (r.ifaces || []).filter(i => i.kind !== 'tailscale').map(i => {
     const bits = [esc(i.name), ...(i.ips || []).map(esc)];
@@ -437,7 +455,8 @@ async function netInfo() {
       (warn ? `<small style="display:block;color:var(--yel)">${warn}</small>` : '') + `</div><div class="r">` +
       (i.name === r.route ? '<span class="tag ok">інтернет</span>' : i.up ? '' : '<span class="tag">вимкнено</span>') + '</div></div>';
   }).join('');
-  $('#ifaces').innerHTML = rows || '<p class="note" style="margin:0">Мережевих адаптерів не знайдено.</p>';
+  const html = rows || '<p class="note" style="margin:0">Мережевих адаптерів не знайдено.</p>';
+  if ($('#ifaces').dataset.html !== html) { $('#ifaces').innerHTML = html; $('#ifaces').dataset.html = html; }
 }
 
 async function speedTest() {
@@ -541,9 +560,12 @@ async function journal() {
   if (!$('#log')) return;
   const lines = (r.lines || []).slice().reverse();
   const col = u => u === 'gazda' ? 'yel' : u === 'hata' ? 'vio' : u === 'vidbox' ? 'acc' : 'dim';
-  $('#log .wbody').innerHTML = lines.length ? `<ol class="log">${lines.map(l => `<li><span class="t">${new Date(l.t * 1000).toLocaleTimeString('uk-UA')}</span>` +
+  const box = $('#log .wbody');
+  const html = lines.length ? `<ol class="log">${lines.map(l => `<li><span class="t">${new Date(l.t * 1000).toLocaleTimeString('uk-UA')}</span>` +
     `<span class="u" style="color:var(--${col(l.unit)})">${esc(l.unit)}</span><span>${esc(l.msg)}</span></li>`).join('')}</ol>`
     : `<p class="note" style="margin:0">${esc(r.error || 'Журнал порожній.')}</p>`;
+  if (r.ok === false && box.dataset.html) return;    // на мить не відповів — лишаємо, що було
+  if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
 }
 
 // Оновлення: що нового на GitHub, і кнопка, яка оновлює з відкатом.
