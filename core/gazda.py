@@ -540,6 +540,24 @@ SLEEP_CHOICES = (-1, 0, 10, 20, 30, 60, 120)
 KEEPALIVE_EVERY = 50
 TUNED = {}        # sda → (серійник, чи прийняв диск команду) — кому вже вимкнули власний таймер
 PINGED = {}       # sda → коли востаннє «торкались»
+LC_HIST = {}      # пристрій → [(час, паркувань головок)] за останні ~2 год — щоб бачити, чи паркування вщухло
+
+
+def lc_note(dev, s):
+    if s.get('load_cycles') is None:
+        return
+    h = [x for x in LC_HIST.get(dev, []) if x[0] > time.time() - 7200]
+    if not h or h[-1][1] != s['load_cycles'] or time.time() - h[-1][0] > 600:
+        h.append((time.time(), s['load_cycles']))
+    LC_HIST[dev] = h
+
+
+def lc_rate(dev):
+    """Паркувань за годину за останні 30–120 хв (None, якщо замало даних)."""
+    h = LC_HIST.get(dev) or []
+    if len(h) < 2 or h[-1][0] - h[0][0] < 1800:
+        return None
+    return round((h[-1][1] - h[0][1]) / (h[-1][0] - h[0][0]) * 3600)
 
 
 def lsblk_tree():
@@ -691,6 +709,7 @@ def disk_care(now):
                 cache = dict(cache, state='standby', at=now)        # спить — лишаємо останні значення
             else:
                 cache = dict(got, at=now)
+                lc_note(dev, cache)
             SMART[dev] = cache
         mins = sleep_mode(sleep, d)
         if not d['rot'] or d['system'] or d['loop'] or mins < 0:
@@ -731,6 +750,7 @@ def do_disk_health(a):
         if disks[dev]['loop']:
             raise Fail('Це не фізичний диск — SMART тут немає')
         SMART[dev] = dict(smart_read(dev, wake=True), at=time.time())
+        lc_note(dev, SMART[dev])
         DISK_IO[disks[dev]['kname']] = [disk_io(disks[dev]['kname']), time.time(), False]
     elif op == 'sleep':
         dev, mins = a.get('dev'), a.get('minutes')
@@ -759,6 +779,8 @@ def do_disk_health(a):
         sm = dict(SMART.get(d['dev']) or {})
         if d['loop']:
             sm = {'state': 'none', 'why': 'віртуальний диск (файл) — SMART немає'}
+        elif lc_rate(d['dev']) is not None:
+            sm['lc_rate'] = lc_rate(d['dev'])
         tuned = TUNED.get(d['kname'])
         out.append(dict(d, smart=sm, sleep=sleep_mode(sleep, d), tuned=tuned[1] if tuned else None,
                         idle=int(now - io[1]) if io else None, sleepable=d['rot'] and not d['system'] and not d['loop'],

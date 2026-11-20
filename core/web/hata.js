@@ -924,7 +924,8 @@ function diskVerdict(d) {
   const nice = n => n.toLocaleString('uk-UA');
   if (lc >= lim) out.push(['yel', `Головки запаркувались ${nice(lc)} ${razy(lc)} — більше за ресурс від виробника (${nice(lim / 1000)} тис.). Диск ще може довго працювати, але копії тримай свіжими.`]);
   else if (lc >= lim * .8) out.push(['yel', `Головки запаркувались ${nice(lc)} ${razy(lc)} — майже весь ресурс від виробника (${nice(lim / 1000)} тис.). Копії тримай свіжими.`]);
-  if (d.sleep < 0 && lc > 1000 && rate > 20) out.push(['yel', `Головки паркуються ~${rate} ${razy(rate)} на годину. Вибери нижче «ніколи» або час сну — Хата вимкне це паркування.`]);
+  if (d.sleep >= 0 && s.lc_rate > 20) out.push(['yel', `Головки й далі паркуються ~${s.lc_rate} ${razy(s.lc_rate)} на годину. Схоже, диск не слухає команду про паркування, а щохвилинне читання, яке не дає доку приспати диск, будить головки знову. Вибери «як є» — так паркувань буде менше.`]);
+  if (d.sleep < 0 && lc > 1000 && (s.lc_rate ?? rate) > 20) out.push(['yel', `Головки паркуються ~${s.lc_rate ?? rate} ${razy(s.lc_rate ?? rate)} на годину. Вибери нижче «ніколи» або час сну — Хата вимкне це паркування.`]);
   if (s.crc > 0) out.push(['yel', `${s.crc} ${pl(s.crc, 'помилка', 'помилки', 'помилок')} передачі — зазвичай винен кабель чи USB-адаптер, а не сам диск.${s.crc < 10 ? ' Кілька штук за роки — не страшно, якщо число не росте.' : ''}`]);
   if (!out.length) return ['acc', s.state === 'standby' ? 'Здоровий, зараз спить.' : 'Диск здоровий.'];
   return out.sort((a, b) => (a[0] === 'red' ? 0 : 1) - (b[0] === 'red' ? 0 : 1))[0].concat([out.slice(1).map(x => x[1])]);
@@ -947,7 +948,7 @@ function diskCard(d, choices) {
   const t = s.temp;
   const rows = [
     ['робота', hoursText(s.hours)], ['увімкнень', s.cycles != null ? s.cycles.toLocaleString('uk-UA') : null],
-    ['паркувань головок', s.load_cycles != null ? s.load_cycles.toLocaleString('uk-UA') + (s.hours > 0 ? ` (${Math.round(s.load_cycles / s.hours)}/год)` : '') : null],
+    ['паркувань головок', s.load_cycles != null ? s.load_cycles.toLocaleString('uk-UA') + (s.lc_rate != null ? ` (зараз ${s.lc_rate}/год)` : s.hours > 0 ? ` (у сер. ${Math.round(s.load_cycles / s.hours)}/год)` : '') : null],
     ['перепризначені', s.realloc], ['нестабільні', s.pending], ['невиправні', s.uncorrect], ['помилки кабелю', s.crc],
     ['ресурс', s.life != null ? `${s.life}%` : null], ['резерв', s.spare != null ? `${s.spare}%` : null], ['помилки носія', s.media_errors],
   ].filter(r => r[1] != null && r[1] !== '—' || r[0] === 'робота' && s.hours != null);
