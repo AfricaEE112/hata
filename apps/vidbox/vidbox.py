@@ -698,6 +698,9 @@ def detect_hw(verbose=True):
                 pass
     elif os.name != 'nt' and re.search(r'\bvaapi\b', accels) and os.path.exists(VAAPI_DEV):
         decode = 'vaapi'
+        vdec = vaapi_decoders()
+        with HW_LOCK:
+            HW['vaapi_dec'] = vdec
         if encs.get('vaapi', {}).get('ok'):
             # Повний шлях на відеоядрі: декодування → масштабування → кодування, кадри не йдуть у процесор
             sample = os.path.join(C.data, 'hwtest.mp4')
@@ -1020,7 +1023,22 @@ def prep_worker():
             MEDIA_EVENT.set()
 
 
-VAAPI_DECODES = {'h264', 'hevc', 'vp9', 'av1', 'mpeg2video', 'vc1', 'vp8'}   # що відеоядро Intel розпаковує саме
+VAAPI_DECODES = {'h264', 'hevc', 'vp9', 'av1', 'mpeg2video', 'vc1', 'vp8'}   # що відеоядро Intel може розпаковувати
+VA_PROFILES = {'H264': 'h264', 'HEVC': 'hevc', 'VP9': 'vp9', 'AV1': 'av1', 'MPEG2': 'mpeg2video', 'VC1': 'vc1', 'VP8': 'vp8'}
+
+
+def vaapi_decoders():
+    """Які кодеки це відеоядро справді розпаковує (vainfo: профіль + VAEntrypointVLD). Наприклад, AV1 — лише з 11-го покоління Intel."""
+    try:
+        out = run(['vainfo', '--display', 'drm', '--device', VAAPI_DEV], 20).stdout.decode('utf-8', 'replace')
+    except Exception:
+        return None                  # vainfo немає — покладаємося на запасні варіанти при помилці
+    found = set()
+    for m in re.finditer(r'VAProfile(\w+)\s*:\s*VAEntrypointVLD', out):
+        for prefix, codec in VA_PROFILES.items():
+            if m.group(1).startswith(prefix):
+                found.add(codec)
+    return found or None
 
 
 def encode_args(enc, src_h, odd, target_h=None, kbps=None, gop_n=120, vcodec=None, zero=True):
@@ -1055,7 +1073,9 @@ def encode_args(enc, src_h, odd, target_h=None, kbps=None, gop_n=120, vcodec=Non
         lp = ['-low_power', '1'] if va.get('lp') else []
         if rate and va.get('vbr') is False:
             rate = ['-qp', '25' if (target_h or 0) <= 720 else '23']    # бітрейт не підтримується — тримаємо якість
-        gpu_dec = HW.get('decode') == 'vaapi' and vcodec in VAAPI_DECODES
+        gpu_dec = HW.get('decode') == 'vaapi' and vcodec in (HW.get('vaapi_dec') or VAAPI_DECODES)
+        if HW.get('vaapi_dec') is None and vcodec == 'av1':
+            gpu_dec = False          # невідомо, чи вміє відеоядро AV1 (до 11-го покоління Intel — ні): хай розпаковує процесор
         if zero and gpu_dec and HW.get('zero_copy'):
             # усе на відеоядрі: HEVC/AV1/10-біт розпаковує GPU, scale_vaapi зменшує й переводить у 8 біт
             pre = ['-hwaccel', 'vaapi', '-hwaccel_output_format', 'vaapi', '-vaapi_device', VAAPI_DEV]

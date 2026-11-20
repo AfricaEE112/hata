@@ -163,7 +163,7 @@ def demo_gazda(req):
             {'hash': 'a1f3c2e', 'msg': 'Аніме: опис і жанри в апці'},
             {'hash': '7b9e011', 'msg': 'Майстер: швидкі кліки по теках'}]}
     if d == 'status':
-        return {'ok': True, 'host': 'hata', 'uptime': 93784, 'load': 0.42, 'cpus': 8, 'temp': 47.5,
+        return {'ok': True, 'host': 'hata', 'uptime': 93784, 'load': 0.42, 'cpus': 8, 'cpu_model': '11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz', 'temp': 47.5,
                 'mem': {'total': 8 * G, 'avail': 5.6 * G}, 'os': 'Ubuntu 24.04.1 LTS', 'version': 'cd4bff2 2026-11-19T15:00:00+02:00', 'tz': DEMO_STATE.get('tz', 'Europe/Kyiv'),
                 'battery': {'pct': 80, 'ac': True, 'status': 'Not charging', 'limit': DEMO_STATE['limit'], 'limitSupported': True},
                 'root': {'total': 512 * G, 'free': 430 * G},

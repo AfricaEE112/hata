@@ -125,7 +125,8 @@ def do_status(_):
     svc = {s: run(['systemctl', 'is-active', s], 10).stdout.strip() for s in sorted(SERVICES)}
     up = float(read('/proc/uptime', '0').split()[0] or 0)
     return {'host': socket.gethostname(), 'uptime': int(up), 'load': os.getloadavg()[0],
-            'cpus': os.cpu_count(), 'temp': cpu_temp(), 'mem': mem(), 'battery': battery(),
+            'cpus': os.cpu_count(), 'cpu_model': next((l.split(':', 1)[1].strip() for l in read('/proc/cpuinfo').splitlines()
+                                                      if l.startswith('model name')), ''), 'temp': cpu_temp(), 'mem': mem(), 'battery': battery(),
             'root': usage('/'), 'disks': mounted, 'services': svc,
             'os': read('/etc/os-release').split('PRETTY_NAME="')[-1].split('"')[0], 'version': git_version(), 'tz': tz_name()}
 

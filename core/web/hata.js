@@ -353,7 +353,7 @@ async function panel(soft) {
   const sys = `<div class="when"><div data-clock="small">${dots(hhmm())}</div><p><span class="wd">${weekday()}</span><span class="dt">${today()}</span></p></div>
     <dl class="kv"><dt>хост</dt><dd>${esc(s.host)}${(s.ips || []).length ? ' · ' + s.ips.map(esc).join(', ') : ''}</dd>
       <dt>працює</dt><dd>${uptime(s.uptime)}</dd><dt>система</dt><dd>${esc(s.os)} · Хата ${esc(ver)}</dd></dl>
-    <div class="gh"><span>cpu · ${s.cpus} ядер</span><b id="cpuNow">—</b></div><div class="graph" id="cpuG" aria-hidden="true"></div>
+    <div class="gh"><span>${esc(((s.cpu_model || '').match(/i[3579]-\w+|Ryzen \d+ \w+|Celeron \w+|Pentium \w+|N\d{3,4}/) || ['cpu'])[0])} · ${s.cpus} потоків</span><b id="cpuNow">—</b></div><div class="graph" id="cpuG" aria-hidden="true"></div>
     <div class="meters" style="margin-top:14px" id="mem"></div>`;
 
   const disks = [{name: 'система', path: '/', mounted: true, ...(s.root || {})}].concat(s.disks || []);
