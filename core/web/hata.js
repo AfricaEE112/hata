@@ -12,16 +12,18 @@ const uptime = s => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 
 const typing = () => /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
 let HOST = 'hata';
 
-async function api(url, body) {
-  const opt = body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)};
+async function api(url, body, ms = 120000) {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);   // не крутимо спінер вічно
+  const opt = body === undefined ? {signal: ctl.signal} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body), signal: ctl.signal};
   try {
     const r = await fetch(url, opt);
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 && j.error === 'auth') { start(); return {ok: false, error: 'Потрібно увійти'}; }
     return j;
   } catch (e) {
-    return {ok: false, error: 'Немає зв’язку з сервером'};
-  }
+    return {ok: false, error: e.name === 'AbortError' ? 'Сервер довго не відповідає — схоже, повільний інтернет. Спробуй ще раз пізніше.'
+      : `Немає зв’язку з сервером. Якщо Хата перезавантажилась, її адреса могла змінитись — глянь на екран ноутбука або відкрий http://${HOST}.local`};
+  } finally { clearTimeout(t); }
 }
 
 let toastT;
@@ -438,7 +440,7 @@ async function wifiPage(rescan = true) {
   if (!WF.status || rescan) WF.status = await api('/api/wifi', {op: 'status'});
   render();
   if (rescan && WF.status.iface) {
-    const r = await api('/api/wifi', {op: 'scan'});
+    const r = await api('/api/wifi', {op: 'scan'}, 700000);
     WF.nets = r.networks || [];
     if (r.ok === false) WF.err = r.error;
     render();
@@ -472,7 +474,7 @@ async function wifiPage(rescan = true) {
       e.preventDefault();
       const n = WF.nets[WF.sel], b = $('#wfGo');
       b.disabled = true; b.innerHTML = '<span class="spin"></span> Підключаю (до 30 с)…';
-      const r = await api('/api/wifi', {op: 'connect', ssid: n.ssid, password: $('#wfPw') ? $('#wfPw').value : ''});
+      const r = await api('/api/wifi', {op: 'connect', ssid: n.ssid, password: $('#wfPw') ? $('#wfPw').value : ''}, 700000);
       if (r.ok === false) { WF.formErr = r.error; render(); return; }
       WF.status = r; WF.sel = null; WF.formErr = ''; toast(`Підключено до «${n.ssid}»`); render();
     };
@@ -541,7 +543,7 @@ function bindUpd() {
   b.onclick = async () => {
     if (b.dataset.check !== undefined) { b.disabled = true; b.innerHTML = '<span class="spin"></span> Перевіряю…'; return checkUpdates(true); }
     b.disabled = true; b.innerHTML = '<span class="spin"></span> Оновлюю…';
-    const r = await api('/api/update', {});
+    const r = await api('/api/update', {}, 600000);
     toast(!r.ok ? r.error : r.changed ? `Оновлено до ${r.version.split(' ')[0]}` : 'Уже встановлено останню версію');
     UPD = null;
     setTimeout(panel, r.changed ? 4000 : 0);
