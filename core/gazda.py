@@ -321,6 +321,14 @@ def git(*args, timeout=600):
         raise Fail('GitHub не відповів за %d хв — дуже повільний інтернет. Перевір швидкість у блоці «мережа».' % (timeout // 60))
 
 
+def fetch():
+    """git fetch лише гілки, за якою йде сервер (зазвичай main), без службових гілок CI."""
+    up = git('rev-parse', '--abbrev-ref', '@{u}', timeout=10).stdout.strip() or 'origin/main'
+    br = up.split('/', 1)[-1]
+    git('config', 'remote.origin.fetch', f'+refs/heads/{br}:refs/remotes/origin/{br}', timeout=10)
+    return git('fetch', '--quiet', 'origin')
+
+
 def git_version():
     r = git('log', '-1', '--format=%h %cI', timeout=10)
     return r.stdout.strip() if r.returncode == 0 else ''
@@ -344,7 +352,7 @@ def do_update(_):
     """git pull; перезапуск служб; якщо панель не піднялась — повернення на попередню версію."""
     with LOCK:
         before = git('rev-parse', 'HEAD', timeout=10).stdout.strip()
-        r = git('fetch', '--quiet', 'origin')
+        r = fetch()
         if r.returncode:
             raise Fail('Немає зв\'язку з GitHub: ' + r.stderr.strip()[-200:])
         target = git('rev-parse', '@{u}', timeout=10).stdout.strip()
@@ -365,7 +373,7 @@ def do_update(_):
 def do_update_check(_):
     """Що прийде з оновленням: список нових комітів (без зміни коду)."""
     with LOCK:
-        r = git('fetch', '--quiet', 'origin')
+        r = fetch()
         if r.returncode:
             raise Fail('Немає зв\'язку з GitHub')
         log = git('log', '--format=%h%x09%s', '-n', '20', 'HEAD..@{u}', timeout=10).stdout

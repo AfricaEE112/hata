@@ -64,6 +64,9 @@ if [ ! -d "$SRC/.git" ]; then
 else
   git -C "$SRC" pull -q --ff-only || warn "Не вдалося оновити код (немає мережі?) — лишаю поточну версію"
 fi
+# тягнемо лише свою гілку: службова hata-report (знімки CI) важить мегабайти й серверу не потрібна
+git -C "$SRC" config remote.origin.fetch "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+git -C "$SRC" branch -q -r -D origin/hata-report 2>/dev/null || true
 chown -R root:root /opt/hata
 chmod -R go-w /opt/hata
 ln -sf "$SRC/core/gazda.py" /usr/local/bin/gazda
