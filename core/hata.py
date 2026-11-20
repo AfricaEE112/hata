@@ -27,6 +27,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import files   # noqa: E402 — модуль «Файли» поруч
+import house   # noqa: E402 — розділ «Будинок» (заміри від ESP)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, 'web')
@@ -53,6 +54,7 @@ def load():
     c.setdefault('secret', secrets.token_hex(16))
     c.setdefault('password_hash', '')
     c.setdefault('setup_done', False)
+    c.setdefault('house_key', secrets.token_hex(12))     # ключ для плат ESP (X-Hata-Key)
     return c
 
 
@@ -537,6 +539,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.download(qs.get('path', [''])[0])
         if p == '/api/share':
             return self.json(gazda({'do': 'share', 'op': 'status'}, 30))
+        if p == '/api/house/now':
+            return self.json(house.now_json())
+        if p == '/api/house/series':
+            g = lambda k, d='': qs.get(k, [d])[0]
+            return self.json(house.series(g('device', 'room'), g('key', 'temp.room'), g('range', '24h')))
+        if p == '/api/house/events':
+            return self.json(house.events_json(qs.get('range', ['24h'])[0], qs.get('device', [None])[0]))
+        if p == '/api/house/key':
+            return self.json({'key': CONF['house_key'], 'url': 'http://%s/api/house/ingest' % (lan_ips() or ['<ip-хати>'])[0]})
         return self.json({'error': 'not found'}, 404)
 
     def files_call(self, fn, *args):
@@ -599,6 +610,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = urllib.parse.urlparse(self.path).path
+        if p == '/api/house/ingest':       # від плат ESP: не за паролем панелі, а за ключем
+            key = self.headers.get('X-Hata-Key') or ''
+            if not key or not hmac.compare_digest(key, CONF.get('house_key') or ''):
+                self.body()
+                return self.json({'ok': False, 'error': 'key'}, 401)
+            try:
+                return self.json({'ok': True, 'added': house.ingest(self.body(), self.client_address[0])})
+            except house.Bad as e:
+                return self.json({'ok': False, 'error': str(e)}, 400)
         d = self.body()
         if p == '/api/login':
             pw = str(d.get('password') or '')
@@ -672,6 +692,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if d.get('op') == 'disable':
                 return self.json(gazda({'do': 'share', 'op': 'disable'}, 120))
             return self.json({'ok': False, 'error': 'Невідома дія'})
+        if p == '/api/house/key':
+            with LOCK:
+                CONF['house_key'] = secrets.token_hex(12)
+                save(CONF)
+            return self.json({'ok': True, 'key': CONF['house_key']})
         if p == '/api/speedtest':
             return self.json(speedtest())
         if p == '/api/scheme':
@@ -706,6 +731,7 @@ def main():
     if DEMO:
         os.makedirs(DEMO_ROOT, exist_ok=True)
     save(CONF)
+    house.init(DATA)
     srv = Server(('0.0.0.0', PORT), Handler)
     print('Hata: панель на порту %d%s' % (PORT, ' (демо без gazda)' if DEMO else ''), flush=True)
     srv.serve_forever()

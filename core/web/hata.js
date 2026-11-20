@@ -71,7 +71,8 @@ const heat = v => v < 35 ? 'acc' : v < 60 ? 'yel' : 'red';
 const FONT = {'0': '01110100011001110101110011000101110', '1': '00100011000010000100001000010001110', '2': '01110100010000100010001000100011111',
   '3': '11110000010000101110000010000111110', '4': '00010001100101010010111110001000010', '5': '11111100001111000001000011000101110',
   '6': '00110010001000011110100011000101110', '7': '11111000010001000100010000100001000', '8': '01110100011000101110100011000101110',
-  '9': '01110100011000101111000010001001100', ':': '0010100', ' ': '0000000'};
+  '9': '01110100011000101111000010001001100', ':': '0010100', ' ': '0000000',
+  '.': '0000001', '-': '000000000111000000000'};
 const dots = (text, big) => `<div class="dots${big ? ' big' : ''}" role="img" aria-label="${esc(text.replace(' ', ':'))}">${[...text].map(ch => {
   const bits = FONT[ch] || FONT[' ']; const cols = bits.length / 7;
   return `<div style="grid-template-columns:repeat(${cols},var(--d,7px))">${[...bits].map(b => `<i${b === '1' ? ' class="on"' : ''}></i>`).join('')}</div>`; }).join('')}</div>`;
@@ -316,13 +317,13 @@ const SVC = {vidbox: 'відео й аніме', hata: 'ця панель', 'hat
 const HIST = {cpu: [], net: [], lastNet: null};
 let panelTimer, liveTimer, LAST = null, UPD = null;
 
-function stopPanel() { clearTimeout(panelTimer); clearTimeout(liveTimer); }
+function stopPanel() { clearTimeout(panelTimer); clearTimeout(liveTimer); clearTimeout(houseTimer); }
 
 function panelTop(s) {
   bar.hidden = false;
   const b = s.battery;
   bar.innerHTML = `${who()}<nav aria-label="Розділи">${SECTIONS.map(([k, l, id]) => `<a href="#${id}" data-k="${k}"><span>${k}</span>${l}</a>`).join('')}` +
-    `<a href="#files" data-k="7" data-files><span>7</span>файли</a>` +
+    `<a href="#files" data-k="7" data-files><span>7</span>файли</a><a href="#house" data-k="8" data-house><span>8</span>будинок</a>` +
     `<a class="ext" href="${esc(vidboxUrl(s))}">VidBox ↗</a></nav><span class="sp"></span>
     <dl class="stats"><div><dt>cpu</dt><dd id="tCpu">—</dd></div><div><dt>ram</dt><dd id="tRam">—</dd></div><div><dt>t°</dt><dd id="tTemp">—</dd></div>` +
     (b ? `<div><dt>бат</dt><dd style="display:flex;gap:6px;align-items:center">${segs(b.pct, 10).replace('class="segs ', 'style="width:52px;flex:none" class="segs ')}${b.pct}%</dd></div>` : '') +
@@ -335,6 +336,7 @@ function panelTop(s) {
 async function goSection(k) {
   $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === k));
   if (k === '7') return filesPage();
+  if (k === '8') return housePage();
   const s = SECTIONS.find(x => x[0] === k);
   if (!s) return;
   if (!$('#sys')) await panel();
@@ -879,10 +881,229 @@ function drawShare() {
   }
 }
 
+// ───────────────────────── будинок (заміри від ESP) ─────────────────────────
+// Плати RoomMonitor надсилають заміри раз на 15 с. Тут: що зараз, графік з проміжками без світла
+// й інтернету, події та ключ, який треба вписати в скетч.
+const HS = {dev: null, key: 'temp', range: localStorage.getItem('hata_hrange') || '24h', now: null, series: {}, ev: null, keyInfo: null, at: 0};
+const HRANGES = [['1h', 'година'], ['24h', 'доба'], ['7d', 'тиждень'], ['30d', 'місяць']];
+const HNAMES = {'temp.room': 'кімната', 'temp.outside': 'вулиця', 'temp.radiator': 'батарея', 'humidity.room': 'вологість',
+  'pressure_hpa': 'тиск', 'lux': 'світло', 'co2_ppm': 'CO₂', 'ping_ms': 'пінг', 'rssi': 'сигнал wi-fi', 'devices': 'пристрої в мережі',
+  'battery_v': 'батарея плати', 'chip_temp': 'чип плати', 'internet': 'інтернет', 'power': 'світло є', 'free_heap': 'пам’ять плати'};
+const HUNIT = {'humidity.room': '%', pressure_hpa: 'гПа', lux: 'лк', co2_ppm: 'ppm', ping_ms: 'мс', rssi: 'дБм', battery_v: 'В', chip_temp: '°C', free_heap: 'Б'};
+const hname = k => HNAMES[k] || (k.startsWith('temp.') ? k.slice(5) : k);
+const hunit = k => k.startsWith('temp.') ? '°C' : (HUNIT[k] || '');
+const HCOL = ['acc', 'vio', 'red', 'yel'];
+const hfix = (v, k) => v == null ? '—' : (Math.abs(v) >= 100 || /devices|lux|free_heap|ping|rssi|co2/.test(k) ? Math.round(v) : v.toFixed(1)).toString().replace('.', ',');
+const hclock = t => new Date(t * 1000).toLocaleTimeString('uk-UA', {hour: '2-digit', minute: '2-digit'});
+const hago = s => s < 60 ? `${s} с тому` : s < 3600 ? `${Math.round(s / 60)} хв тому` : `з ${hclock(Math.floor(Date.now() / 1000) - s)}`;
+const hdur = s => s == null ? '' : s < 60 ? `${s} с` : s < 3600 ? `${Math.round(s / 60)} хв` : s < 86400 ? `${Math.floor(s / 3600)} год ${Math.round(s % 3600 / 60)} хв` : `${Math.floor(s / 86400)} дн ${Math.round(s % 86400 / 3600)} год`;
+let houseTimer, houseSeriesAt = 0;
+
+async function housePage() {
+  stopPanel(); fromPanel = false;
+  if (!$('.top nav a[data-house]')) { bar.hidden = false; if (LAST) panelTop(LAST); }
+  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === '8'));
+  app.innerHTML = `<div class="wrap wide">${prompt('~/будинок', 'tail -f room')}<div id="hBody"><p class="note"><span class="spin"></span></p></div></div>`;
+  window.scrollTo(0, 0);
+  houseSeriesAt = 0;
+  await houseTick();
+}
+
+async function houseTick() {
+  clearTimeout(houseTimer);
+  if (!$('#hBody')) return;
+  if (!document.hidden) {
+    const [now, key] = await Promise.all([api('/api/house/now'), HS.keyInfo ? null : api('/api/house/key')]);
+    if (!$('#hBody')) return;
+    if (key) HS.keyInfo = key;
+    HS.now = now;
+    const devs = now.devices || [];
+    if (!HS.dev || !devs.find(d => d.device === HS.dev)) HS.dev = (devs.find(d => d.device === 'room') || devs[0] || {}).device || null;
+    const fresh = Date.now() - houseSeriesAt > (HS.range === '1h' ? 15000 : 60000);
+    if (HS.dev && fresh) await houseLoadSeries();
+    drawHouse();
+  }
+  houseTimer = setTimeout(houseTick, 5000);
+}
+
+const hdev = () => (HS.now && HS.now.devices || []).find(d => d.device === HS.dev);
+const hkeys = d => Object.keys(d ? d.values : {}).sort();
+const htemps = d => hkeys(d).filter(k => k.startsWith('temp.')).sort((a, b) => (a !== 'temp.room') - (b !== 'temp.room') || a.localeCompare(b));
+
+async function houseLoadSeries() {
+  const d = hdev();
+  if (!d) return;
+  const keys = HS.key === 'temp' ? htemps(d) : [HS.key];
+  const q = k => api(`/api/house/series?device=${encodeURIComponent(HS.dev)}&key=${encodeURIComponent(k)}&range=${HS.range}`);
+  const [ev, ...ser] = await Promise.all([api(`/api/house/events?range=${HS.range}&device=${encodeURIComponent(HS.dev)}`), ...keys.map(q)]);
+  HS.series = Object.fromEntries(keys.map((k, i) => [k, ser[i]]));
+  HS.ev = ev;
+  houseSeriesAt = Date.now();
+}
+
+function drawHouse() {
+  const box = $('#hBody'), devs = HS.now.devices || [], d = hdev();
+  if (!d) {
+    const html = `<div class="cols">${win('будинок', `<p class="lead" style="margin-bottom:10px">Тут з’являться температура в кімнаті, графік і відключення світла від плати RoomMonitor (ESP32).</p>
+      <p class="note">Плата ще нічого не надсилала. Впиши ключ нижче в скетч і прошей плату — перші заміри прийдуть за 15 с.</p>`, {n: '⁸', id: 'hempty'})}
+      ${win('ключ плати', houseKeyHTML(), {c: 'yel', id: 'hkey'})}</div>`;
+    if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; bindHouseKey(); }
+    return;
+  }
+  const v = k => d.values[k] ? d.values[k].v : null;
+  const tkeys = htemps(d), main = tkeys[0];
+  const t = main ? v(main) : null, tt = main ? d.temps[main] || {} : {};
+  const tr = tt.trend, arrow = tr == null ? '' : tr > 0.15 ? '↑' : tr < -0.15 ? '↓' : '→';
+  const since = HS.now.now - (d.lastSeen || 0);
+  const src = {ntc: 'терморезистор', sensor: 'датчик', estimate: 'оцінка ±2 °C', none: 'нема датчика'}[d.tempSrc] || d.tempSrc || '';
+  const big = t == null ? '' : (Math.round(t * 10) / 10).toFixed(1);
+  const pw = v('power'), inet = v('internet'), rssi = v('rssi');
+  const nowHTML = `<div class="hnow">
+      <div class="htemp">${t == null ? '<p class="note" style="margin:0">температури ще немає</p>' : `${dots(big, true)}<span class="hdeg">°C</span>`}</div>
+      <div class="hside"><p class="hstate"><span class="okdot ${d.online ? '' : 'off'}"></span>${d.online ? `на зв’язку · ${hago(since)}` : `офлайн ${hago(since)}`}</p>
+        ${t == null ? '' : `<p>${arrow ? `<b class="harrow">${arrow}</b> ${tr > 0 ? '+' : ''}${hfix(tr)}° за 30 хв` : 'тренд з’явиться за пів години'}</p>
+        <p class="note" style="margin:4px 0 0">сьогодні ${hfix(tt.min)}…${hfix(tt.max)} °C${src ? ` · <span class="tag${d.tempSrc === 'estimate' ? ' warn' : ''}">${esc(src)}</span>` : ''}</p>`}
+        ${tkeys.slice(1).map(k => `<p class="note" style="margin:4px 0 0">${esc(hname(k))}: <b style="color:var(--fg)">${hfix(v(k))} °C</b></p>`).join('')}</div></div>
+    <dl class="kv" style="margin-top:16px">
+      ${pw != null ? `<dt>світло</dt><dd>${pw ? '<span class="okdot"></span>є' : '<span class="okdot off"></span>немає'}</dd>` : ''}
+      ${inet != null ? `<dt>інтернет</dt><dd>${inet ? `<span class="okdot"></span>є${v('ping_ms') != null && v('ping_ms') >= 0 ? ` · пінг ${hfix(v('ping_ms'), 'ping')} мс` : ''}` : '<span class="okdot off"></span>немає'}</dd>` : ''}
+      ${v('humidity.room') != null ? `<dt>вологість</dt><dd>${hfix(v('humidity.room'))} %</dd>` : ''}
+      ${v('co2_ppm') != null ? `<dt>CO₂</dt><dd>${hfix(v('co2_ppm'), 'co2')} ppm</dd>` : ''}
+      ${v('devices') != null ? `<dt>у мережі</dt><dd>${hfix(v('devices'), 'devices')} пристр.</dd>` : ''}
+      ${rssi != null ? `<dt>wi-fi плати</dt><dd style="display:flex;gap:8px;align-items:center">${segs(sigPct(rssi), 10).replace('class="segs ', 'style="width:70px;flex:none" class="segs ')}${hfix(rssi, 'rssi')} дБм</dd>` : ''}
+      ${v('battery_v') != null ? `<dt>батарея плати</dt><dd>${hfix(v('battery_v'))} В</dd>` : ''}
+      <dt>плата</dt><dd>${esc(d.device)}${d.fw ? ' · ' + esc(d.fw) : ''}${d.uptime ? ' · працює ' + uptime(d.uptime) : ''}${v('chip_temp') != null ? ` · чип ${hfix(v('chip_temp'))}°` : ''}</dd>
+    </dl>`;
+  const chips = [['temp', 'температура']].concat(hkeys(d).filter(k => !k.startsWith('temp.') && k !== 'free_heap').map(k => [k, hname(k)]));
+  const ctlHTML = `<div class="hbar">${devs.length > 1 ? `<div class="seg hdevs">${devs.map(x => `<button data-hdev="${esc(x.device)}" class="${x.device === HS.dev ? 'on' : ''}">${esc(x.device)}</button>`).join('')}</div>` : ''}
+      <div class="hchips">${chips.map(([k, l]) => `<button class="chip${HS.key === k ? ' on' : ''}" data-hkey="${esc(k)}">${esc(l)}</button>`).join('')}</div>
+      <div class="seg hrange">${HRANGES.map(([k, l]) => `<button data-hr="${k}" class="${HS.range === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>`;
+  const title = d.device === 'room' ? 'кімната' : d.device;
+  if (!$('#hnow')) {
+    box.innerHTML = `<div class="cols">${win(title, '', {n: '⁸', id: 'hnow'})}${win('графік', '<div id="hctl"></div><div class="hchart" id="hchart"></div><div class="hlegend" id="hlegend"></div>', {c: 'vio', id: 'hgraph', cls: 'w2'})}</div>
+      <div class="cols">${win('події', '', {c: 'yel', id: 'hev', cls: 'w2'})}${win('ключ плати', houseKeyHTML(), {c: 'dim', id: 'hkey'})}</div>`;
+    bindHouseKey();
+  }
+  const set = (sel, html) => { const b = $(sel); if (b && b.dataset.html !== html) { b.innerHTML = html; b.dataset.html = html; return true; } return false; };
+  set('#hnow .wbody', nowHTML);
+  if (set('#hctl', ctlHTML)) bindHouseGraph();
+  drawChart();
+  set('#hev .wbody', houseEventsHTML());
+}
+
+function bindHouseGraph() {
+  $$('[data-hr]').forEach(b => b.onclick = async () => {
+    HS.range = b.dataset.hr; localStorage.setItem('hata_hrange', HS.range);
+    $$('[data-hr]').forEach(x => x.classList.toggle('on', x === b));
+    await houseLoadSeries(); drawHouse();
+  });
+  $$('[data-hkey]').forEach(b => b.onclick = async () => {
+    HS.key = b.dataset.hkey;
+    $$('[data-hkey]').forEach(x => x.classList.toggle('on', x === b));
+    await houseLoadSeries(); drawHouse();
+  });
+  $$('[data-hdev]').forEach(b => b.onclick = async () => { HS.dev = b.dataset.hdev; HS.key = 'temp'; $('#hBody').innerHTML = ''; delete $('#hBody').dataset.html; await houseLoadSeries(); drawHouse(); });
+}
+
+// Графік: SVG-лінії без бібліотек. Підписи осей — звичайним HTML поверх, щоб не розтягувались разом із SVG.
+function drawChart() {
+  const el = $('#hchart');
+  if (!el) return;
+  const keys = Object.keys(HS.series), any = keys.find(k => (HS.series[k].points || []).length);
+  const s0 = HS.series[keys[0]] || {};
+  const from = s0.from || 0, to = s0.to || 1, W = 1000, H = 300;
+  const sig = JSON.stringify([HS.range, HS.key, keys.map(k => (HS.series[k].points || []).length), to - to % 15, HS.ev && HS.ev.events.length]);
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  if (!any) { el.innerHTML = `<p class="note" style="margin:0;padding:40px 0;text-align:center">За ${HRANGES.find(r => r[0] === HS.range)[1]} замірів немає.</p>`; $('#hlegend').innerHTML = ''; return; }
+  let lo = Infinity, hi = -Infinity;
+  for (const k of keys) for (const p of HS.series[k].points) { lo = Math.min(lo, p[2] ?? p[1]); hi = Math.max(hi, p[3] ?? p[1]); }
+  const temp = HS.key === 'temp';
+  const span0 = hi - lo, padY = Math.max(temp ? 0.5 : Math.abs(hi) * 0.05 || 1, span0 * 0.12);
+  lo -= padY; hi += padY;
+  const raw = (hi - lo) / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))), step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(x => x >= raw);
+  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+  const X = t => (t - from) / (to - from) * W, Y = v => H - (v - lo) / (hi - lo) * H;
+  const gapMax = Math.max(90, (s0.step || 15) * 3);
+  const path = pts => { let d = '', prev = null; for (const p of pts) { d += (prev && p[0] - prev > gapMax ? ' M' : d ? ' L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1); prev = p[0]; } return d; };
+  const band = pts => pts.length && pts[0].length > 2 ? 'M' + pts.map(p => `${X(p[0]).toFixed(1)} ${Y(p[3]).toFixed(1)}`).join(' L') + ' L' + pts.slice().reverse().map(p => `${X(p[0]).toFixed(1)} ${Y(p[2]).toFixed(1)}`).join(' L') + ' Z' : '';
+  const gaps = (HS.ev ? HS.ev.gaps : []).filter(g => g.to > from).map(g => {
+    const a = X(Math.max(from, g.from)), b = X(Math.min(to, g.to));
+    return `<rect x="${a.toFixed(1)}" y="0" width="${Math.max(2, b - a).toFixed(1)}" height="${H}" fill="url(#h-${g.kind})" class="hgap ${g.kind}"><title>${g.kind === 'power' ? (g.source === 'wifi_up' ? 'роутер був недоступний (схоже, світло)' : 'не було світла') : 'не було інтернету'}: ${hclock(g.from)}–${g.open ? 'зараз' : hclock(g.to)} (${hdur(g.to - g.from)})</title></rect>`;
+  }).join('');
+  const boots = (HS.ev ? HS.ev.events : []).filter(e => e.type === 'boot' && e.ts > from).map(e => `<line x1="${X(e.ts).toFixed(1)}" x2="${X(e.ts).toFixed(1)}" y1="0" y2="${H}" class="hboot"><title>плата запустилась ${hclock(e.ts)}</title></line>`).join('');
+  const yt = []; for (let v = lo; v <= hi + step / 2; v += step) yt.push(v);
+  const tstep = {'1h': 600, '24h': 3 * 3600, '7d': 86400, '30d': 5 * 86400}[HS.range] * (el.clientWidth < 560 ? 2 : 1);
+  const tz = new Date().getTimezoneOffset() * 60, xt = [];
+  for (let t = Math.ceil((from - tz) / tstep) * tstep + tz; t <= to; t += tstep) xt.push(t);
+  const xl = t => HS.range === '7d' ? new Date(t * 1000).toLocaleDateString('uk-UA', {weekday: 'short', day: 'numeric'}) : HS.range === '30d' ? new Date(t * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'numeric'}) : hclock(t);
+  const lines = keys.map((k, i) => { const pts = HS.series[k].points || []; return `<path d="${band(pts)}" class="hband" style="--c:var(--${HCOL[i % 4]})"/><path d="${path(pts)}" class="hline" style="--c:var(--${HCOL[i % 4]})"/>`; }).join('');
+  el.innerHTML = `<div class="hplot"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      <defs><pattern id="h-power" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" class="hp-bg power"/><line x1="0" y1="0" x2="0" y2="8" class="hp power"/></pattern>
+        <pattern id="h-inet" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)"><rect width="8" height="8" class="hp-bg inet"/><line x1="0" y1="0" x2="0" y2="8" class="hp inet"/></pattern></defs>
+      ${yt.map(v => `<line x1="0" x2="${W}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" class="hgrid"/>`).join('')}${gaps}${boots}${lines}
+      <line class="hcur" id="hcur" x1="0" x2="0" y1="0" y2="${H}" visibility="hidden"/></svg>
+    ${yt.map(v => `<span class="hy" style="top:${(Y(v) / H * 100).toFixed(2)}%">${hfix(v, HS.key)}</span>`).join('')}
+    ${xt.map(t => `<span class="hx" style="left:${(X(t) / W * 100).toFixed(2)}%">${esc(xl(t))}</span>`).join('')}
+    <div class="htip" id="htip" hidden></div></div>`;
+  const leg = keys.map((k, i) => `<span><i style="background:var(--${HCOL[i % 4]})"></i>${esc(hname(k))}${hunit(k) ? ', ' + hunit(k) : ''}</span>`);
+  const kinds = new Set((HS.ev ? HS.ev.gaps : []).filter(g => g.to > from).map(g => g.kind));
+  if (kinds.has('power')) leg.push('<span><i class="hsw power"></i>без світла</span>');
+  if (kinds.has('inet')) leg.push('<span><i class="hsw inet"></i>без інтернету</span>');
+  $('#hlegend').innerHTML = leg.join('');
+  // підказка під курсором / пальцем
+  const plot = $('.hplot', el), tip = $('#htip'), cur = $('#hcur');
+  const show = e => {
+    const r = plot.getBoundingClientRect(), x = Math.min(Math.max(0, (e.clientX - r.left) / r.width), 1), t = from + x * (to - from);
+    const rows = keys.map((k, i) => { const pts = HS.series[k].points || []; let best = null; for (const p of pts) if (!best || Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+      return best && Math.abs(best[0] - t) < gapMax ? `<span style="color:var(--${HCOL[i % 4]})">${esc(hname(k))}</span> ${hfix(best[1], k)}${hunit(k).startsWith('°') ? '°' : ' ' + hunit(k)}` : ''; }).filter(Boolean);
+    if (!rows.length) { tip.hidden = true; cur.setAttribute('visibility', 'hidden'); return; }
+    cur.setAttribute('x1', x * W); cur.setAttribute('x2', x * W); cur.setAttribute('visibility', 'visible');
+    tip.hidden = false;
+    tip.innerHTML = `<b>${HS.range === '1h' || HS.range === '24h' ? hclock(t) : new Date(t * 1000).toLocaleString('uk-UA', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'})}</b>${rows.join('<br>')}`;
+    tip.style.left = Math.min(r.width - tip.offsetWidth - 4, Math.max(4, x * r.width + 12)) + 'px';
+  };
+  plot.onpointermove = show;
+  plot.onpointerdown = show;
+  plot.onpointerleave = () => { tip.hidden = true; cur.setAttribute('visibility', 'hidden'); };
+}
+
+function houseEventsHTML() {
+  const ev = (HS.ev ? HS.ev.events : []).slice().reverse().slice(0, 12);
+  if (!ev.length) return `<p class="note" style="margin:0">За ${HRANGES.find(r => r[0] === HS.range)[1]} без пригод: світло й інтернет були весь час.</p>`;
+  const text = e => ({
+    power_off: ['red', 'зникло світло'], power_on: ['acc', `світло повернулось${e.duration ? ` · не було ${hdur(e.duration)}` : ''}`],
+    inet_down: ['red', 'зник інтернет'], inet_up: ['acc', `інтернет повернувся${e.duration ? ` · не було ${hdur(e.duration)}` : ''}`],
+    wifi_up: ['yel', `роутер знову на зв’язку${e.duration ? ` · не було ${hdur(e.duration)} (схоже, вимикали світло)` : ''}`],
+    wifi_down: ['red', 'роутер недоступний'], boot: ['dim', `плата запустилась${e.duration ? ` · була вимкнена ${hdur(e.duration)}` : ''}`]})[e.type] || ['dim', e.type];
+  const day = t => new Date(t * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'short'});
+  return `<ol class="log hlog">${ev.map(e => { const [c, s] = text(e); return `<li><span class="t">${HS.range === '1h' || HS.range === '24h' ? '' : day(e.ts) + ' '}${hclock(e.ts)}</span><span class="u" style="color:var(--${c})">●</span><span>${esc(s)}</span></li>`; }).join('')}</ol>`;
+}
+
+function houseKeyHTML() {
+  const k = HS.keyInfo || {};
+  return `<p class="note" style="margin:0 0 10px">Плата надсилає заміри з цим ключем. Впиши його в скетч RoomMonitor і прошей плату.</p>
+    <pre class="hcode" id="hcode">const char* HATA_URL = "${esc(k.url || '')}";
+const char* HATA_KEY = "${esc(k.key || '')}";</pre>
+    <div class="acts" style="margin-top:12px"><button class="btn" id="hcopy">Скопіювати</button><span class="sp"></span><button class="btn danger" id="hnew">Новий ключ</button></div>`;
+}
+
+function bindHouseKey() {
+  if ($('#hcopy')) $('#hcopy').onclick = async () => {
+    try { await navigator.clipboard.writeText($('#hcode').textContent); toast('Скопійовано'); }
+    catch (e) { const r = document.createRange(); r.selectNodeContents($('#hcode')); getSelection().removeAllRanges(); getSelection().addRange(r); toast('Виділено — натисни Ctrl+C'); }
+  };
+  if ($('#hnew')) $('#hnew').onclick = async () => {
+    if (!confirm('Створити новий ключ? Плата перестане надсилати заміри, поки не впишеш новий ключ і не прошиєш її.')) return;
+    const r = await api('/api/house/key', {op: 'new'});
+    if (r.ok) { HS.keyInfo = {...HS.keyInfo, key: r.key}; const b = $('#hkey .wbody'); b.innerHTML = houseKeyHTML(); delete b.dataset.html; bindHouseKey(); toast('Новий ключ готовий'); }
+  };
+}
+
 // Клавіші 1–6 — до розділу панелі, як у btop.
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey || typing() || !$('.top nav a[data-k]')) return;
-  if (/^[1-7]$/.test(e.key)) goSection(e.key);
+  if (/^[1-8]$/.test(e.key)) goSection(e.key);
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && $('#cpuG')) live(); });
 

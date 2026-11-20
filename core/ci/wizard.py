@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 from playwright.sync_api import sync_playwright
@@ -83,6 +84,29 @@ with sync_playwright() as p:
     rm = pg.evaluate("""async () => (await fetch('/api/files', {method: 'POST', headers: {'Content-Type': 'application/json'},
                        body: JSON.stringify({op: 'delete', paths: ['/srv/disks/media/ci-upload.txt']})})).json()""")
     assert rm.get('ok'), rm
+    # Будинок: плата надсилає заміри з ключем (без пароля панелі), повтор пакета не дублюється
+    hk = pg.evaluate("async () => (await fetch('/api/house/key')).json()")['key']
+    pkt = json.dumps({'device': 'room', 'fw': 'ci', 'uptime_s': 100, 'temp_src': 'ntc',
+                      'readings': [{'age_s': 15, 'values': {'temp.room': 22.4, 'internet': 1}},
+                                   {'age_s': 0, 'values': {'temp.room': 22.5, 'internet': 1, 'rssi': -70}}],
+                      'events': [{'age_s': 600, 'type': 'power_off'}, {'age_s': 30, 'type': 'power_on', 'duration_s': 570}]}).encode()
+    def ingest(key):
+        req = urllib.request.Request('http://localhost/api/house/ingest', data=pkt, headers={'Content-Type': 'application/json', 'X-Hata-Key': key})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, None
+    assert ingest('wrong')[0] == 401, 'ingest прийняв чужий ключ'
+    c1, r1 = ingest(hk)
+    c2, r2 = ingest(hk)
+    assert c1 == 200 and r1['added'] == 7 and r2['added'] == 0, (r1, r2)
+    hn = pg.evaluate("async () => (await fetch('/api/house/now')).json()")
+    room = hn['devices'][0]
+    assert room['device'] == 'room' and room['online'] and room['values']['temp.room']['v'] == 22.5, hn
+    ev = pg.evaluate("async () => (await fetch('/api/house/events?range=24h')).json()")
+    assert ev['gaps'] and ev['gaps'][0]['kind'] == 'power', ev
+    pg.keyboard.press('8'); pg.wait_for_selector('#hchart svg'); pg.wait_for_timeout(500); shot('house')
     pg.keyboard.press('1'); pg.wait_for_selector('#sys')
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="папір"]'); shot('panel-paper')
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="чай"]')

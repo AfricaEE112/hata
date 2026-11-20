@@ -189,6 +189,19 @@ def center(lines, W, H):
     return '\n' * top + '\n'.join(left + l for l in lines)
 
 
+def room_temp():
+    """Остання температура від плати RoomMonitor (розділ «Будинок»), якщо свіжа."""
+    try:
+        import sqlite3
+        con = sqlite3.connect('file:/var/lib/hata/house.db?mode=ro', uri=True, timeout=1)
+        r = con.execute("SELECT value FROM readings WHERE key='temp.room' AND ts>? ORDER BY ts DESC LIMIT 1",
+                        (int(time.time()) - 600,)).fetchone()
+        con.close()
+        return r[0] if r else None
+    except Exception:
+        return None
+
+
 def frame():
     time.tzset()                     # часовий пояс могли щойно змінити з панелі
     W, H = term()
@@ -214,6 +227,9 @@ def frame():
                       pad(col('yel', 'vidbox'), 11) + 'http://%s:%s/' % (addr or host + '.local', (st.get('vidbox') or {}).get('port', 8800))]
     if ts.get('state') == 'Running':
         left.append(pad(col('yel', 'tailscale'), 11) + ts.get('name', ''))
+    rt = room_temp()
+    if rt is not None:
+        left.append(pad(col('yel', 'кімната'), 11) + ('%.1f °C' % rt).replace('.', ','))
     lw = max(vis(l) for l in left)
 
     rw = max(52, min(68, W - lw - 12))
