@@ -78,6 +78,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Tracks
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -153,6 +154,20 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
     var offset by remember { mutableLongStateOf(0L) }     // з якої мілісекунди почався потік live
     var quality by remember { mutableStateOf(vm.prefs.quality) }
     var picker by remember { mutableStateOf(false) }
+    // субтитри з файла (MKV тощо): кнопка «CC» з'являється, лише коли вони є
+    var subs by remember { mutableStateOf<List<SubTrack>>(emptyList()) }
+    var subsPicker by remember { mutableStateOf(false) }
+    fun applySubs(choice: SubTrack?) {      // null — вимкнути
+        val b = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_TEXT)
+        if (choice == null) b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+        else b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).setOverrideForType(TrackSelectionOverride(choice.group, choice.index))
+        player.trackSelectionParameters = b.build()
+        vm.prefs.subsOff = choice == null
+    }
+    LaunchedEffect(Unit) {
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, vm.prefs.subsOff).build()
+    }
     var prep by remember { mutableStateOf<Prep?>(null) }
     var failed by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
@@ -385,6 +400,7 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
             }
 
             override fun onTracksChanged(tracks: Tracks) {
+                subs = subTracks(tracks)
                 if (source != "raw" || tracks.groups.isEmpty()) return
                 val g = tracks.groups
                 val badVideo = g.any { it.type == C.TRACK_TYPE_VIDEO } && g.none { it.type == C.TRACK_TYPE_VIDEO && it.isSupported }
@@ -608,6 +624,16 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
                         else -> if (quality == "auto") "Авто" else "Ориг."
                     },
                     onQuality = { picker = true; poke() },
+                    subs = subs,
+                    onSubs = {
+                        if (subs.size > 1) subsPicker = true
+                        else {
+                            val off = subs.none { it.selected }
+                            applySubs(if (off) subs[0] else null)
+                            notice = Triple(if (off) "Субтитри увімкнено" else "Субтитри вимкнено", null, null)
+                        }
+                        poke()
+                    },
                     onScrub = { scrubbing = it; poke() },
                     onSpeed = {
                         speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.size]
@@ -660,6 +686,13 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
                 }
             }
 
+            if (subsPicker) {
+                SubsPicker(subs, onPick = { t ->
+                    subsPicker = false
+                    applySubs(t)
+                    notice = Triple(if (t == null) "Субтитри вимкнено" else "Субтитри: ${t.label}", null, null)
+                }, onClose = { subsPicker = false })
+            }
             if (picker) {
                 QualityPicker(v, quality, if (source == "live") liveH else 0, ffmpeg, onPick = { picker = false; setQuality(it) }, onClose = { picker = false })
             }
@@ -675,6 +708,44 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
                         player.play()
                     },
                 )
+            }
+        }
+    }
+}
+
+/** Доріжка субтитрів у файлі. */
+data class SubTrack(val group: androidx.media3.common.TrackGroup, val index: Int, val label: String, val selected: Boolean)
+
+private val UK = java.util.Locale("uk")
+
+private fun subTracks(tracks: Tracks): List<SubTrack> = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }.flatMap { g ->
+    (0 until g.length).filter { g.isTrackSupported(it) }.map { i ->
+        val f = g.getTrackFormat(i)
+        val lang = f.language?.takeIf { it.isNotBlank() && it != "und" }?.let { java.util.Locale.forLanguageTag(it).getDisplayLanguage(UK) }
+        val name = listOfNotNull(f.label?.takeIf { it.isNotBlank() }, lang).distinct().joinToString(" · ").ifEmpty { "Доріжка ${i + 1}" }
+        val forced = f.selectionFlags and C.SELECTION_FLAG_FORCED != 0
+        SubTrack(g.mediaTrackGroup, i, name + if (forced) " (лише написи)" else "", g.isTrackSelected(i))
+    }
+}
+
+@Composable
+private fun SubsPicker(subs: List<SubTrack>, onPick: (SubTrack?) -> Unit, onClose: () -> Unit) {
+    val p = LocalPal.current
+    val off = subs.none { it.selected }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
+        Win("mpv — ", Modifier.widthIn(max = 420.dp), bold = "subtitles") {
+            Column(Modifier.padding(vertical = 6.dp)) {
+                (listOf<SubTrack?>(null) + subs).forEach { t ->
+                    val on = if (t == null) off else t.selected
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onPick(t) }.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(t?.label ?: "Вимкнено", style = body(15.sp, if (on) FontWeight.SemiBold else FontWeight.Normal),
+                            color = if (on) p.acc else p.fg, modifier = Modifier.weight(1f))
+                        if (on) Icon(Ic.check, null, tint = p.acc, modifier = Modifier.size(20.dp))
+                    }
+                }
             }
         }
     }
@@ -804,6 +875,8 @@ private fun Controls(
     speed: Float,
     qualityLabel: String,
     onQuality: () -> Unit,
+    subs: List<SubTrack>,
+    onSubs: () -> Unit,
     queueText: String?,
     hasNext: Boolean,
     landscape: Boolean,
@@ -867,6 +940,10 @@ private fun Controls(
                     qualityLabel, style = mono(13.sp, FontWeight.Bold), color = Color.White,
                     modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onQuality).padding(horizontal = 10.dp, vertical = 9.dp),
                 )
+                if (subs.isNotEmpty()) {
+                    val on = subs.any { it.selected }
+                    CtlBtn(Ic.cc, if (on) "Субтитри: вимкнути" else "Субтитри: увімкнути", onSubs, on = on)
+                }
                 CtlBtn(Ic.fit, "Масштаб", onResize)
                 CtlBtn(Ic.rotate, if (landscape) "Вертикально" else "Горизонтально", onRotate, on = landscape)
                 CtlBtn(Ic.pip, "Картинка в картинці", onPip)

@@ -10,6 +10,10 @@ gen -f lavfi -i "testsrc2=s=1280x720:r=30" -f lavfi -i "sine=f=440:r=44100" -t 1
 gen -f lavfi -i "smptehdbars=s=1280x720:r=30" -f lavfi -i "sine=f=330:r=44100" -t 12 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest "$V/Кліпи/Кліп 1.mp4"
 gen -f lavfi -i "mandelbrot=s=1280x720:r=25" -f lavfi -i "sine=f=550:r=44100" -t 14 -c:v libx265 -preset fast -pix_fmt yuv420p -c:a aac -shortest "$V/Кліпи/Фрактал HEVC.mkv"
 gen -f lavfi -i "testsrc=s=1280x720:r=25" -f lavfi -i "sine=f=660:r=48000" -t 20 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a ac3 -shortest "$V/Кліпи/Концерт AC3.mkv"
+# MKV з двома доріжками субтитрів (англійська, українська) — для кнопки «CC»
+printf '1\n00:00:00,500 --> 00:00:09,000\nHello from VidBox\n' > /tmp/sub_en.srt
+printf '1\n00:00:00,500 --> 00:00:09,000\nПривіт від VidBox\n' > /tmp/sub_uk.srt
+gen -f lavfi -i "testsrc2=s=1280x720:r=25" -f lavfi -i "sine=f=480:r=44100" -i /tmp/sub_en.srt -i /tmp/sub_uk.srt -t 10 -map 0:v -map 1:a -map 2 -map 3 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -c:s srt -metadata:s:s:0 language=eng -metadata:s:s:1 language=ukr -shortest "$V/Кліпи/З субтитрами.mkv"
 gen -f lavfi -i "rgbtestsrc=s=640x360:r=25" -f lavfi -i "sine=f=770:r=44100" -t 10 -c:v mpeg4 -q:v 5 -c:a libmp3lame -shortest "$V/Кліпи/old clip.avi"
 gen -f lavfi -i "testsrc2=s=640x360:r=2" -f lavfi -i "sine=f=220:r=22050" -t 1500 -c:v libx264 -preset ultrafast -g 20 -c:a aac -b:a 32k -shortest "$V/Серіали/Серія 01.mp4"
 gen -f lavfi -i "smptebars=s=640x360:r=2" -f lavfi -i "sine=f=250:r=22050" -t 1620 -c:v libx264 -preset ultrafast -g 20 -c:a aac -b:a 32k -shortest "$V/Серіали/Серія 02.mp4"

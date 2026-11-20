@@ -39,6 +39,10 @@ class Prefs(ctx: Context) {
     var seekStep: Int
         get() = p.getInt("seek_step", 10)
         set(v) = p.edit().putInt("seek_step", v).apply()
+    /** Субтитри вимкнені (запам'ятовується для всіх відео). */
+    var subsOff: Boolean
+        get() = p.getBoolean("subs_off", false)
+        set(v) = p.edit().putBoolean("subs_off", v).apply()
     var bgAudio: Boolean
         get() = p.getBoolean("bg_audio", true)
         set(v) = p.edit().putBoolean("bg_audio", v).apply()

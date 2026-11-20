@@ -67,6 +67,7 @@ object Ic {
     val volume = make("volume", listOf("M4 9.5h3.5L12 6v12l-4.5-3.5H4z", "M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"))
     val sun = make("sun", listOf(circle(12f, 12f, 3.6f), "M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"))
     val speed = make("speed", listOf("M4.5 17a8 8 0 1 1 15 0", "M12 13.5l3.5-4.5"))
+    val cc = make("cc", listOf(rect(3f, 5f, 18f, 14f, 2.5f), "M10.6 10.2A2.3 2.3 0 1 0 10.6 13.8", "M17.1 10.2A2.3 2.3 0 1 0 17.1 13.8"))
     val fit = make("fit", listOf("M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"))
     val rotate = make("rotate", listOf("M4.5 12a7.5 7.5 0 0 1 13-5.1M19.5 12a7.5 7.5 0 0 1-13 5.1M17.5 3.5v3.5H14M6.5 20.5V17H10"))
     val book = make("book", listOf("M12 6.5C10 5 7 4.5 3.5 5v13c3.5-.5 6.5 0 8.5 1.5 2-1.5 5-2 8.5-1.5V5C17 4.5 14 5 12 6.5zM12 6.5v13"))

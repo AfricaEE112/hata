@@ -148,6 +148,19 @@ open_route "v/$(id_of 'Фрактал')"; sleep 2; dismiss_hint; sleep 7
 shot 16-player-hevc
 adb shell input keyevent 4; sleep 2
 
+# субтитри: кнопка «CC» → вибір доріжки
+open_route "v/$(id_of 'З субтитрами')"; sleep 2; dismiss_hint; sleep 2
+for i in 1 2 3; do
+  tap_text "Субтитри: увімкнути" && break
+  tap_text "Субтитри: вимкнути" && break
+  adb shell input tap 300 300; sleep 1
+done
+sleep 1
+shot 16b-subs-picker
+tap_text "українська"; sleep 3
+shot 16c-subs-uk
+adb shell input keyevent 4; sleep 2
+
 # MKV зі звуком AC3: у емулятора немає декодера → ПК робить копію MP4
 open_route "v/$(id_of 'Концерт')"; sleep 2; dismiss_hint; sleep 3
 shot 17-player-ac3-prepare
