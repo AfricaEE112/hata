@@ -374,7 +374,7 @@ DEMO_NET = [0]
 def updates(force=False):
     """Що нового на GitHub — питаємо gazda не частіше ніж раз на 10 хвилин."""
     if force or not UPDATES['data'] or time.time() - UPDATES['at'] > 600:
-        UPDATES['data'] = gazda({'do': 'update_check'}, 60)
+        UPDATES['data'] = gazda({'do': 'update_check'}, 660)
         UPDATES['at'] = time.time()
     return UPDATES['data']
 
@@ -526,7 +526,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p == '/api/power':
             return self.json(gazda({'do': 'power', 'op': d.get('op')}, 30))
         if p == '/api/update':
-            r = gazda({'do': 'update'}, 300)
+            r = gazda({'do': 'update'}, 900)
             UPDATES['data'] = None
             return self.json(r)
         if p == '/api/wifi':

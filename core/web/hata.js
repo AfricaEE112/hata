@@ -550,7 +550,7 @@ function bindUpd() {
   };
 }
 async function checkUpdates(force) {
-  UPD = await api('/api/updates' + (force ? '?force' : ''));
+  UPD = await api('/api/updates' + (force ? '?force' : ''), undefined, 700000);
   if ($('#updBox')) { $('#updBox').innerHTML = updBox(); bindUpd(); }
 }
 

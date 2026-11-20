@@ -314,8 +314,11 @@ def do_tailscale(a):
 
 # ───────────────────────── оновлення з відкатом ─────────────────────────
 
-def git(*args, timeout=120):
-    return run(['git', '-C', SRC, *args], timeout)
+def git(*args, timeout=600):
+    try:
+        return run(['git', '-C', SRC, *args], timeout)
+    except subprocess.TimeoutExpired:
+        raise Fail('GitHub не відповів за %d хв — дуже повільний інтернет. Перевір швидкість у блоці «мережа».' % (timeout // 60))
 
 
 def git_version():
