@@ -180,6 +180,7 @@ function renderMods(st) {
   m.push(`<span class="mod hw" title="${esc(st.gpu || 'Відеокарта')}${st.hardware ? '' : ' (кодує процесор)'}">${I.chip}${st.hwChecked ? esc(st.enc) : '…'}</span>`);
   if (st.disk) m.push(`<span class="mod disk" title="Вільно на ${st.disk.count > 1 ? `${st.disk.count} дисках` : 'диску'} з відео: ${fmtSize(st.disk.free)} з ${fmtSize(st.disk.total)}">${I.disk}${fmtSize(st.disk.free)}</span>`);
   $('#mods').innerHTML = m.join('');
+  fitBar();
   statusFast = !!(st.conv || st.queue);
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) pollStatus(); });
@@ -198,8 +199,23 @@ document.addEventListener('keydown', e => {
 
 function tick() {
   const d = new Date(), el = $('#clock');
-  if (el) el.innerHTML = `${esc(d.toLocaleDateString('uk-UA', {weekday: 'short', day: 'numeric', month: 'short'}))} <b>${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}</b>`;
+  if (el) el.innerHTML = `<span class="d">${esc(d.toLocaleDateString('uk-UA', {weekday: 'short', day: 'numeric', month: 'short'}))}&nbsp;</span><b>${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}</b>`;
+  fitBar();
 }
+
+// Верхній рядок завжди в один рядок і без обрізання: якщо не влазить (вузьке вікно, довгий статус, інші шрифти
+// на Mac), ховаємо менш важливе по черзі — дату, лічильник і диск, підписи розділів, увесь статус.
+function fitBar() {
+  const bar = document.querySelector('.bar');
+  if (!bar) return;
+  const steps = ['f1', 'f2', 'f3', 'f4'];
+  bar.classList.remove(...steps);
+  for (const c of steps) {
+    if (bar.scrollWidth <= bar.clientWidth + 1) break;
+    bar.classList.add(c);
+  }
+}
+addEventListener('resize', () => requestAnimationFrame(fitBar));
 tick();
 setInterval(tick, 15000);
 applyTheme(document.documentElement.dataset.theme || 'arch');

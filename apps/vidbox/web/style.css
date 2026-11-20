@@ -71,9 +71,13 @@ body::after{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;bac
 .mod.act{background:rgba(var(--glow),.16);border-color:rgba(var(--glow),.55);color:var(--fg)}
 .mod.act .i{animation:spin 1.6s linear infinite}
 .mod em{font-style:normal;color:var(--mute)}
-@media (max-width:1380px){.mod.disk,.mod.lib{display:none}}
+/* fitBar() у app.js додає f1…f4 по черзі, доки рядок не влізе */
+.bar.f1 .clock .d,.bar.f2 .clock .d,.bar.f3 .clock .d,.bar.f4 .clock .d{display:none}
+.bar.f2 .mod.lib,.bar.f2 .mod.disk,.bar.f3 .mod.lib,.bar.f3 .mod.disk{display:none}
+.bar.f3 .ws a span,.bar.f4 .ws a span{display:none}.bar.f3 .ws a,.bar.f4 .ws a{padding-right:6px}
+.bar.f4 .mods{display:none}
 @media (max-width:1100px){.mods,.ws a span{display:none}.ws a{padding-right:6px}}
-.search{position:relative;flex:1;max-width:320px;margin-left:auto}
+.search{position:relative;flex:1;min-width:140px;max-width:320px;margin-left:auto}
 .search input{width:100%;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:8px;padding:7px 34px 7px 34px;outline:none;font:13px var(--mono);transition:border-color .15s,background .15s}
 .search kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);font:11px var(--mono);color:var(--mute);border:1px solid var(--line);border-radius:4px;padding:0 5px}
 .search input:focus+kbd{display:none}
