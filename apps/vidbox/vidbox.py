@@ -1519,6 +1519,14 @@ def subs_list(r):
             lang = sub_lang(mid.split('.')[-1]) if mid else ''
             out.append({'lang': lang, 'label': mid if mid and not lang else '', 'src': ('f', os.path.join(folder, f)),
                         'def': False, 'forced': 'forced' in low})
+    ad = os.path.join(C.data, 'aisubs', r['id'])
+    try:
+        for f in sorted(os.listdir(ad), key=lambda x: (x != 'uk.srt', x)):
+            if f.endswith('.srt'):
+                out.append({'lang': sub_lang(f[:-4]), 'label': 'ШІ', 'src': ('f', os.path.join(ad, f)), 'def': False,
+                            'forced': False, 'ai': True})
+    except OSError:
+        pass
     for n, t in enumerate(out):
         t['n'] = n
     SUBS_CACHE[r['id']] = (mt, out)
@@ -1562,6 +1570,353 @@ def subs_vtt(r, n):
     with open(cache, 'wb') as f:
         f.write(res.stdout)
     return res.stdout
+
+
+# ───────────────────────────── субтитри ШІ (Whisper + DeepL) ─────────────────────────────
+# Whisper (faster-whisper) живе у власному середовищі Python у data/whisper: його ставить uv разом з окремим
+# Python 3.12 — не залежить від системного Python і не потребує root. Розпізнавання — у whisper_worker.py
+# з низьким пріоритетом; українською перекладає DeepL (ключ у налаштуваннях). Результат — data/aisubs/<id>/<мова>.srt.
+
+AI = {'install': None, 'log': '', 'cur': None, 'proc': None}       # install: None | 'run' | 'error'
+AI_LOCK = threading.Lock()
+AI_WAKE = threading.Event()
+AI_MODELS = ('large-v3-turbo', 'small')
+DEEPL_SRC = {'ar', 'bg', 'cs', 'da', 'de', 'el', 'en', 'es', 'et', 'fi', 'fr', 'he', 'hu', 'id', 'it', 'ja', 'ko', 'lt',
+             'lv', 'nb', 'nl', 'pl', 'pt', 'ro', 'ru', 'sk', 'sl', 'sv', 'th', 'tr', 'uk', 'vi', 'zh'}
+
+
+def ai_dir(*a):
+    return os.path.join(C.data, 'whisper', *a)
+
+
+def ai_py():
+    return ai_dir('venv', 'bin', 'python')
+
+
+def ai_ready():
+    return os.path.exists(ai_py()) and os.path.exists(ai_dir('venv', '.ok'))
+
+
+def ai_env():
+    e = dict(os.environ, HF_HOME=ai_dir('hf'), UV_CACHE_DIR=ai_dir('uv-cache'), UV_PYTHON_INSTALL_DIR=ai_dir('python'),
+             XDG_CACHE_HOME=ai_dir('cache'), HOME=ai_dir())
+    e.pop('PYTHONPATH', None)
+    return e
+
+
+def ai_install():
+    """Завантажити uv, поставити Python 3.12 і faster-whisper. Кілька хвилин; ~400 МБ."""
+    import platform
+    import tarfile
+    arch = {'x86_64': 'x86_64', 'amd64': 'x86_64', 'aarch64': 'aarch64', 'arm64': 'aarch64'}.get(platform.machine().lower())
+    if not sys.platform.startswith('linux') or not arch:
+        AI.update(install='error', log='Субтитри ШІ поки працюють лише на Linux (на Хаті).')
+        return
+    os.makedirs(ai_dir(), exist_ok=True)
+
+    def say(x):
+        AI['log'] = x
+
+    try:
+        uv = ai_dir('uv')
+        if not os.path.exists(uv):
+            say('Завантажую uv…')
+            url = 'https://github.com/astral-sh/uv/releases/latest/download/uv-%s-unknown-linux-gnu.tar.gz' % arch
+            with urllib.request.urlopen(url, timeout=120) as r, tarfile.open(fileobj=io.BytesIO(r.read()), mode='r:gz') as t:
+                m = next(x for x in t.getmembers() if x.name.endswith('/uv'))
+                with open(uv + '.tmp', 'wb') as f:
+                    f.write(t.extractfile(m).read())
+            os.chmod(uv + '.tmp', 0o755)
+            os.replace(uv + '.tmp', uv)
+        say('Ставлю Python 3.12…')
+        r = subprocess.run([uv, 'venv', '--python', '3.12', '--clear', ai_dir('venv')], env=ai_env(),
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900)
+        if r.returncode:
+            raise RuntimeError(r.stdout.decode('utf-8', 'replace')[-400:])
+        say('Ставлю faster-whisper (≈ 300 МБ)…')
+        r = subprocess.run([uv, 'pip', 'install', '--python', ai_py(), 'faster-whisper>=1.1'], env=ai_env(),
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1800)
+        if r.returncode:
+            raise RuntimeError(r.stdout.decode('utf-8', 'replace')[-400:])
+        open(ai_dir('venv', '.ok'), 'w').close()
+        AI.update(install=None, log='')
+        AI_WAKE.set()
+    except Exception as e:
+        AI.update(install='error', log='Не вдалося встановити: %s' % str(e)[-400:])
+
+
+def ai_queue():
+    try:
+        with open(os.path.join(C.data, 'aisubs', 'queue.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+
+def ai_save_queue(q):
+    d = os.path.join(C.data, 'aisubs')
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, 'queue.json.tmp'), 'w', encoding='utf-8') as f:
+        json.dump(q, f, ensure_ascii=False)
+    os.replace(os.path.join(d, 'queue.json.tmp'), os.path.join(d, 'queue.json'))
+
+
+def ai_set(vid, **kw):
+    with AI_LOCK:
+        q = ai_queue()
+        for it in q:
+            if it['id'] == vid:
+                it.update(kw)
+        ai_save_queue(q)
+
+
+def srt_time(t):
+    ms = int(round(t * 1000))
+    return '%02d:%02d:%02d,%03d' % (ms // 3600000, ms // 60000 % 60, ms // 1000 % 60, ms % 1000)
+
+
+def write_srt(path, segs, texts=None):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + '.tmp', 'w', encoding='utf-8') as f:
+        for i, sg in enumerate(segs):
+            f.write('%d\n%s --> %s\n%s\n\n' % (i + 1, srt_time(sg['s']), srt_time(sg['e']), (texts[i] if texts else sg['t']).strip()))
+    os.replace(path + '.tmp', path)
+
+
+def read_srt(path):
+    def t(x):
+        h, m, rest = x.strip().replace('.', ',').split(':')
+        sec, ms = rest.split(',')
+        return int(h) * 3600 + int(m) * 60 + int(sec) + int(ms) / 1000
+    segs = []
+    with open(path, encoding='utf-8') as f:
+        for block in re.split(r'\n\s*\n', f.read().replace('\r', '')):
+            lines = block.strip().split('\n')
+            i = next((k for k, l in enumerate(lines) if '-->' in l), -1)
+            if i >= 0 and lines[i + 1:]:
+                a, b = lines[i].split('-->')
+                segs.append({'s': t(a), 'e': t(b), 't': '\n'.join(lines[i + 1:])})
+    return segs
+
+
+def deepl_call(key, path, data=None):
+    host = 'api-free.deepl.com' if key.strip().endswith(':fx') else 'api.deepl.com'
+    req = urllib.request.Request('https://%s/v2/%s' % (host, path), data=json.dumps(data).encode() if data else None,
+                                 headers={'Authorization': 'DeepL-Auth-Key ' + key.strip(), 'Content-Type': 'application/json',
+                                          'User-Agent': 'VidBox'})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError({403: 'DeepL не прийняв ключ', 456: 'ліміт DeepL на цей місяць вичерпано',
+                            429: 'DeepL просить почекати — забагато запитів'}.get(e.code, 'DeepL: помилка %d' % e.code))
+
+
+def deepl_translate(key, lines, src, progress=None):
+    """Переклад реплік українською шматками по 40 — у вигляді XML, щоб DeepL бачив контекст, а репліки не злипались."""
+    out = list(lines)
+    for i in range(0, len(lines), 40):
+        part = lines[i:i + 40]
+        xml = '<r>' + ''.join('<s i="%d">%s</s>' % (i + k, html.escape(t, quote=False)) for k, t in enumerate(part)) + '</r>'
+        body = {'text': [xml], 'target_lang': 'UK', 'tag_handling': 'xml', 'tag_handling_version': 'v2',
+                'splitting_tags': ['s'], 'outline_detection': False}
+        if src in DEEPL_SRC:
+            body['source_lang'] = src.upper()
+        for n in range(3):
+            try:
+                res = deepl_call(key, 'translate', body)
+                break
+            except RuntimeError as e:
+                if 'почекати' not in str(e) or n == 2:
+                    raise
+                time.sleep(5 * (n + 1))
+        txt = res['translations'][0]['text']
+        for m in re.finditer(r'<s i="(\d+)">(.*?)</s>', txt, re.S):
+            k = int(m.group(1))
+            if 0 <= k < len(out):
+                out[k] = html.unescape(m.group(2)).strip() or out[k]
+        if progress:
+            progress(min(1.0, (i + 40) / max(1, len(lines))))
+    return out
+
+
+def ai_audio_stream(path):
+    """Номер звукової доріжки: «за замовчуванням», інакше перша."""
+    try:
+        j = json.loads(run([C.ffprobe, '-v', 'error', '-print_format', 'json', '-show_streams', '-select_streams', 'a', path],
+                           60).stdout.decode('utf-8', 'replace') or '{}')
+        st = j.get('streams') or []
+        for i, a in enumerate(st):
+            if (a.get('disposition') or {}).get('default'):
+                return i
+    except Exception:
+        pass
+    return 0
+
+
+def ai_job(it):
+    vid = it['id']
+    r = DB.one('SELECT * FROM videos WHERE id=?', (vid,))
+    if not r or not os.path.exists(r['path']):
+        return ai_set(vid, state='error', err='Файл не знайдено')
+    out = os.path.join(C.data, 'aisubs', vid)
+    wav = os.path.join(C.data, 'aisubs', 'tmp-%s.wav' % vid)
+    key = (C.cfg.get('deepl_key') or '').strip()
+    have = [f for f in (os.listdir(out) if os.path.isdir(out) else []) if f.endswith('.srt') and f != 'uk.srt']
+    if have and key and not os.path.exists(os.path.join(out, 'uk.srt')):
+        try:                             # розпізнане вже є (раніше не було ключа) — лише перекласти
+            segs = read_srt(os.path.join(out, have[0]))
+            ai_set(vid, state='translate', p=0)
+            uk = deepl_translate(key, [x['t'] for x in segs], have[0][:-4], lambda f: ai_set(vid, p=f))
+            write_srt(os.path.join(out, 'uk.srt'), segs, uk)
+            SUBS_CACHE.pop(vid, None)
+            return ai_set(vid, state='done', p=1, err='')
+        except Exception as e:
+            SUBS_CACHE.pop(vid, None)
+            return ai_set(vid, state='error', err=str(e)[-300:])
+    os.makedirs(os.path.dirname(wav), exist_ok=True)
+    try:
+        ai_set(vid, state='audio', p=0)
+        a = ai_audio_stream(r['path'])
+        res = subprocess.run(['nice', '-n', '15', C.ffmpeg, '-v', 'error', '-y', '-i', r['path'], '-map', '0:a:%d' % a,
+                              '-ac', '1', '-ar', '16000', wav], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
+        if res.returncode or not os.path.exists(wav):
+            raise RuntimeError('не вдалося дістати звук: ' + res.stderr.decode('utf-8', 'replace')[-200:])
+        ai_set(vid, state='model' if not os.path.isdir(ai_dir('models')) else 'recog', p=0)
+        model = C.cfg.get('ai_model') if C.cfg.get('ai_model') in AI_MODELS else AI_MODELS[0]
+        threads = max(1, min(4, (os.cpu_count() or 4) // 2 or 1))
+        proc = subprocess.Popen(['nice', '-n', '15', ai_py(), os.path.join(app_dir(), 'whisper_worker.py'), wav, model,
+                                 ai_dir('models'), str(threads)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env=ai_env(), text=True, encoding='utf-8')
+        AI['proc'] = proc
+        segs, lang, last = [], '', 0
+        for line in proc.stdout:
+            try:
+                j = json.loads(line)
+            except ValueError:
+                continue
+            if 'lang' in j:
+                lang = j['lang'] or ''
+                ai_set(vid, state='recog', lang=lang, p=0)
+            elif 't' in j:
+                segs.append(j)
+                if time.time() - last > 3:
+                    last = time.time()
+                    ai_set(vid, p=j['p'])
+        err = proc.stderr.read()
+        proc.wait()
+        AI['proc'] = None
+        if it.get('cancel') or any(x['id'] == vid and x.get('cancel') for x in ai_queue()):
+            return
+        if proc.returncode:
+            raise RuntimeError('розпізнавання впало: ' + (err or '').strip()[-300:])
+        if not segs:
+            raise RuntimeError('мови не почуто')
+        write_srt(os.path.join(out, '%s.srt' % (lang or 'xx')), segs)
+        if lang != 'uk':
+            if not key:
+                SUBS_CACHE.pop(vid, None)
+                return ai_set(vid, state='done', p=1, err='Без перекладу: немає ключа DeepL — є субтитри мовою оригіналу')
+            ai_set(vid, state='translate', p=0)
+            uk = deepl_translate(key, [x['t'] for x in segs], lang, lambda f: ai_set(vid, p=f))
+            write_srt(os.path.join(out, 'uk.srt'), segs, uk)
+        SUBS_CACHE.pop(vid, None)
+        ai_set(vid, state='done', p=1, err='')
+    except Exception as e:
+        SUBS_CACHE.pop(vid, None)
+        ai_set(vid, state='error', err=str(e)[-300:])
+    finally:
+        AI['proc'] = None
+        try:
+            os.remove(wav)
+        except OSError:
+            pass
+
+
+def ai_loop():
+    with AI_LOCK:                    # після перезапуску незавершене — знову в чергу
+        q = ai_queue()
+        for it in q:
+            if it['state'] in ('audio', 'model', 'recog', 'translate'):
+                it.update(state='queued', p=0)
+        ai_save_queue(q)
+    while True:
+        AI_WAKE.wait(60)
+        AI_WAKE.clear()
+        while ai_ready():
+            it = next((x for x in ai_queue() if x['state'] == 'queued'), None)
+            if not it:
+                break
+            AI['cur'] = it['id']
+            ai_job(it)
+            AI['cur'] = None
+            with AI_LOCK:
+                ai_save_queue([x for x in ai_queue() if not x.get('cancel')])
+
+
+def ai_status():
+    q = ai_queue()
+    for it in q:
+        r = DB.one('SELECT title, folder FROM videos WHERE id=?', (it['id'],))
+        it['title'] = r['title'] if r else '(файл зник)'
+    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0],
+            'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'linux': sys.platform.startswith('linux'), 'queue': q}
+
+
+def ai_post(d):
+    op = d.get('op')
+    if op == 'install':
+        if AI['install'] != 'run' and not ai_ready():
+            AI.update(install='run', log='Починаю…')
+            threading.Thread(target=ai_install, daemon=True).start()
+    elif op == 'add':
+        ids = [x for x in d.get('ids') or [] if isinstance(x, str) and ID_RE.fullmatch(x)]
+        with AI_LOCK:
+            q = ai_queue()
+            have = {it['id']: it for it in q}
+            for vid in ids:
+                if vid in have:
+                    if have[vid]['state'] in ('error', 'done'):
+                        have[vid].update(state='queued', p=0, err='', cancel=False)
+                else:
+                    q.append({'id': vid, 'state': 'queued', 'p': 0, 'at': time.time()})
+            ai_save_queue(q)
+        AI_WAKE.set()
+    elif op == 'remove':                # прибрати з черги; якщо саме обробляється — зупинити
+        vid = d.get('id')
+        with AI_LOCK:
+            q = ai_queue()
+            for it in q:
+                if it['id'] == vid:
+                    it['cancel'] = True
+            ai_save_queue([it for it in q if it['id'] != vid or AI['cur'] == vid])
+        if AI['cur'] == vid and AI['proc']:
+            try:
+                AI['proc'].kill()
+            except OSError:
+                pass
+    elif op == 'clear':
+        with AI_LOCK:
+            ai_save_queue([it for it in ai_queue() if it['state'] not in ('done', 'error')])
+    elif op == 'save':
+        with CFG_LOCK:
+            if 'key' in d:
+                C.cfg['deepl_key'] = str(d.get('key') or '').strip()[:200]
+            if d.get('model') in AI_MODELS:
+                C.cfg['ai_model'] = d['model']
+        save_config()
+    elif op == 'usage':
+        key = (C.cfg.get('deepl_key') or '').strip()
+        if not key:
+            return {'ok': False, 'error': 'Немає ключа'}
+        try:
+            u = deepl_call(key, 'usage')
+            return {'ok': True, 'used': u.get('character_count'), 'limit': u.get('character_limit')}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+    else:
+        return {'ok': False, 'error': 'невідома дія'}
+    return dict(ai_status(), ok=True)
 
 
 # ───────────────────────────── відеокарта (апаратне прискорення) ─────────────────────────────
@@ -3200,14 +3555,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     r = self.video_row(m.group(1))
                     if not r:
                         return self.send_json({'error': 'not found'}, 404)
-                    return self.send_json({'subs': [{k: t[k] for k in ('n', 'lang', 'label', 'def', 'forced')} for t in subs_list(r)]})
+                    return self.send_json({'subs': [dict({k: t[k] for k in ('n', 'lang', 'label', 'def', 'forced')}, ai=bool(t.get('ai')), ext=t['src'][0] == 'f') for t in subs_list(r)],
+                                           'ai': next(({'state': it['state'], 'p': it.get('p', 0), 'err': it.get('err', '')} for it in ai_queue() if it['id'] == r['id']), None),
+                                           'aiReady': ai_ready()})
                 m = re.fullmatch(r'/subs/(\w+)/(\d{1,3})\.vtt', path)
                 if m:
                     r = self.video_row(m.group(1))
-                    data = r and subs_vtt(r, int(m.group(2)))
-                    if not data:
+                    if not r:
                         return self.send_json({'error': 'not found'}, 404)
-                    return self.send_bytes(data, 'text/vtt; charset=utf-8', cache='private, max-age=3600')
+                    data = subs_vtt(r, int(m.group(2)))
+                    # не вдалося перетворити — порожній WebVTT, щоб плеєр в апці не падав через субтитри
+                    return self.send_bytes(data or b'WEBVTT\n\n', 'text/vtt; charset=utf-8',
+                                           cache='private, max-age=3600' if data else 'no-store')
                 m = re.fullmatch(r'/stream/(\w+)', path)
                 if m:
                     r = self.video_row(m.group(1))
@@ -3244,6 +3603,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 m = re.fullmatch(r'/anime/cover/(\w+)', path)
                 if m:
                     return self.send_anime_cover(m.group(1))
+                if path == '/api/aisubs':
+                    return self.send_json(ai_status())
                 if path == '/api/manga':
                     return self.send_json(manga_list_json())
                 m = re.fullmatch(r'/api/manga/(t|ch)/(\w+)', path)
@@ -3332,6 +3693,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.send_json({'ok': True})
                 if path == '/api/manga/reset':
                     return self.send_json(manga_reset(self.json_body()))
+                if path == '/api/aisubs':
+                    return self.send_json(ai_post(self.json_body()))
                 if path == '/api/manga/link':
                     return self.send_json(manga_link(self.json_body()))
                 if path == '/api/manga/rescan':
@@ -3614,7 +3977,7 @@ def main():
     print('  Налаштування: на сайті, вкладка «Налаштування» (зберігаються в %s)' % cfg_path())
     print('  Ctrl+C — зупинити')
     print('  Android-апка: знайде цей ПК сама, якщо телефон у тій самій Wi-Fi мережі\n')
-    for target in (media_worker, prep_worker, rescan_loop, detect_hw, discovery_loop):
+    for target in (media_worker, prep_worker, rescan_loop, detect_hw, discovery_loop, ai_loop):
         threading.Thread(target=target, daemon=True).start()
     if C.cfg.get('open_browser', True) and not args.no_browser:
         try:

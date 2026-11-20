@@ -61,6 +61,14 @@ class Api(private val prefs: Prefs) {
         call(client, Request.Builder().url(url(path)).post(rb).build())
     }
 
+    /** Субтитри окремими файлами (поруч із відео або зроблені ШІ) — для ExoPlayer як WebVTT. */
+    suspend fun extSubs(id: String): List<ExtSub> {
+        val a = get("/api/subs/$id").optJSONArray("subs") ?: return emptyList()
+        return (0 until a.length()).map { a.getJSONObject(it) }.filter { it.optBoolean("ext") }.map {
+            ExtSub(it.optInt("n"), it.optString("lang"), it.optString("label"), it.optBoolean("ai"))
+        }
+    }
+
     suspend fun library() = parseLibrary(get("/api/library"))
     suspend fun week() = parseWeek(get("/api/week"))
     suspend fun weekRefresh() = parseWeek(post("/api/week/refresh"))
@@ -109,3 +117,5 @@ class Api(private val prefs: Prefs) {
         o.optString("token")
     }
 }
+
+data class ExtSub(val n: Int, val lang: String, val label: String, val ai: Boolean)

@@ -76,6 +76,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Tracks
 import androidx.media3.common.TrackSelectionOverride
@@ -152,6 +153,8 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
     var source by remember { mutableStateOf("raw") }
     var liveH by remember { mutableIntStateOf(0) }
     var offset by remember { mutableLongStateOf(0L) }     // з якої мілісекунди почався потік live
+    var extSubs by remember { mutableStateOf<List<app.vidbox.data.ExtSub>?>(null) }   // субтитри-файли з ПК
+    var lastUrl by remember { mutableStateOf("") }
     var quality by remember { mutableStateOf(vm.prefs.quality) }
     var picker by remember { mutableStateOf(false) }
     // субтитри з файла (MKV тощо): кнопка «CC» з'являється, лише коли вони є
@@ -214,7 +217,15 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
     }
 
     fun load(url: String, startMs: Long) {
+        lastUrl = url
+        // live починається не з нуля файлу — там окремі субтитри розійшлися б у часі; з файлу на телефоні — без ПК
+        val ext = if (source == "raw" || source == "copy") extSubs.orEmpty() else emptyList()
         val item = MediaItem.Builder().setUri(url).setMediaId(v.id)
+            .setSubtitleConfigurations(ext.map { s ->
+                MediaItem.SubtitleConfiguration.Builder(Uri.parse(vm.api.url("/subs/${v.id}/${s.n}.vtt")))
+                    .setMimeType(MimeTypes.TEXT_VTT).setId("ext${s.n}")
+                    .setLanguage(s.lang.ifEmpty { null }).setLabel(if (s.ai) "ШІ" else s.label.ifEmpty { null }).build()
+            })
             .setMediaMetadata(
                 MediaMetadata.Builder().setTitle(v.title).setArtist(q?.name ?: Fmt.shortFolder(v.folder))
                     .apply { if (v.thumb > 0) setArtworkUri(Uri.parse(vm.api.thumbUrl(v))) }.build(),
@@ -232,6 +243,13 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
     fun playCopy(atMs: Long) {
         source = "copy"
         load(vm.api.streamUrl(v, raw = false), atMs)
+    }
+
+    LaunchedEffect(v.id) {
+        val got = runCatching { vm.api.extSubs(v.id) }.getOrDefault(emptyList())
+        extSubs = got
+        // відео вже почало грати без них — перезавантажуємо з тієї ж позиції
+        if (got.isNotEmpty() && lastUrl.isNotEmpty() && (source == "raw" || source == "copy")) load(lastUrl, player.currentPosition)
     }
 
     /** Потік з потрібною висотою кадру; перемотка = новий потік з іншого місця. */

@@ -815,6 +815,7 @@ async function renderSettings() {
       <button class="btn" id="mangaBrowse">${I.folder}Огляд</button><button class="btn primary" id="mangaset">${I.plus}Додати</button></div>`}
     <p class="warn" id="merr" hidden></p>
   </div></section>
+  <section class="set win" id="aiSet">${winBar('~/.config/vidbox/субтитри-ші')}<div class="win-body"><h2>Субтитри ШІ</h2><div id="aiBody"><p class="note">Завантажую…</p></div></div></section>
   <section class="set win">${winBar('~/.config/vidbox/перегляд')}<div class="win-body"><h2>Перегляд</h2>
     ${row('Продовжувати з місця, де зупинився', 'Якщо вимкнути, відео щоразу починається спочатку.', sw('resume', st.resume))}
     ${row('Вмикати наступне відео', 'Коли відео закінчилось, вмикається наступне з тієї ж папки.', sw('autoplay_next', st.autoplay_next))}
@@ -866,6 +867,7 @@ async function renderSettings() {
   if ($('#animeBrowse')) $('#animeBrowse').onclick = () => openPicker('', path => { $('#animef').value = path; });
   if ($('#animeoff')) $('#animeoff').onclick = () => { if (confirm('Прибрати папку з аніме? Розділ «Аніме» зникне, файли на диску лишаться.')) setAnime(''); };
 
+  drawAiSet();
   const setManga = async a => {
     const r = await api('/api/settings', {method: 'POST', body: JSON.stringify({manga_folder: a})});
     const e = $('#merr');
@@ -1107,6 +1109,15 @@ async function renderAnimeTitle(sid) {
   };
   $('#alink').onkeydown = e => { if (e.key === 'Enter') $('#alinkset').click(); };
   $('#aplay').onclick = () => playAnime(t, startId);
+  api('/api/aisubs').then(st => {
+    if (!st || !st.ready || !$('#aplay')) return;
+    $('#aplay').parentElement.insertAdjacentHTML('beforeend', `<button class="btn ghost" id="aisubs" title="Зробити українські субтитри ШІ для всіх серій">Субтитри ШІ</button>`);
+    $('#aisubs').onclick = async () => {
+      if (!confirm(`Зробити українські субтитри для ${t.eps.length} ${plural(t.eps.length, 'серії', 'серій', 'серій')}? Це у фоні, орієнтовно 15–40 хв на серію.`)) return;
+      const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'add', ids: t.eps.map(e => e.id)})});
+      toast(r.ok ? 'Додав у чергу. Хід видно в Налаштуваннях → «Субтитри ШІ»' : 'Не вдалося');
+    };
+  }).catch(() => {});
   $$('[data-ep]').forEach(b => b.onclick = () => playAnime(t, b.dataset.ep));
 }
 
@@ -1677,10 +1688,57 @@ const PI = {
 const rateLabel = r => (r === 1 ? '1' : String(r).replace('.', ',')) + '×';
 let wantFs = false;   // наступне відео відкрити теж на весь екран
 
+// Субтитри ШІ: стан однієї позиції черги звичайними словами
+function aiStateText(a) {
+  const pct = Math.round((a.p || 0) * 100) + ' %';
+  return {queued: 'у черзі', audio: 'готую звук', model: 'завантажую модель (перший раз ~1 ГБ)', recog: `розпізнаю мову · ${pct}`,
+    translate: `перекладаю українською · ${pct}`, done: 'готово', error: 'не вдалося'}[a.state] || a.state;
+}
+let aiSetT = 0;
+async function drawAiSet(st) {
+  clearTimeout(aiSetT);
+  const box = $('#aiBody');
+  if (!box) return;
+  st = st || await api('/api/aisubs').catch(() => null);
+  if (!st || !$('#aiBody')) return;
+  const busy = st.install === 'run' || st.queue.some(x => !['done', 'error'].includes(x.state));
+  box.innerHTML = `<p class="note" style="margin-top:0">VidBox сам слухає відео (Whisper — прямо на цьому комп’ютері) і робить субтитри, а українською їх перекладає DeepL. Серія на 24 хв — орієнтовно 15–40 хв, усе у фоні з низьким пріоритетом. Запустити — у плеєрі (кнопка CC → «Українські (ШІ)») або на сторінці аніме для всіх серій.</p>` +
+    (!st.linux ? `<p class="warn">Поки працює лише на Linux (на Хаті).</p>`
+    : !st.ready ? (st.install === 'run' ? `<p class="note">⏳ ${esc(st.log || 'Встановлюю…')} Це кілька хвилин.</p>`
+      : `${st.install === 'error' ? `<p class="warn">${esc(st.log)}</p>` : ''}<button class="btn primary" id="aiInstall">${I.plus}Встановити розпізнавання</button><p class="note">Завантажиться ≈ 400 МБ, а з першим відео — модель ще ≈ 1 ГБ.</p>`)
+    : `<div class="srow"><div class="sl"><b>Модель</b><small>Точніша — краще чує японську й шумні сцени; швидша — помітно швидше, але більше помилок.</small></div>
+        <div class="sc"><div class="seg" id="aiModel"><button data-m="large-v3-turbo" class="${st.model === 'large-v3-turbo' ? 'on' : ''}">точніша</button><button data-m="small" class="${st.model === 'small' ? 'on' : ''}">швидша</button></div></div></div>
+      <div class="srow"><div class="sl"><b>Ключ DeepL</b><small>${st.deepl ? 'Ключ збережено. ' : 'Без ключа будуть лише субтитри мовою оригіналу. '}Безкоштовний ключ — на <a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener">deepl.com/pro-api</a> (DeepL API Free, 500 тис. символів на місяць ≈ 40–50 серій).</small><small id="aiUsage"></small></div></div>
+      <div class="fadd"><input id="aiKey" type="password" autocomplete="off" placeholder="${st.deepl ? '•••••••• (вставити новий, щоб замінити)' : 'Ключ DeepL API, наприклад xxxxxxxx-…:fx'}" aria-label="Ключ DeepL API">
+        <button class="btn primary" id="aiKeySave">Зберегти</button>${st.deepl ? '<button class="btn" id="aiUse">Скільки лишилось</button>' : ''}</div>`) +
+    (st.queue.length ? `<h3 style="margin:16px 0 6px">Черга</h3><div class="flist">${st.queue.map(x => `<div class="frow"><div><b>${esc(x.title)}</b>
+        <small style="color:var(${x.state === 'error' ? '--red, #e66' : '--mute'})">${esc(aiStateText(x))}${x.err ? ' — ' + esc(x.err) : ''}</small></div>
+        <button class="btn ghost icon" data-airm="${esc(x.id)}" title="${['done', 'error'].includes(x.state) ? 'Прибрати зі списку' : 'Скасувати'}" aria-label="Прибрати">${I.trash}</button></div>`).join('')}</div>
+      ${st.queue.some(x => ['done', 'error'].includes(x.state)) ? '<button class="btn ghost" id="aiClear" style="margin-top:8px">Прибрати готові</button>' : ''}` : '');
+  const post = async b => { const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify(b)}); if (r.ok === false && r.error) toast(r.error); return r; };
+  if ($('#aiInstall')) $('#aiInstall').onclick = async () => drawAiSet(await post({op: 'install'}));
+  $$('#aiModel [data-m]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', model: b.dataset.m})));
+  if ($('#aiKeySave')) $('#aiKeySave').onclick = async () => {
+    const k = $('#aiKey').value.trim();
+    if (!k) { $('#aiKey').focus(); return toast('Встав ключ DeepL'); }
+    drawAiSet(await post({op: 'save', key: k}));
+    const u = await post({op: 'usage'});
+    toast(u.ok ? 'Ключ працює' : 'Ключ збережено, але DeepL відповів: ' + u.error);
+  };
+  if ($('#aiUse')) $('#aiUse').onclick = async () => {
+    const u = await post({op: 'usage'});
+    $('#aiUsage').textContent = u.ok ? `Цього місяця використано ${u.used.toLocaleString('uk-UA')} з ${u.limit.toLocaleString('uk-UA')} символів.` : u.error;
+  };
+  $$('[data-airm]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'remove', id: b.dataset.airm})));
+  if ($('#aiClear')) $('#aiClear').onclick = async () => drawAiSet(await post({op: 'clear'}));
+  if (busy) aiSetT = setTimeout(() => { if ($('#aiBody') && !$('#aiBody').contains(document.activeElement)) drawAiSet(); else if ($('#aiBody')) aiSetT = setTimeout(drawAiSet, 4000); }, 4000);
+}
+
 function subName(t) {
   let n = '';
   try { if (t.lang) n = new Intl.DisplayNames(['uk'], {type: 'language'}).of(t.lang); } catch (e) {}
   if (!n) return t.label || `Доріжка ${t.n + 1}`;
+  if (t.ai) return `${n} · ШІ`;
   return t.label && t.label.toLowerCase() !== n.toLowerCase() ? `${n} · ${t.label}` : n;
 }
 function parseVtt(txt) {
@@ -1751,7 +1809,7 @@ function mountPlayer(vp, v, o) {
   const menu = q('.vp-menu'), endBox = q('.vp-end'), msg = q('.vp-msg'), badge = q('.vp-badge'), vtoast = q('.vp-toast'), hit = q('.vp-hit');
   const touch = matchMedia('(hover: none)').matches;
   const subsEl = q('.vp-subs'), ccBtn = q('[data-a=subs]');
-  const SB = {list: [], on: -1, last: -1, cues: [], vtt: {}, shown: ''};
+  const SB = {list: [], on: -1, last: -1, cues: [], vtt: {}, shown: '', ai: null, aiReady: false, poll: 0};
   let idleT = 0, raf = 0, dragging = false, dead = false, badgeT = 0, toastT2 = 0, endT = 0, holding = false;
   const D = () => (isFinite(video.duration) && video.duration > 0) ? video.duration : (v.dur || 0);
   video.volume = LS.get('vol', 1);
@@ -1789,7 +1847,9 @@ function mountPlayer(vp, v, o) {
       try {
         const r = await fetch(`/subs/${v.id}/${n}.vtt`);
         if (!r.ok) throw new Error(r.status);
-        SB.vtt[n] = parseVtt(await r.text());
+        const cues = parseVtt(await r.text());
+        if (!cues.length) throw new Error('empty');
+        SB.vtt[n] = cues;
       } catch (e) {
         clearTimeout(slow);
         if (!dead) { vpToast('Ці субтитри не вдалося прочитати'); ccBtn.classList.remove('on'); }
@@ -1802,8 +1862,31 @@ function mountPlayer(vp, v, o) {
   }
   video.addEventListener('timeupdate', drawSubs);
   video.addEventListener('seeked', drawSubs);
+  const aiBusy = () => SB.ai && !['done', 'error'].includes(SB.ai.state);
+  async function aiPoll() {            // чекаємо субтитри ШІ, поки відкритий плеєр
+    clearTimeout(SB.poll);
+    if (dead || !aiBusy()) return;
+    SB.poll = setTimeout(async () => {
+      const r = await api(`/api/subs/${v.id}`).catch(() => null);
+      if (dead || !r) return;
+      SB.ai = r.ai;
+      if (!aiBusy()) {
+        const had = new Set(SB.list.map(t => t.n));
+        SB.list = r.subs || [];
+        const fresh = SB.list.find(t => t.ai && t.lang === 'uk' && !had.has(t.n)) || SB.list.find(t => t.ai && !had.has(t.n));
+        if (fresh) { pickSub(fresh.n); vpToast(`Субтитри ШІ готові: ${subName(fresh)}`); }
+        else if (SB.ai && SB.ai.state === 'error') vpToast('Субтитри ШІ: ' + (SB.ai.err || 'не вдалося'));
+      }
+      if (!menu.hidden && menu.dataset.kind === 'subs') openMenu('subs');
+      aiPoll();
+    }, 8000);
+  }
   api(`/api/subs/${v.id}`).then(r => {
-    if (dead || !r || !r.subs || !r.subs.length) return;
+    if (dead || !r) return;
+    SB.ai = r.ai; SB.aiReady = r.aiReady;
+    if (SB.aiReady) ccBtn.hidden = false;
+    aiPoll();
+    if (!r.subs || !r.subs.length) return;
     SB.list = r.subs; ccBtn.hidden = false;
     const pref = LS.get('subs', null);
     if (pref && pref.off) return;
@@ -1880,7 +1963,10 @@ function mountPlayer(vp, v, o) {
     menu.dataset.kind = kind;
     menu.innerHTML = kind === 'subs'
       ? '<p>Субтитри</p>' + `<button data-sub="-1" class="${SB.on < 0 ? 'on' : ''}">Вимкнено</button>` +
-        SB.list.map(t => `<button data-sub="${t.n}" class="${SB.on === t.n ? 'on' : ''}">${esc(subName(t))}${t.forced ? '<small>лише написи</small>' : ''}</button>`).join('')
+        SB.list.map(t => `<button data-sub="${t.n}" class="${SB.on === t.n ? 'on' : ''}">${esc(subName(t))}${t.forced ? '<small>лише написи</small>' : ''}</button>`).join('') +
+        (!SB.aiReady ? '' : aiBusy() ? `<p class="vp-ai">ШІ: ${esc(aiStateText(SB.ai))}</p>`
+          : SB.list.some(t => t.ai && t.lang === 'uk') ? ''
+          : `<button data-aisub>${I.plus}Українські (ШІ)</button>${SB.ai && SB.ai.err ? `<p class="vp-ai">${esc(SB.ai.err)}</p>` : ''}`)
       : kind === 'quality' && o.quality
       ? '<p>Якість</p>' + o.quality.items().map(x => `<button data-q="${x.id}" class="${x.on ? 'on' : ''}"${x.off ? ' disabled' : ''}>${x.name}<small>${esc(x.hint)}</small></button>`).join('')
       : '<p>Швидкість</p>' + RATES.map(r => `<button data-rate="${r}" class="${r === video.playbackRate ? 'on' : ''}">${r === 1 ? 'Звичайна' : rateLabel(r)}</button>`).join('');
@@ -1899,9 +1985,18 @@ function mountPlayer(vp, v, o) {
     pip: togglePip, fs: toggleFs, next: () => { if (o.onNext) { wantFs = !!fsEl(); o.onNext(); } },
   };
 
-  vp.addEventListener('click', e => {
+  vp.addEventListener('click', async e => {
     const r = e.target.closest('[data-rate]');
     if (r) { setRate(+r.dataset.rate); closeMenu(); return; }
+    if (e.target.closest('[data-aisub]')) {
+      closeMenu();
+      const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'add', ids: [v.id]})}).catch(() => null);
+      if (!r || !r.ok) return vpToast('Не вдалося додати в чергу');
+      SB.ai = {state: 'queued', p: 0};
+      vpToast('Додав у чергу. Субтитри з’являться самі, коли будуть готові — серія займає 15–40 хв');
+      aiPoll();
+      return;
+    }
     const sb = e.target.closest('[data-sub]');
     if (sb) { closeMenu(); pickSub(+sb.dataset.sub); return; }
     const qb = e.target.closest('[data-q]');
@@ -2105,7 +2200,7 @@ function mountPlayer(vp, v, o) {
     msgEl: msg,
     enterFs() { const req = vp.requestFullscreen || vp.webkitRequestFullscreen; if (req) { try { const p = req.call(vp); if (p && p.catch) p.catch(() => {}); } catch (e) {} } },
     destroy() {
-      dead = true;
+      dead = true; clearTimeout(SB.poll);
       cancelAnimationFrame(raf); clearTimeout(idleT); clearTimeout(endT); clearTimeout(tapT); clearTimeout(holdT);
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('fullscreenchange', onFs);
