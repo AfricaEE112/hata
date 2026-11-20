@@ -901,7 +901,7 @@ const DK = {health: null, bk: null, pick: null, picking: false};
 let disksTimer;
 const hoursText = h => h == null ? '—' : `${h.toLocaleString('uk-UA')} год` + (h >= 8760 ? ` ≈ ${(h / 8760).toFixed(1).replace('.', ',')} р.` : '');
 const agoText = t => { const s = Math.max(0, Math.round(Date.now() / 1000 - t)); return s < 90 ? 'щойно' : s < 3600 ? `${Math.round(s / 60)} хв тому` : s < 86400 ? `${Math.round(s / 3600)} год тому` : new Date(t * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'short'}); };
-const minsText = m => !m ? 'ніколи' : m < 60 ? `${m} хв` : `${m / 60} год`;
+const minsText = m => m < 0 ? 'як є' : !m ? 'ніколи' : m < 60 ? `${m} хв` : `${m / 60} год`;
 
 // Висновок про диск звичайними словами: [рівень, текст]
 function diskVerdict(d) {
@@ -917,8 +917,20 @@ function diskVerdict(d) {
   if (s.temp >= 55) out.push(['red', `Гарячий: ${s.temp} °C. Дай йому повітря або перестав з-під ноутбука.`]);
   else if (s.temp >= 50) out.push(['yel', `Теплий: ${s.temp} °C — вище за комфортні для HDD 50 °C.`]);
   if (s.crc > 0) out.push(['yel', `${s.crc} помилок передачі — зазвичай винен кабель чи USB-адаптер, а не сам диск.`]);
+  if (s.load_cycles >= 300000) out.push(['yel', `Головки запаркувались ${s.load_cycles.toLocaleString('uk-UA')} разів — більше за типовий ресурс (300 тис.). Диск ще може довго працювати, але копії тримай свіжими.`]);
+  else if (d.sleep < 0 && s.load_cycles > 1000 && s.hours > 0 && s.load_cycles / s.hours > 20) out.push(['yel', `Головки паркуються ~${Math.round(s.load_cycles / s.hours)} разів на годину — так ресурс швидко вичерпається. Вибери нижче «ніколи» або час сну: Хата вимкне це паркування.`]);
   if (!out.length) return ['acc', s.state === 'standby' ? 'Здоровий, зараз спить.' : 'Диск здоровий.'];
   return out.sort((a, b) => (a[0] === 'red' ? 0 : 1) - (b[0] === 'red' ? 0 : 1))[0].concat([out.slice(1).map(x => x[1])]);
+}
+
+function sleepNote(d) {
+  const s = d.smart || {};
+  const now = s.state === 'standby' ? 'Зараз спить — прокинеться сам, щойно щось знадобиться (кілька секунд розкрутки).'
+    : d.idle != null && d.sleep !== 0 ? `Без роботи ${d.idle < 60 ? 'менше хвилини' : Math.round(d.idle / 60) + ' хв'}.` : '';
+  const own = d.tuned === false ? ' Диск не прийняв команду вимкнути власний таймер — тримаю лише читанням.' : '';
+  if (d.sleep < 0) return `${now} Хата не втручається: диск чи док засинають за своїм таймером (деякі доки — вже за 2–3 хв).`;
+  if (d.sleep === 0) return `Тримаю розкрученим: власний таймер диска вимкнено, і раз на хвилину читаю 4 КБ, щоб док не приспав.${own} Відео стартує без затримки; ціна — кілька ват, тепло й шум.`;
+  return `${now} До ${minsText(d.sleep)} без роботи не дам заснути ні диску, ні доку, далі приспить Хата.${own} Часте засинання–прокидання теж зношує — 20–30 хв зазвичай оптимально.`;
 }
 
 function diskCard(d, choices) {
@@ -928,6 +940,7 @@ function diskCard(d, choices) {
   const t = s.temp;
   const rows = [
     ['робота', hoursText(s.hours)], ['увімкнень', s.cycles != null ? s.cycles.toLocaleString('uk-UA') : null],
+    ['паркувань головок', s.load_cycles != null ? s.load_cycles.toLocaleString('uk-UA') + (s.hours > 0 ? ` (${Math.round(s.load_cycles / s.hours)}/год)` : '') : null],
     ['перепризначені', s.realloc], ['нестабільні', s.pending], ['невиправні', s.uncorrect], ['помилки кабелю', s.crc],
     ['ресурс', s.life != null ? `${s.life}%` : null], ['резерв', s.spare != null ? `${s.spare}%` : null], ['помилки носія', s.media_errors],
   ].filter(r => r[1] != null && r[1] !== '—' || r[0] === 'робота' && s.hours != null);
@@ -943,7 +956,7 @@ function diskCard(d, choices) {
     ${rows.length ? `<dl class="kv dk-kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd class="${bad(k) ? 'bad' : ''}">${esc(v)}</dd>`).join('')}</dl>` : ''}
     ${d.sleepable ? `<p class="note" style="margin-top:16px">засинати без роботи через</p>
       <div class="seg dk-sleep" role="group" aria-label="Засинати без роботи">${choices.map(m => `<button data-sleep="${m}" data-dev="${esc(d.dev)}" class="${d.sleep === m ? 'on' : ''}">${minsText(m)}</button>`).join('')}</div>
-      <p class="note">${s.state === 'standby' ? 'Зараз спить — прокинеться сам, щойно щось знадобиться (кілька секунд розкрутки).' : d.idle != null ? `Без роботи ${d.idle < 60 ? 'менше хвилини' : Math.round(d.idle / 60) + ' хв'}.` : ''} Сон береже диск і тишу, але часте засинання–прокидання теж зношує — 20–30 хв зазвичай оптимально.</p>` : ''}
+      <p class="note">${sleepNote(d)}</p>` : ''}
     <div class="acts">${d.loop ? '' : `<button class="btn" data-smart="${esc(d.dev)}">Оновити SMART</button>`}
       ${d.names.filter(n => n !== 'система').map(n => `<button class="btn ghost" data-fopen="${esc(n)}">Файли: ${esc(n)}</button>`).join('')}
       <span class="sp"></span><span class="note" style="margin:0">${s.at ? 'перевірено ' + agoText(s.at) : ''}</span></div>`,
@@ -1013,7 +1026,8 @@ function drawDisks() {
 function bindDisks() {
   $$('[data-sleep]').forEach(btn => btn.onclick = async () => {
     const r = await api('/api/disks/health', {op: 'sleep', dev: btn.dataset.dev, minutes: +btn.dataset.sleep});
-    toast(r.ok ? (+btn.dataset.sleep ? `Засинатиме через ${minsText(+btn.dataset.sleep)} без роботи` : 'Не засинатиме') : r.error);
+    const m = +btn.dataset.sleep;
+    toast(r.ok ? (m < 0 ? 'Сон — як вирішить диск чи док' : m ? `Засинатиме через ${minsText(m)} без роботи` : 'Не засинатиме') : r.error);
     disksPage();
   });
   $$('[data-smart]').forEach(btn => btn.onclick = async () => {

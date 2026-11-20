@@ -195,15 +195,15 @@ def demo_gazda(req):
                   'smart': {'state': 'active', 'passed': True, 'temp': 41, 'hours': 6120, 'cycles': 1830, 'life': 96, 'media_errors': 0, 'spare': 100, 'at': time.time() - 120}}]
         if names:
             disks.append({'dev': '/dev/sda', 'names': names[:1], 'model': 'WDC WD20SPZX-22UA7T0', 'serial': 'WD-WX1', 'size': 2000 * G, 'rot': True,
-                          'usb': True, 'system': False, 'loop': False, 'sleep': sl.get('/dev/sda', 20), 'idle': 140, 'sleepable': True,
+                          'usb': True, 'system': False, 'loop': False, 'sleep': sl.get('/dev/sda', 0), 'tuned': True, 'idle': 140, 'sleepable': True,
                           'usage': {names[0]: {'total': 2000 * G, 'free': 640 * G}},
-                          'smart': {'state': 'active', 'passed': True, 'temp': 38, 'hours': 21450, 'cycles': 4210, 'realloc': 0, 'pending': 0, 'uncorrect': 0, 'crc': 0, 'at': time.time() - 200}})
+                          'smart': {'state': 'active', 'passed': True, 'temp': 38, 'hours': 21450, 'cycles': 4210, 'load_cycles': 61240, 'realloc': 0, 'pending': 0, 'uncorrect': 0, 'crc': 0, 'at': time.time() - 200}})
         if len(names) > 1:
             disks.append({'dev': '/dev/sdb', 'names': names[1:2], 'model': 'TOSHIBA MQ04ABF100', 'serial': 'TOS1', 'size': 1000 * G, 'rot': True,
-                          'usb': True, 'system': False, 'loop': False, 'sleep': sl.get('/dev/sdb', 0), 'idle': 5400, 'sleepable': True,
+                          'usb': True, 'system': False, 'loop': False, 'sleep': sl.get('/dev/sdb', -1), 'tuned': None, 'idle': 5400, 'sleepable': True,
                           'usage': {names[1]: {'total': 1000 * G, 'free': 120 * G}},
-                          'smart': {'state': 'standby', 'passed': True, 'temp': 44, 'hours': 30311, 'cycles': 9800, 'realloc': 16, 'pending': 2, 'uncorrect': 0, 'crc': 0, 'at': time.time() - 900}})
-        return {'ok': True, 'disks': disks, 'choices': [0, 10, 20, 30, 60, 120]}
+                          'smart': {'state': 'standby', 'passed': True, 'temp': 44, 'hours': 30311, 'cycles': 9800, 'load_cycles': 812500, 'realloc': 16, 'pending': 2, 'uncorrect': 0, 'crc': 0, 'at': time.time() - 900}})
+        return {'ok': True, 'disks': disks, 'choices': [-1, 0, 10, 20, 30, 60, 120]}
     if d == 'status':
         return {'ok': True, 'host': 'hata', 'uptime': 93784, 'load': 0.42, 'cpus': 8, 'cpu_model': '11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz', 'temp': 47.5,
                 'mem': {'total': 8 * G, 'avail': 5.6 * G}, 'os': 'Ubuntu 24.04.1 LTS', 'version': 'cd4bff2 2026-11-19T15:00:00+02:00', 'tz': DEMO_STATE.get('tz', 'Europe/Kyiv'),

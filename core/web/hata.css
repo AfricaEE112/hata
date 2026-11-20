@@ -295,6 +295,7 @@ button.fm-name{font-weight:600}
 .dk-kv{margin-top:14px}
 .dk-kv dd.bad{color:var(--red)}
 .dk-sleep{margin-top:6px}.dk-sleep button{flex:1 1 0;min-width:0;padding:0 2px;min-height:34px;font-size:12.5px;white-space:nowrap}
+@media (max-width:560px){.dk-sleep{display:grid;grid-template-columns:repeat(4,1fr)}}
 .dk-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 14px;align-items:end}
 .dk-form label.f{margin-top:0}
 .dk-form select,.dk-form input{width:100%}

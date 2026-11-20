@@ -11,7 +11,9 @@ gazda через unix-сокет /run/hata/gazda.sock, а gazda виконує �
 Забув пароль панелі:  sudo gazda password
 """
 import json
+import mmap
 import os
+import random
 import re
 import shutil
 import socket
@@ -524,12 +526,20 @@ def wifi_link(iface):
 
 # ───────────────────────── здоров'я дисків (SMART), сон ─────────────────────────
 # smartctl читаємо з -n standby: якщо диск спить, не будимо (лише кнопка «Оновити» будить).
-# Сон: якщо на диску N хвилин не було читань/записів — кажемо йому заснути (smartctl -s standby,now).
+# Сон HDD з даними — один з режимів:
+#   -1 «як є»   — Хата не втручається: диск чи док засинають за своїм таймером;
+#    0 «ніколи» — тримати розкрученим;
+#    N хв       — не давати заснути раніше, а після N хв без читань/записів приспати самим (smartctl -s standby,now).
+# Для 0 і N: власний таймер диска вимикаємо (standby,off; apm,254 — щоб 2,5" не паркували головки щосекунди),
+# а таймер контролера в доці (його з Linux не вимкнути, у MAIWO — ~3 хв) перебиваємо крихітним читанням раз на 50 с.
 
 SMART = {}        # пристрій → останнє прочитане (з часом)
 DISK_IO = {}      # sda → [ознака активності, з якого часу без змін, чи вже приспали]
 SMART_EVERY = 300
-SLEEP_CHOICES = (0, 10, 20, 30, 60, 120)
+SLEEP_CHOICES = (-1, 0, 10, 20, 30, 60, 120)
+KEEPALIVE_EVERY = 50
+TUNED = {}        # sda → (серійник, чи прийняв диск команду) — кому вже вимкнули власний таймер
+PINGED = {}       # sda → коли востаннє «торкались»
 
 
 def lsblk_tree():
@@ -563,7 +573,7 @@ def phys_disks():
     return out
 
 
-ATTR = {5: 'realloc', 9: 'hours', 12: 'cycles', 187: 'uncorrect_rep', 188: 'timeout', 194: 'temp', 190: 'temp_air',
+ATTR = {5: 'realloc', 9: 'hours', 12: 'cycles', 193: 'load_cycles', 187: 'uncorrect_rep', 188: 'timeout', 194: 'temp', 190: 'temp_air',
         196: 'realloc_ev', 197: 'pending', 198: 'uncorrect', 199: 'crc', 177: 'wear_level', 231: 'life_left', 233: 'media_wear'}
 
 
@@ -635,10 +645,37 @@ def sleep_key(d):
     return d['serial'] or d['dev']
 
 
+def sleep_mode(sleep, d):
+    v = sleep.get(sleep_key(d))
+    return -1 if v is None else int(v)
+
+
+def smartctl_set(dev, *sets):
+    args = [x for v in sets for x in ('-s', v)]
+    r = run(['smartctl'] + args + [dev], 30)
+    if r.returncode & 3:
+        r = run(['smartctl', '-d', 'sat'] + args + [dev], 30)
+    return not r.returncode & 7         # 4 — диск не прийняв якусь із команд
+
+
+def touch_disk(dev, size):
+    """Прочитати 4 КБ з випадкового місця напряму з диска (повз кеш), щоб док бачив роботу."""
+    buf = mmap.mmap(-1, 4096)           # вирівняний буфер для O_DIRECT
+    fd = os.open(dev, os.O_RDONLY | getattr(os, 'O_DIRECT', 0))
+    try:
+        os.preadv(fd, [buf], random.randrange(0, max(1, size // 4096 - 1)) * 4096)
+    finally:
+        os.close(fd)
+        buf.close()
+
+
 def disk_care(now):
     """Раз на 20 с з keeper: SMART раз на 5 хв (не будячи), приспати бездіяльні HDD."""
     sleep = load_state().get('sleep') or {}
-    for d in phys_disks():
+    disks = phys_disks()
+    for k in set(TUNED) - {d['kname'] for d in disks}:      # диск зник — при поверненні налаштуємо знову
+        TUNED.pop(k, None)
+    for d in disks:
         dev, kname = d['dev'], d['kname']
         io = disk_io(kname)
         st = DISK_IO.setdefault(kname, [io, now, False])
@@ -654,8 +691,26 @@ def disk_care(now):
             else:
                 cache = dict(got, at=now)
             SMART[dev] = cache
-        mins = int(sleep.get(sleep_key(d)) or 0)
-        if mins and d['rot'] and not d['system'] and not st[2] and now - st[1] >= mins * 60:
+        mins = sleep_mode(sleep, d)
+        if not d['rot'] or d['system'] or d['loop'] or mins < 0:
+            TUNED.pop(kname, None)
+            continue
+        if (TUNED.get(kname) or (None,))[0] != d['serial']:
+            ok = smartctl_set(dev, 'standby,off', 'apm,254')
+            TUNED[kname] = (d['serial'], ok)
+            print('gazda: диск %s — власний таймер сну %s' % ('/'.join(d['names']), 'вимкнено' if ok else 'вимкнути не вдалося (тримаю читанням)'), flush=True)
+        if (mins == 0 or not st[2] and now - st[1] < mins * 60) and now - PINGED.get(kname, 0) >= KEEPALIVE_EVERY:
+            PINGED[kname] = now
+            try:
+                touch_disk(dev, d['size'])
+                st[0] = disk_io(kname)            # своє читання за роботу не рахуємо
+                if (SMART.get(dev) or {}).get('state') == 'standby':
+                    SMART[dev]['state'] = 'active'
+            except OSError as e:
+                if KEEPER_SAID.get(dev) != str(e):
+                    print('gazda: не вдалося торкнутись диска %s: %s' % (dev, e), flush=True)
+                    KEEPER_SAID[dev] = str(e)
+        if mins and not st[2] and now - st[1] >= mins * 60:
             r = run(['smartctl', '-s', 'standby,now', dev], 30)
             if r.returncode & 3:
                 r = run(['smartctl', '-d', 'sat', '-s', 'standby,now', dev], 30)
@@ -686,7 +741,10 @@ def do_disk_health(a):
             raise Fail('Засинання — лише для жорстких дисків з даними')
         with LOCK:
             st = load_state()
-            st.setdefault('sleep', {})[sleep_key(disks[dev])] = mins
+            if mins < 0:
+                st.setdefault('sleep', {}).pop(sleep_key(disks[dev]), None)
+            else:
+                st.setdefault('sleep', {})[sleep_key(disks[dev])] = mins
             save_state(st)
         if disks[dev]['kname'] in DISK_IO:
             DISK_IO[disks[dev]['kname']][2] = False
@@ -700,7 +758,8 @@ def do_disk_health(a):
         sm = dict(SMART.get(d['dev']) or {})
         if d['loop']:
             sm = {'state': 'none', 'why': 'віртуальний диск (файл) — SMART немає'}
-        out.append(dict(d, smart=sm, sleep=int(sleep.get(sleep_key(d)) or 0),
+        tuned = TUNED.get(d['kname'])
+        out.append(dict(d, smart=sm, sleep=sleep_mode(sleep, d), tuned=tuned[1] if tuned else None,
                         idle=int(now - io[1]) if io else None, sleepable=d['rot'] and not d['system'] and not d['loop'],
                         usage={n: usage(os.path.join(DISKS, n)) for n in d['names'] if n != 'система'}))
     out.sort(key=lambda d: (not d['system'], d['names']))
