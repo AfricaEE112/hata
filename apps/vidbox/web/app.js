@@ -1677,11 +1677,33 @@ const PI = {
 const rateLabel = r => (r === 1 ? '1' : String(r).replace('.', ',')) + '×';
 let wantFs = false;   // наступне відео відкрити теж на весь екран
 
+function subName(t) {
+  let n = '';
+  try { if (t.lang) n = new Intl.DisplayNames(['uk'], {type: 'language'}).of(t.lang); } catch (e) {}
+  if (!n) return t.label || `Доріжка ${t.n + 1}`;
+  return t.label && t.label.toLowerCase() !== n.toLowerCase() ? `${n} · ${t.label}` : n;
+}
+function parseVtt(txt) {
+  const ts = x => { const p = x.trim().split(':').map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1]; };
+  const out = [];
+  for (const block of txt.replace(/\r/g, '').split(/\n\n+/)) {
+    const lines = block.split('\n'), i = lines.findIndex(l => l.includes('-->'));
+    if (i < 0) continue;
+    const [a, b] = lines[i].split('-->'), text = lines.slice(i + 1).join('\n').trim();
+    if (text) out.push({s: ts(a), e: ts(b.trim().split(/\s+/)[0]), t: text});
+  }
+  return out.sort((x, y) => x.s - y.s);
+}
+// Лишаємо курсив/жирний/підкреслення, прибираємо теги ASS ({\an8} тощо) і решту розмітки.
+const cueHTML = t => esc(t.replace(/\{[^}]*\}/g, '').replace(/\\N/gi, '\n')).replace(/&lt;(\/?)(i|b|u)&gt;/g, '<$1$2>')
+  .replace(/&lt;[^&]*?&gt;/g, '').replace(/\n/g, '<br>');
+
 function playerHTML(v, next) {
   const pp = `${svg(PI.play, 'solid ic-play')}${svg(PI.pause, 'solid ic-pause')}`;
   return `<div class="vp paused" id="vp" tabindex="-1" aria-label="Відеоплеєр">
   <video id="pv" playsinline preload="metadata"${v.thumb ? ` poster="/thumb/${v.id}?v=${v.thumb}"` : ''}></video>
   <div class="vp-hit"></div>
+  <div class="vp-subs" aria-hidden="true"></div>
   <div class="vp-ui">
     <div class="vp-fade vp-top"><div class="vp-title"><b>${esc(v.title)}</b><span>${esc(shortFolder(v.folder))}</span></div></div>
     <div class="vp-fade vp-center">
@@ -1707,6 +1729,7 @@ function playerHTML(v, next) {
           <input type="range" min="0" max="1" step="0.02" aria-label="Гучність"></div>
         <span class="vp-time"><span class="vp-cur">0:00</span> <span class="sep">/</span> <span class="vp-dur">${fmtDur(v.dur)}</span></span>
         <span class="vp-grow"></span>
+        <button class="vp-b vp-txt vp-cc" data-a="subs" title="Субтитри (C)" aria-label="Субтитри" hidden>CC</button>
         <button class="vp-b vp-txt" data-a="quality" title="Якість" aria-label="Якість відео">Авто</button>
         <button class="vp-b vp-txt" data-a="speed" title="Швидкість (Shift + &lt; &gt;)" aria-label="Швидкість відтворення">1×</button>
         <button class="vp-b" data-a="pip" title="Картинка в картинці (P)" aria-label="Картинка в картинці">${I.pip}</button>
@@ -1727,6 +1750,8 @@ function mountPlayer(vp, v, o) {
   const curEl = q('.vp-cur'), durEl = q('.vp-dur'), volIn = q('.vp-vol input'), speedBtn = q('[data-a=speed]');
   const menu = q('.vp-menu'), endBox = q('.vp-end'), msg = q('.vp-msg'), badge = q('.vp-badge'), vtoast = q('.vp-toast'), hit = q('.vp-hit');
   const touch = matchMedia('(hover: none)').matches;
+  const subsEl = q('.vp-subs'), ccBtn = q('[data-a=subs]');
+  const SB = {list: [], on: -1, last: -1, cues: [], vtt: {}, shown: ''};
   let idleT = 0, raf = 0, dragging = false, dead = false, badgeT = 0, toastT2 = 0, endT = 0, holding = false;
   const D = () => (isFinite(video.duration) && video.duration > 0) ? video.duration : (v.dur || 0);
   video.volume = LS.get('vol', 1);
@@ -1742,7 +1767,50 @@ function mountPlayer(vp, v, o) {
     curEl.textContent = fmtDur(video.currentTime);
     seek.setAttribute('aria-valuenow', Math.round(f * 100));
     if (o.onTime) o.onTime(video.currentTime);
+    drawSubs();
   }
+
+  // ── субтитри: сервер віддає WebVTT, малюємо самі за часом від початку файлу (працює й під час перекодування) ──
+  function drawSubs() {
+    let h = '';
+    if (SB.on >= 0) {
+      const t = video.currentTime;
+      h = SB.cues.filter(c => c.s <= t && t < c.e).map(c => `<span>${cueHTML(c.t)}</span>`).join('<br>');
+    }
+    if (h !== SB.shown) { subsEl.innerHTML = h; SB.shown = h; }
+  }
+  async function pickSub(n, save = true) {
+    if (save) LS.set('subs', n < 0 ? {off: true} : {lang: SB.list[n].lang, label: SB.list[n].label});
+    SB.on = -1; drawSubs(); ccBtn.classList.toggle('on', n >= 0);
+    if (n < 0) return;
+    SB.last = n;
+    if (!SB.vtt[n]) {
+      const slow = setTimeout(() => { if (!dead) vpToast('Готую субтитри…'); }, 600);
+      try {
+        const r = await fetch(`/subs/${v.id}/${n}.vtt`);
+        if (!r.ok) throw new Error(r.status);
+        SB.vtt[n] = parseVtt(await r.text());
+      } catch (e) {
+        clearTimeout(slow);
+        if (!dead) { vpToast('Ці субтитри не вдалося прочитати'); ccBtn.classList.remove('on'); }
+        return;
+      }
+      clearTimeout(slow);
+    }
+    if (dead || SB.last !== n) return;
+    SB.on = n; SB.cues = SB.vtt[n]; drawSubs();
+  }
+  video.addEventListener('timeupdate', drawSubs);
+  video.addEventListener('seeked', drawSubs);
+  api(`/api/subs/${v.id}`).then(r => {
+    if (dead || !r || !r.subs || !r.subs.length) return;
+    SB.list = r.subs; ccBtn.hidden = false;
+    const pref = LS.get('subs', null);
+    if (pref && pref.off) return;
+    const pick = pref && (SB.list.find(t => t.lang === pref.lang && t.label === pref.label) || pref.lang && SB.list.find(t => t.lang === pref.lang))
+      || SB.list.find(t => t.def && !t.forced) || SB.list.find(t => !t.forced) || SB.list[0];
+    pickSub(pick.n, false);
+  }).catch(() => {});
   function drawBuf() {
     const d = D(), b = video.buffered;
     let end = 0;
@@ -1810,7 +1878,10 @@ function mountPlayer(vp, v, o) {
   }
   function openMenu(kind) {
     menu.dataset.kind = kind;
-    menu.innerHTML = kind === 'quality' && o.quality
+    menu.innerHTML = kind === 'subs'
+      ? '<p>Субтитри</p>' + `<button data-sub="-1" class="${SB.on < 0 ? 'on' : ''}">Вимкнено</button>` +
+        SB.list.map(t => `<button data-sub="${t.n}" class="${SB.on === t.n ? 'on' : ''}">${esc(subName(t))}${t.forced ? '<small>лише написи</small>' : ''}</button>`).join('')
+      : kind === 'quality' && o.quality
       ? '<p>Якість</p>' + o.quality.items().map(x => `<button data-q="${x.id}" class="${x.on ? 'on' : ''}"${x.off ? ' disabled' : ''}>${x.name}<small>${esc(x.hint)}</small></button>`).join('')
       : '<p>Швидкість</p>' + RATES.map(r => `<button data-rate="${r}" class="${r === video.playbackRate ? 'on' : ''}">${r === 1 ? 'Звичайна' : rateLabel(r)}</button>`).join('');
     menu.hidden = false;
@@ -1824,12 +1895,15 @@ function mountPlayer(vp, v, o) {
     mute: () => { video.muted = !video.muted; if (!video.muted && video.volume === 0) video.volume = 0.6; },
     speed: () => (menu.hidden || menu.dataset.kind !== 'speed' ? openMenu('speed') : closeMenu()),
     quality: () => (menu.hidden || menu.dataset.kind !== 'quality' ? openMenu('quality') : closeMenu()),
+    subs: () => (menu.hidden || menu.dataset.kind !== 'subs' ? openMenu('subs') : closeMenu()),
     pip: togglePip, fs: toggleFs, next: () => { if (o.onNext) { wantFs = !!fsEl(); o.onNext(); } },
   };
 
   vp.addEventListener('click', e => {
     const r = e.target.closest('[data-rate]');
     if (r) { setRate(+r.dataset.rate); closeMenu(); return; }
+    const sb = e.target.closest('[data-sub]');
+    if (sb) { closeMenu(); pickSub(+sb.dataset.sub); return; }
     const qb = e.target.closest('[data-q]');
     if (qb) { closeMenu(); if (o.quality) o.quality.pick(qb.dataset.q); return; }
     const b = e.target.closest('[data-a]');
@@ -1963,6 +2037,7 @@ function mountPlayer(vp, v, o) {
       case 'KeyL': skip(10); showBadge(`10 с${I.ff}`, 600); break;
       case 'ArrowUp': setVol(video.volume + 0.05); break;
       case 'ArrowDown': setVol(video.volume - 0.05); break;
+      case 'KeyC': if (SB.list.length) { const n = SB.on >= 0 ? -1 : SB.last >= 0 ? SB.last : SB.list[0].n; pickSub(n); showBadge(n < 0 ? 'Субтитри вимкнено' : `Субтитри: ${esc(subName(SB.list[n]))}`, 1200); } break;
       case 'KeyM': act.mute(); showBadge(video.muted ? `${svg(PI.volOff)}Без звуку` : `${svg(PI.vol)}${Math.round(video.volume * 100)}%`, 900); break;
       case 'KeyF': toggleFs(); break;
       case 'KeyP': togglePip(); break;

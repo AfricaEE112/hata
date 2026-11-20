@@ -1464,6 +1464,106 @@ def probe(path):
     return info
 
 
+# ───────────────────────────── субтитри для сайту ─────────────────────────────
+# Вбудовані текстові доріжки (SRT/ASS/…) і файли поруч із відео («Фільм.srt», «Фільм.ukr.ass», теки Subs/)
+# віддаємо як WebVTT; сайт малює їх сам — так вони збігаються з часом і під час перекодування на льоту.
+# Картинкові (PGS/VobSub з Blu-ray/DVD) у текст не перетворюються — їх пропускаємо.
+
+SUB_TEXT = {'subrip', 'srt', 'ass', 'ssa', 'webvtt', 'mov_text', 'text', 'microdvd', 'subviewer', 'subviewer1'}
+SUB_EXT = ('.srt', '.ass', '.ssa', '.vtt')
+LANG2 = {'eng': 'en', 'ukr': 'uk', 'rus': 'ru', 'jpn': 'ja', 'ger': 'de', 'deu': 'de', 'fre': 'fr', 'fra': 'fr',
+         'spa': 'es', 'ita': 'it', 'pol': 'pl', 'chi': 'zh', 'zho': 'zh', 'kor': 'ko', 'por': 'pt', 'cze': 'cs',
+         'ces': 'cs', 'bel': 'be', 'tur': 'tr', 'ara': 'ar', 'hin': 'hi', 'tha': 'th', 'vie': 'vi', 'ind': 'id'}
+SUBS_CACHE = {}       # id відео → (mtime, список)
+
+
+def sub_lang(x):
+    x = (x or '').lower()
+    return LANG2.get(x, x if len(x) == 2 else '')
+
+
+def subs_list(r):
+    """[{n, lang, label, src}] — src: ('s', номер доріжки) або ('f', шлях до файлу)."""
+    try:
+        mt = os.path.getmtime(r['path'])
+    except OSError:
+        return []
+    hit = SUBS_CACHE.get(r['id'])
+    if hit and hit[0] == mt:
+        return hit[1]
+    out = []
+    if C.ffprobe:
+        try:
+            j = json.loads(run([C.ffprobe, '-v', 'error', '-print_format', 'json', '-show_streams', '-select_streams', 's',
+                                r['path']], 60).stdout.decode('utf-8', 'replace') or '{}')
+        except Exception:
+            j = {}
+        for i, st in enumerate(j.get('streams', [])):
+            if st.get('codec_name') not in SUB_TEXT:
+                continue
+            tg = {k.lower(): v for k, v in (st.get('tags') or {}).items()}
+            out.append({'lang': sub_lang(tg.get('language')), 'label': (tg.get('title') or '').strip(), 'src': ('s', i),
+                        'def': bool((st.get('disposition') or {}).get('default')),
+                        'forced': bool((st.get('disposition') or {}).get('forced'))})
+    d, stem = os.path.dirname(r['path']), os.path.splitext(os.path.basename(r['path']))[0]
+    for folder in (d, os.path.join(d, 'Subs'), os.path.join(d, 'subs'), os.path.join(d, 'Subtitles'), os.path.join(d, stem)):
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for f in names:
+            low = f.lower()
+            if not low.endswith(SUB_EXT) or not (f.startswith(stem) or folder != d and os.path.basename(folder) == stem):
+                continue
+            mid = os.path.splitext(f[len(stem):] if f.startswith(stem) else '')[0].strip('._- ')
+            lang = sub_lang(mid.split('.')[-1]) if mid else ''
+            out.append({'lang': lang, 'label': mid if mid and not lang else '', 'src': ('f', os.path.join(folder, f)),
+                        'def': False, 'forced': 'forced' in low})
+    for n, t in enumerate(out):
+        t['n'] = n
+    SUBS_CACHE[r['id']] = (mt, out)
+    return out
+
+
+def subs_vtt(r, n):
+    """WebVTT n-ї доріжки (кешується в data/subs)."""
+    lst = subs_list(r)
+    if not 0 <= n < len(lst) or not C.ffmpeg:
+        return None
+    kind, src = lst[n]['src']
+    stamp = os.path.getmtime(src if kind == 'f' else r['path'])
+    cache = os.path.join(C.data, 'subs', '%s-%d-%d.vtt' % (r['id'], n, int(stamp)))
+    if os.path.exists(cache):
+        with open(cache, 'rb') as f:
+            return f.read()
+    if kind == 'f':
+        with open(src, 'rb') as f:
+            raw = f.read()
+        enc = []
+        try:
+            raw.decode('utf-8')
+        except UnicodeDecodeError:
+            enc = ['-sub_charenc', 'CP1251']          # старі SRT з кирилицею
+        cmd = [C.ffmpeg, '-v', 'error', *enc, '-i', src, '-f', 'webvtt', '-']
+    else:
+        cmd = [C.ffmpeg, '-v', 'error', '-i', r['path'], '-map', '0:s:%d' % src, '-f', 'webvtt', '-']
+    try:
+        res = run(cmd, 300)
+    except Exception:
+        return None
+    if res.returncode or not res.stdout.startswith(b'WEBVTT'):
+        return None
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    for old in glob.glob(os.path.join(C.data, 'subs', '%s-%d-*.vtt' % (r['id'], n))):
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    with open(cache, 'wb') as f:
+        f.write(res.stdout)
+    return res.stdout
+
+
 # ───────────────────────────── відеокарта (апаратне прискорення) ─────────────────────────────
 #
 # Що робить відеокарта:
@@ -3065,7 +3165,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 html = LOGIN_HTML.replace('{err}', '<p class="err">Неправильний пароль</p>')
                 return self.send_bytes(html.encode(), 'text/html; charset=utf-8', 401)
             if not self.authed():
-                if path.startswith(('/api/', '/stream/', '/thumb/', '/live/', '/dlfile/', '/manga/', '/anime/')):
+                if path.startswith(('/api/', '/stream/', '/thumb/', '/live/', '/dlfile/', '/manga/', '/anime/', '/subs/')):
                     return self.send_json({'error': 'auth'}, 401)
                 return self.redirect('/login')
 
@@ -3095,6 +3195,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if not r:
                         return self.send_json({'error': 'not found'}, 404)
                     return self.send_live(r, qs, method == 'HEAD')
+                m = re.fullmatch(r'/api/subs/(\w+)', path)
+                if m:
+                    r = self.video_row(m.group(1))
+                    if not r:
+                        return self.send_json({'error': 'not found'}, 404)
+                    return self.send_json({'subs': [{k: t[k] for k in ('n', 'lang', 'label', 'def', 'forced')} for t in subs_list(r)]})
+                m = re.fullmatch(r'/subs/(\w+)/(\d{1,3})\.vtt', path)
+                if m:
+                    r = self.video_row(m.group(1))
+                    data = r and subs_vtt(r, int(m.group(2)))
+                    if not data:
+                        return self.send_json({'error': 'not found'}, 404)
+                    return self.send_bytes(data, 'text/vtt; charset=utf-8', cache='private, max-age=3600')
                 m = re.fullmatch(r'/stream/(\w+)', path)
                 if m:
                     r = self.video_row(m.group(1))

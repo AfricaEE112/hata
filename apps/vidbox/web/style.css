@@ -826,3 +826,11 @@ html.reading .bar,html.reading .dock{visibility:hidden}
 }
 html[data-theme=papir] .win-bar{background:rgba(42,38,31,.05)}
 html[data-theme=papir] .theme .tp{box-shadow:inset 0 0 0 1px rgba(42,38,31,.12)}
+
+/* субтитри (малює сам плеєр) */
+.vp-subs{position:absolute;left:4%;right:4%;bottom:6%;text-align:center;pointer-events:none;transition:bottom .2s ease;line-height:1.5}
+.vp:not(.idle) .vp-subs{bottom:max(6%,104px)}
+.vp-subs span{background:rgba(0,0,0,.6);color:#fff;padding:.08em .4em;border-radius:5px;font-size:clamp(15px,2.3vw,30px);font-weight:500;
+  -webkit-box-decoration-break:clone;box-decoration-break:clone;text-shadow:0 1px 2px rgba(0,0,0,.8)}
+.vp.fs .vp-subs span{font-size:clamp(18px,2.6vw,42px)}
+.vp-cc.on{color:var(--acc,#fff);box-shadow:inset 0 -2px 0 currentColor}
