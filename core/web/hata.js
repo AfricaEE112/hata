@@ -763,6 +763,7 @@ function bindFiles() {
 // ── завантаження: черга, по два файли одночасно, прогрес і швидкість ──
 function queueFiles(list) {
   if (!FS.data || !FS.data.up) return toast('Спершу відкрий теку на диску, куди завантажувати');
+  if (FS.data.writable === false) return toast('У цю теку Хата не може писати — онови Хату або перевір права на диск');
   for (const {file, rel} of list) FS.uploads.push({file, rel, dir: FS.path, sent: 0, state: 'wait', t0: 0, xhr: null});
   drawUploads(); pumpUploads();
 }
@@ -776,7 +777,7 @@ function pumpUploads() {
     x.open('PUT', `/api/files/upload?dir=${encodeURIComponent(u.dir)}&name=${encodeURIComponent(u.rel)}`);
     x.upload.onprogress = e => { u.sent = e.loaded; drawUploads(); };
     x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch (e) {} finish(u, j.ok ? 'done' : 'err', j.error || 'Помилка ' + x.status); };
-    x.onerror = () => finish(u, 'err', 'З’єднання обірвалось');
+    x.onerror = () => finish(u, 'err', x.upload && u.sent < u.file.size ? 'Сервер обірвав завантаження — глянь журнал Хати' : 'З’єднання обірвалось');
     x.onabort = () => finish(u, 'cancel', '');
     x.send(u.file);
   }

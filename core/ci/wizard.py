@@ -64,6 +64,17 @@ with sync_playwright() as p:
     m.goto('http://localhost/'); m.wait_for_selector('#upd'); m.wait_for_timeout(600)
     n[0] += 1
     m.screenshot(path=f'{OUT}/{n[0]:02d}-panel-phone.png', full_page=True)
+    # Файли: завантаження з браузера на диск і видалення (ловить заборону писати в /srv/disks, як-от ProtectSystem)
+    up = pg.evaluate("""async () => (await fetch('/api/files/upload?dir=/srv/disks/media&name=ci-upload.txt',
+                       {method: 'PUT', body: 'hello from CI'})).json()""")
+    assert up.get('ok'), up
+    lst = pg.evaluate("async () => (await fetch('/api/files?path=/srv/disks/media')).json()")
+    assert any(i['name'] == 'ci-upload.txt' for i in lst['items']), lst
+    pg.keyboard.press('7'); pg.wait_for_selector('#fm .fm-row'); shot('files')
+    rm = pg.evaluate("""async () => (await fetch('/api/files', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                       body: JSON.stringify({op: 'delete', paths: ['/srv/disks/media/ci-upload.txt']})})).json()""")
+    assert rm.get('ok'), rm
+    pg.keyboard.press('1'); pg.wait_for_selector('#sys')
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="папір"]'); shot('panel-paper')
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="чай"]')
     lp = b.new_context(viewport={'width': 1100, 'height': 800}).new_page()

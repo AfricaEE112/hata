@@ -860,10 +860,37 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
 
 
+def sync_units():
+    """Оновлення Hata міняє лише код у /opt/hata/src, а служби systemd лежать копіями в /etc — звіряємо при старті gazda
+    (а він перезапускається після кожного оновлення) і перезапускаємо ті служби, чиї файли змінились."""
+    src_dir = os.path.join(SRC, 'core', 'systemd')
+    changed = []
+    for name in sorted(os.listdir(src_dir)) if os.path.isdir(src_dir) else []:
+        if not name.endswith('.service'):
+            continue
+        new, dst = read(os.path.join(src_dir, name)), os.path.join('/etc/systemd/system', name)
+        if new and new != read(dst):
+            with open(dst + '.tmp', 'w', encoding='utf-8') as f:
+                f.write(new)
+            os.chmod(dst + '.tmp', 0o644)
+            os.replace(dst + '.tmp', dst)
+            changed.append(name)
+    if changed:
+        run(['systemctl', 'daemon-reload'], 60)
+        for name in changed:
+            if name != 'gazda.service':          # себе не перезапускаємо: нове застосується з наступним стартом
+                run(['systemctl', 'try-restart', name], 60)
+        print('gazda: оновив служби', ', '.join(changed), flush=True)
+
+
 def serve():
     os.makedirs(os.path.dirname(SOCK), exist_ok=True)
     if os.path.exists(SOCK):
         os.remove(SOCK)
+    try:
+        sync_units()
+    except Exception as e:
+        print('gazda: не вдалося звірити служби:', repr(e), flush=True)
     st = load_state()
     if st.get('battery_limit'):
         apply_battery_limit(st['battery_limit'])

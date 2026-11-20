@@ -241,6 +241,8 @@ def upload(folder, relname, length, stream):
     inside(target_dir, must_exist=False)
     if length + (64 << 20) > shutil.disk_usage(f).free:
         raise Error('На диску не вистачає місця: потрібно %.1f ГБ' % (length / (1 << 30)))
+    if not os.access(f, os.W_OK):
+        raise Error('У цю теку Хата не може писати (немає права або диск лише для читання)')
     try:
         os.makedirs(target_dir, exist_ok=True)
     except PermissionError:
