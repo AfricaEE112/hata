@@ -717,7 +717,7 @@ def detect_hw(verbose=True):
         decode = 'vaapi'
         vdec = vaapi_decoders()
         with HW_LOCK:
-            HW['vaapi_dec'] = vdec
+            HW['vaapi_dec'] = sorted(vdec) if vdec else None    # список, не множина: HW віддається в JSON налаштувань
         if encs.get('vaapi', {}).get('ok'):
             # Повний шлях на відеоядрі: декодування → масштабування → кодування, кадри не йдуть у процесор
             sample = os.path.join(C.data, 'hwtest.mp4')
@@ -1754,7 +1754,7 @@ def settings_json():
                python=platform.python_version(), os='%s %s' % (platform.system(), platform.release()),
                ffmpegVersion=ffmpeg_version())
     with HW_LOCK:
-        hw = json.loads(json.dumps(HW))
+        hw = json.loads(json.dumps(HW, default=list))
     enc = pick_encoder()
     hw.update(current=ENC_LABEL.get(enc, enc), hardware=enc != 'libx264')
     out['hw'] = hw
