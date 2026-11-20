@@ -187,17 +187,33 @@ async function stepDisks() {
   bindNav();
   const r = await api('/api/disks');
   const list = (r.disks || []);
+  // Назва для нового диска: з мітки латиницею, інакше з виробника (wdc, toshiba…); без повторів.
+  const taken = new Set(list.map(d => d.name).filter(Boolean));
+  const slug = t => (t || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+  const suggest = d => {
+    let base = slug(d.label) || slug((d.model || '').split(/\s+/)[0]) || 'disk', n = base, k = 2;
+    while (taken.has(n)) n = base + k++;
+    taken.add(n); return n;
+  };
   const body = list.length ? list.map(d => {
-    const name = d.name || (d.label || d.dev.split('/').pop()).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'disk';
+    const name = d.name || (d.system ? '' : suggest(d));
     const meta = [size(d.size), d.fs, d.model, d.usb ? 'USB' : ''].filter(Boolean).join(' · ');
     return `<div class="row"><div class="l"><b>${esc(d.label || d.dev)}</b><small>${esc(meta)}</small></div><div class="r">` +
       (d.system ? '<span class="tag">системний</span>' :
-       d.name ? `<span class="tag ok">/srv/disks/${esc(d.name)}</span>` :
+       d.name ? `<span class="tag ok">/srv/disks/${esc(d.name)}</span><button class="btn ghost" data-unmount="${esc(d.name)}" aria-label="Відключити ${esc(d.name)}">Відключити</button>` :
        `<input type="text" value="${esc(name)}" aria-label="Назва диска" data-name="${esc(d.uuid)}"><button class="btn" data-mount="${esc(d.uuid)}">Підключити</button>`) +
       '</div></div>';
   }).join('') : '<p class="note">Дисків з даними не знайдено. Підключи диск і натисни «Оновити список».</p>';
   $('.win .wbody').innerHTML = body + `<div class="err" id="de" role="alert"></div><div class="acts"><button class="btn ghost" id="rescan">Оновити список</button></div>`;
   $('#rescan').onclick = stepDisks;
+  $$('[data-unmount]').forEach(b => b.onclick = async () => {
+    if (!confirm(`Відключити диск «${b.dataset.unmount}» від Хати? Файли на ньому лишаться, просто VidBox перестане його бачити, поки не підключиш знову.`)) return;
+    b.disabled = true;
+    const res = await api('/api/unmount', {name: b.dataset.unmount});
+    if (!res.ok) { $('#de').textContent = res.error; b.disabled = false; return; }
+    toast(`Відключено: ${b.dataset.unmount}`);
+    stepDisks();
+  });
   $$('[data-mount]').forEach(b => b.onclick = async () => {
     const uuid = b.dataset.mount, name = $(`[data-name="${uuid}"]`).value.trim().toLowerCase();
     b.disabled = true; b.innerHTML = '<span class="spin"></span>';

@@ -116,6 +116,9 @@ def demo_gazda(req):
         os.makedirs(os.path.join(DEMO_ROOT, req['name'], 'Фільми'), exist_ok=True)
         os.makedirs(os.path.join(DEMO_ROOT, req['name'], 'Аніме'), exist_ok=True)
         return {'ok': True, 'path': '/srv/disks/' + req['name']}
+    if d == 'unmount':
+        DEMO_STATE['mounted'] = {k: v for k, v in DEMO_STATE['mounted'].items() if v != req.get('name')}
+        return {'ok': True}
     if d == 'tailscale':   # off → (up) чекає входу → (up ще раз) працює
         if req.get('op') == 'up':
             DEMO_STATE['ts'] = 'Running' if DEMO_STATE['ts'] == 'NeedsLogin' else 'NeedsLogin'

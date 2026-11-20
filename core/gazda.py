@@ -141,9 +141,11 @@ def do_disks(_):
             ours[parts[0].replace('UUID=', '')] = os.path.basename(parts[1])
     out = []
     for d in lsblk():
+        if d.get('type') in ('loop', 'rom', 'zram') or (d.get('name') or '').startswith(('loop', 'zram')):
+            continue                 # snap-пакети, CD, стиснена пам'ять — це не диски з даними
         model = (d.get('model') or '').strip()
         for p in (d.get('children') or [d]):
-            if not p.get('fstype') or p.get('fstype') in ('swap', 'LVM2_member', 'crypto_LUKS'):
+            if not p.get('fstype') or p.get('fstype') in ('swap', 'LVM2_member', 'crypto_LUKS', 'squashfs'):
                 continue
             system = p.get('path') == sysdev or (p.get('mountpoint') or '') in ('/', '/boot', '/boot/efi')
             out.append({'dev': p.get('path'), 'size': p.get('size'), 'fs': p.get('fstype'), 'label': p.get('label') or '',
@@ -170,6 +172,9 @@ def do_mount(a):
         raise Fail('Це системний диск, його не підключаємо як диск з даними')
     point = os.path.join(DISKS, name)
     with LOCK:
+        for l in read(FSTAB).splitlines():
+            if l.endswith(FSTAB_MARK) and f' {point} ' in l and not l.startswith(f'UUID={uuid} '):
+                raise Fail(f'Назва «{name}» вже зайнята іншим диском — дай цьому іншу (наприклад, {name}2)')
         lines = [l for l in read(FSTAB).splitlines() if not (l.endswith(FSTAB_MARK) and (f'UUID={uuid} ' in l or f' {point} ' in l))]
         fs = disk['fs']
         uidgid = 'uid={0},gid={0}'.format(USER_IDS()[0])
