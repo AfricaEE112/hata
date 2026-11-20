@@ -463,7 +463,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setMangaFilter(f: String) {
+    fun pickMangaFilter(f: String) {
         mangaFilter = f
         prefs.mangaFilter = f
     }

@@ -165,7 +165,7 @@ fun MangaScreen(vm: AppVM) {
                     Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FILTERS.forEach { (k, l) ->
                             val n = if (k == "all") null else d.titles.count { if (k == "new") it.new > 0 else state(it) == k }
-                            Chip(l + (n?.let { " $it" } ?: ""), on = vm.mangaFilter == k) { vm.setMangaFilter(k) }
+                            Chip(l + (n?.let { " $it" } ?: ""), on = vm.mangaFilter == k) { vm.pickMangaFilter(k) }
                         }
                     }
                 }
