@@ -164,7 +164,7 @@ def demo_gazda(req):
             {'hash': '7b9e011', 'msg': 'Майстер: швидкі кліки по теках'}]}
     if d == 'status':
         return {'ok': True, 'host': 'hata', 'uptime': 93784, 'load': 0.42, 'cpus': 8, 'temp': 47.5,
-                'mem': {'total': 8 * G, 'avail': 5.6 * G}, 'os': 'Ubuntu 24.04.1 LTS', 'version': 'cd4bff2 2026-11-19T15:00:00+02:00',
+                'mem': {'total': 8 * G, 'avail': 5.6 * G}, 'os': 'Ubuntu 24.04.1 LTS', 'version': 'cd4bff2 2026-11-19T15:00:00+02:00', 'tz': DEMO_STATE.get('tz', 'Europe/Kyiv'),
                 'battery': {'pct': 80, 'ac': True, 'status': 'Not charging', 'limit': DEMO_STATE['limit'], 'limitSupported': True},
                 'root': {'total': 512 * G, 'free': 430 * G},
                 'disks': [{'name': n, 'path': '/srv/disks/' + n, 'mounted': True, 'total': 2000 * G, 'free': (600 + 900 * i) * G}
