@@ -116,6 +116,9 @@ def demo_gazda(req):
         os.makedirs(os.path.join(DEMO_ROOT, req['name'], 'Фільми'), exist_ok=True)
         os.makedirs(os.path.join(DEMO_ROOT, req['name'], 'Аніме'), exist_ok=True)
         return {'ok': True, 'path': '/srv/disks/' + req['name']}
+    if d == 'timezone':
+        DEMO_STATE['tz'] = req.get('tz')
+        return {'ok': True, 'tz': req.get('tz')}
     if d == 'unmount':
         DEMO_STATE['mounted'] = {k: v for k, v in DEMO_STATE['mounted'].items() if v != req.get('name')}
         return {'ok': True}
@@ -538,6 +541,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if d.get('op') not in ('scan', 'connect', 'forget', 'status'):
                 return self.json({'ok': False, 'error': 'Невідома дія'})
             return self.json(gazda({'do': 'wifi', 'op': d['op'], 'ssid': d.get('ssid'), 'password': d.get('password')}, 700))
+        if p == '/api/timezone':
+            return self.json(gazda({'do': 'timezone', 'tz': d.get('tz')}, 60))
         if p == '/api/speedtest':
             return self.json(speedtest())
         if p == '/api/scheme':

@@ -110,18 +110,32 @@ def usage(path):
         return None
 
 
+def tz_name():
+    p = os.path.realpath('/etc/localtime')
+    return p.split('/zoneinfo/', 1)[1] if '/zoneinfo/' in p else 'UTC'
+
+
 def do_status(_):
+    # диски Hata — ті, що записані в fstab; порожні теки від відключених дисків не показуємо
+    names = sorted({os.path.basename(l.split()[1]) for l in read(FSTAB).splitlines() if l.endswith(FSTAB_MARK) and len(l.split()) > 1})
     mounted = []
-    if os.path.isdir(DISKS):
-        for n in sorted(os.listdir(DISKS)):
-            p = os.path.join(DISKS, n)
-            mounted.append({'name': n, 'path': p, 'mounted': os.path.ismount(p), **(usage(p) or {})})
+    for n in names:
+        p = os.path.join(DISKS, n)
+        mounted.append({'name': n, 'path': p, 'mounted': os.path.ismount(p), **(usage(p) if os.path.ismount(p) else {})})
     svc = {s: run(['systemctl', 'is-active', s], 10).stdout.strip() for s in sorted(SERVICES)}
     up = float(read('/proc/uptime', '0').split()[0] or 0)
     return {'host': socket.gethostname(), 'uptime': int(up), 'load': os.getloadavg()[0],
             'cpus': os.cpu_count(), 'temp': cpu_temp(), 'mem': mem(), 'battery': battery(),
             'root': usage('/'), 'disks': mounted, 'services': svc,
-            'os': read('/etc/os-release').split('PRETTY_NAME="')[-1].split('"')[0], 'version': git_version()}
+            'os': read('/etc/os-release').split('PRETTY_NAME="')[-1].split('"')[0], 'version': git_version(), 'tz': tz_name()}
+
+
+def do_timezone(a):
+    tz = str(a.get('tz') or '')
+    if not re.fullmatch(r'[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}', tz) or not os.path.isfile('/usr/share/zoneinfo/' + tz):
+        raise Fail('Невідомий часовий пояс: %s' % tz)
+    run(['timedatectl', 'set-timezone', tz], 30, check=True)
+    return {'tz': tz_name()}
 
 
 # ───────────────────────── диски ─────────────────────────
@@ -614,6 +628,7 @@ ACTIONS = {
     'update_check': do_update_check,
     'journal': do_journal,
     'wifi': do_wifi,
+    'timezone': do_timezone,
 }
 
 

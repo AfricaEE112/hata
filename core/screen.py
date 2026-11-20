@@ -7,6 +7,7 @@
 """
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -63,11 +64,16 @@ def ip():
         return ''
 
 
-def rows():
+def term():
     try:
-        return os.get_terminal_size(1).lines
+        t = os.get_terminal_size(1)
+        return t.columns, t.lines
     except OSError:
-        return 25
+        return 80, 25
+
+
+def rows():
+    return term()[1]
 
 
 def qr(text, compact=False):
@@ -101,72 +107,163 @@ def palette(name):
     return ''.join('\033]P%x%s' % (i, c) for i, c in enumerate(cols))
 
 
+# ───────────────────────── малювання ─────────────────────────
+# Лише символи, які точно є в консольному шрифті Terminus (Uni2 = латиниця, кирилиця, псевдографіка CP437):
+# ┌─┐│└┘ рамки, ▌ сегменти смужок, ■ і · точки годинника.
+
+ANSI = re.compile(r'\033\[[0-9;]*m')
+DAYS = ('ПОНЕДІЛОК', 'ВІВТОРОК', 'СЕРЕДА', 'ЧЕТВЕР', "П'ЯТНИЦЯ", 'СУБОТА', 'НЕДІЛЯ')
+MONTHS = ('січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня')
+
+
+def vis(t):
+    return len(ANSI.sub('', t))
+
+
+def pad(t, w):
+    return t + ' ' * max(0, w - vis(t))
+
+
+def col(name, t):
+    return C[name] + t + C['r']
+
+
 def clock():
-    """Великий точковий годинник з повних блоків — лише для великого екрана."""
-    t = time.strftime('%H:%M')
+    """Точковий годинник 5×7, як у панелі: ■ — світиться, · — ні; двокрапка блимає."""
+    t = time.strftime('%H') + (':' if int(time.time()) % 20 < 10 else ' ') + time.strftime('%M')
     lines = []
     for r in range(7):
         parts = []
         for ch in t:
-            bits = FONT[ch]
+            bits = FONT.get(ch, '0000000')
             w = len(bits) // 7
-            parts.append(''.join('██' if b == '1' else '  ' for b in bits[r * w:(r + 1) * w]))
-        lines.append('  ' + C['b'] + '  '.join(parts) + C['r'])
+            parts.append(''.join(col('b', '■ ') if b == '1' else col('dim', '· ') for b in bits[r * w:(r + 1) * w]))
+        lines.append('  '.join(parts))
     return lines
 
 
-def rule(title, width=60):
-    return '  %s──%s %s %s%s' % (C['dim'], C['r'] + C['acc'], title, C['r'] + C['dim'], '─' * max(4, width - len(title)) + C['r'])
+def segs(pct, n):
+    """Сегментована смужка: до 60% — акцент, до 85% — жовтий, далі — червоний."""
+    out = ''
+    for i in range(n):
+        f = (i + .5) / n
+        out += col('dim', '▌') if f > pct / 100 else col('ok' if f < .6 else 'yel' if f < .85 else 'bad', '▌')
+    return out
 
 
-def segs(pct, n=30):
-    on = round(n * pct / 100)
-    col = C['ok'] if pct < 60 else C['yel'] if pct < 85 else C['bad']
-    return col + '█' * on + C['dim'] + '░' * (n - on) + C['r']
+def box(title, color, rows_, w):
+    """Рамка з назвою в лінії, як у панелі: ┌─ диски ──────┐"""
+    head = col('dim', '┌─ ') + col(color, title) + col('dim', ' ' + '─' * max(1, w - len(title) - 5) + '┐')
+    body = [col('dim', '│ ') + pad(r, w - 4)[:10000] + col('dim', ' │') for r in rows_]
+    return [head] + body + [col('dim', '└' + '─' * (w - 2) + '┘')]
+
+
+def meter(label, pct, value, w, lw=6):
+    """Рядок «назва ▌▌▌▌▌▌▌▌    значення» рівно на w символів; значення вирівняні праворуч."""
+    vw = 17
+    n = max(8, w - lw - vw - 1)
+    return pad(col('dim', label), lw) + segs(pct, n) + ' ' * (1 + vw - vis(value)) + value
+
+
+def net_rows():
+    out = []
+    try:
+        addrs = {i['ifname']: [a['local'] for a in i.get('addr_info', [])]
+                 for i in json.loads(subprocess.run(['ip', '-j', '-4', 'addr'], stdout=subprocess.PIPE, text=True, timeout=5).stdout or '[]')}
+        route = (json.loads(subprocess.run(['ip', '-j', 'route', 'get', '1.1.1.1'], stdout=subprocess.PIPE, text=True,
+                                           timeout=5).stdout or '[{}]') or [{}])[0].get('dev', '')
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return out
+    for n, ips in sorted(addrs.items()):
+        if n == 'lo' or not ips:
+            continue
+        kind = 'wi-fi' if os.path.isdir('/sys/class/net/%s/wireless' % n) else 'tailscale' if n.startswith('tailscale') else 'кабель'
+        out.append('%s %s %s%s' % (col('ok', '●'), pad(kind, 9), ips[0], '  ' + col('acc', 'інтернет') if n == route else ''))
+    return out
+
+
+def center(lines, W, H):
+    width = max([vis(l) for l in lines] or [0])
+    left = ' ' * max(0, (W - width) // 2)
+    top = max(0, (H - len(lines)) // 2)
+    return '\n' * top + '\n'.join(left + l for l in lines)
 
 
 def frame():
+    time.tzset()                     # часовий пояс могли щойно змінити з панелі
+    W, H = term()
     host = socket.gethostname()
     addr = ip()
     url = 'http://%s/' % (addr or host + '.local')
-    small = rows() < 42          # малий екран: без годинника і з компактним QR
-    who = '  %sхата%s%s@%s%s' % (C['acc'], C['r'], C['dim'], C['r'] + C['b'] + host, C['r'])
-    out = [''] + ([] if small else clock() + ['']) + [who, '']
+    who = col('acc', 'хата') + col('dim', '@') + col('b', host) + col('acc', '▌')
     if not conf().get('setup_done'):
-        out += ['  ' + C['b'] + 'Хата майже готова.' + C['r'],
-                '  Відскануй код телефоном або відкрий у браузері:', '',
-                '    ' + C['acc'] + url + C['r'] + ('   або  http://%s.local/' % host), '']
-        out.append(qr(url, compact=small))
-        return '\n'.join(out)
+        small = H < 42
+        head = [] if small else clock() + ['']
+        head += [who, '', col('b', 'Хата майже готова.'), 'Відскануй код телефоном або відкрий у браузері:', '',
+                 col('acc', url) + col('dim', '   або  http://%s.local/' % host), '']
+        q = qr(url, compact=small).rstrip('\n').split('\n')
+        return center(head + q, W, H)
+
     st = gazda({'do': 'status'})
     ts = gazda({'do': 'tailscale', 'op': 'status'})
+    now = time.localtime()
     up = st.get('uptime', 0)
-    out += ['  працює %d д %d год · %s' % (up // 86400, up % 86400 // 3600, st.get('os', '')),
-            '  %sпанель%s    %s%s%s' % (C['yel'], C['r'], C['acc'], url, C['r']),
-            '  %svidbox%s    http://%s:8800/' % (C['yel'], C['r'], addr or host + '.local')]
+    left = clock() + ['', ' '.join(DAYS[now.tm_wday]), col('dim', '%d %s %d' % (now.tm_mday, MONTHS[now.tm_mon - 1], now.tm_year)),
+                      '', who, '',
+                      pad(col('yel', 'панель'), 11) + col('acc', url),
+                      pad(col('yel', 'vidbox'), 11) + 'http://%s:%s/' % (addr or host + '.local', (st.get('vidbox') or {}).get('port', 8800))]
     if ts.get('state') == 'Running':
-        out.append('  %stailscale%s %s' % (C['yel'], C['r'], ts.get('name', '')))
-    t = st.get('temp')
+        left.append(pad(col('yel', 'tailscale'), 11) + ts.get('name', ''))
+    lw = max(vis(l) for l in left)
+
+    rw = max(52, min(68, W - lw - 12))
+    iw = rw - 4
     m = st.get('mem') or {}
     used = m.get('total', 0) - m.get('avail', 0)
-    out += ['', rule('система'),
-            '  ram  %s %s / %s' % (segs(100 * used / m['total'] if m.get('total') else 0), size(used), size(m.get('total', 0))),
-            '  t°   %s %s' % (segs(min(100, t or 0)), '%.0f °C' % t if t else '—')]
+    try:
+        load = float(open('/proc/loadavg').read().split()[0])
+    except (OSError, ValueError):
+        load = 0
+    cpu = min(100, round(100 * load / max(1, st.get('cpus') or 1)))
+    t = st.get('temp')
+    sysrows = [meter('cpu', cpu, '%d%%' % cpu, iw),
+               meter('ram', 100 * used / m['total'] if m.get('total') else 0, '%s / %s' % (size(used), size(m.get('total', 0))), iw)]
+    if t:
+        sysrows.append(meter('t°', min(100, t), '%.0f °C' % t, iw))
     b = st.get('battery')
     if b:
-        out.append('  бат  %s %d%% %s' % (segs(b['pct']), b['pct'], 'від мережі' if b['ac'] else C['bad'] + 'ВІД БАТАРЕЇ' + C['r']))
-    out += ['', rule('диски')]
-    for d in st.get('disks') or []:
+        sysrows.append(meter('бат', b['pct'], '%d%% %s' % (b['pct'], 'мережа' if b['ac'] else col('bad', 'БАТАРЕЯ')), iw))
+    sysrows.append(col('dim', 'працює ') + '%d д %d год · %s' % (up // 86400, up % 86400 // 3600, st.get('os', '')))
+
+    drows = []
+    root = st.get('root') or {}
+    for d in [dict(root, name='система', mounted=True)] + (st.get('disks') or []):
         if d.get('mounted') and d.get('total'):
-            used = d['total'] - d['free']
-            out.append('  %-10s %s вільно %s' % (d['name'][:10], segs(100 * used / d['total']), size(d['free'])))
+            u = d['total'] - d['free']
+            drows.append(meter(d['name'][:9], 100 * u / d['total'], '%s / %s' % (size(u), size(d['total'])), iw, lw=10))
         else:
-            out.append('  %-10s %sне підключено%s' % (d['name'][:10], C['bad'], C['r']))
-    out += ['', rule('служби')]
+            drows.append(pad(col('dim', d['name'][:9]), 10) + col('bad', 'не підключено'))
+
+    srows = []
     for name, state in (st.get('services') or {}).items():
-        out.append('  %s●%s %-12s %s%s%s' % (C['ok'] if state == 'active' else C['dim'], C['r'], name,
-                                            C['dim'], 'працює' if state == 'active' else state, C['r']))
-    return '\n'.join(out)
+        on = state == 'active'
+        srows.append('%s %s %s' % (col('ok' if on else 'dim', '●' if on else '○'), pad(name, 14), col('ok', 'працює') if on else col('dim', state)))
+    srows.append('%s %s %s' % (col('yel', '●'), pad('gazda', 14), col('yel', 'завжди')))
+
+    right = box('система', 'acc', sysrows, rw) + [''] + box('диски', 'yel', drows, rw) + [''] + \
+        box('служби', 'bad', srows, rw) + ([''] + box('мережа', 'vio', net_rows(), rw) if net_rows() else [])
+
+    if W >= lw + rw + 10:            # широкий екран: годинник ліворуч, рамки праворуч
+        h = max(len(left), len(right))
+        lt = (h - len(left)) // 3
+        left = [''] * lt + left + [''] * (h - len(left) - lt)
+        right = right + [''] * (h - len(right))
+        lines = [pad(a, lw) + ' ' * 6 + b for a, b in zip(left, right)]
+    else:                            # вузький: усе одне під одним; на малому екрані без великого годинника
+        if len(left) + len(right) + 1 > H:
+            left = left[8:]
+        lines = left + [''] + right
+    return center(lines, W, H)
 
 
 def main():

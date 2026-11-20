@@ -336,6 +336,10 @@ async function panel() {
   if (s.ok === false) { app.innerHTML = `<div class="wrap">${prompt('~', 'gazda status')}${win('помилка', `<p class="err">${esc(s.error)}</p>`, {c: 'red'})}</div>`; return; }
   LAST = s;
   panelTop(s);
+  // Сервер ще в UTC (так ставить Ubuntu) — беремо часовий пояс з браузера, щоб годинник на ноутбуці й журнал були місцеві.
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (tz && ['UTC', 'Etc/UTC', 'Universal', ''].includes(s.tz || '') && tz !== s.tz)
+    api('/api/timezone', {tz}).then(r => { if (r.ok) toast(`Часовий пояс сервера: ${r.tz}`); });
   const ts = s.tailscale || {};
   const ver = (s.version || '').split(' ')[0] || '—';
 
