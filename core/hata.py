@@ -25,6 +25,9 @@ import subprocess
 import urllib.parse
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import files   # noqa: E402 — модуль «Файли» поруч
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, 'web')
 FONTS = os.path.join(WEB, 'fonts')      # ті самі шрифти, що й у VidBox
@@ -116,6 +119,15 @@ def demo_gazda(req):
         os.makedirs(os.path.join(DEMO_ROOT, req['name'], 'Фільми'), exist_ok=True)
         os.makedirs(os.path.join(DEMO_ROOT, req['name'], 'Аніме'), exist_ok=True)
         return {'ok': True, 'path': '/srv/disks/' + req['name']}
+    if d == 'share':
+        if req.get('op') == 'enable':
+            time.sleep(2)
+            DEMO_STATE['share'] = True
+        if req.get('op') == 'disable':
+            DEMO_STATE['share'] = False
+        on = DEMO_STATE.get('share', False)
+        return {'ok': True, 'enabled': on, 'installed': on, 'user': 'hata',
+                'shares': [{'name': n, 'path': '/srv/disks/' + n} for n in DEMO_STATE['mounted'].values()] if on else []}
     if d == 'static_ip':
         if req.get('op') == 'set':
             time.sleep(2)
@@ -183,6 +195,19 @@ def demo_gazda(req):
 DEMO_ROOT = os.path.join(DATA, 'demo-disks')
 if DEMO:
     BROWSE_ROOTS = (DEMO_ROOT,)
+    files.ROOT = DEMO_ROOT
+
+
+def vidbox_rescan():
+    """Після завантажень і перенесень — попросити VidBox переглянути теки (той самий секрет і пароль, тож той самий токен)."""
+    def go():
+        try:
+            req = urllib.request.Request('http://127.0.0.1:%d/api/rescan' % VB_PORT, data=b'{}', method='POST',
+                                         headers={'Content-Type': 'application/json', 'Cookie': 'vb=' + token()})
+            urllib.request.urlopen(req, timeout=300).read()
+        except OSError:
+            pass
+    threading.Thread(target=go, daemon=True).start()
 
 
 # ───────────────────────── VidBox ─────────────────────────
@@ -504,7 +529,73 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json(gazda({'do': 'journal', 'n': 14}, 30))
         if p == '/api/updates':
             return self.json(updates('force' in qs))
+        if p == '/api/files':
+            return self.files_call(files.listing, qs.get('path', [''])[0])
+        if p == '/api/files/jobs':
+            return self.json({'jobs': files.jobs()})
+        if p == '/api/files/dl':
+            return self.download(qs.get('path', [''])[0])
+        if p == '/api/share':
+            return self.json(gazda({'do': 'share', 'op': 'status'}, 30))
         return self.json({'error': 'not found'}, 404)
+
+    def files_call(self, fn, *args):
+        try:
+            return self.json(dict(ok=True, **(fn(*args) or {})))
+        except files.Error as e:
+            return self.json({'ok': False, 'error': str(e)})
+        except OSError as e:
+            return self.json({'ok': False, 'error': 'Помилка диска: %s' % (e.strerror or e)})
+
+    def download(self, path):
+        try:
+            f = files.inside(path)
+        except files.Error as e:
+            return self.json({'ok': False, 'error': str(e)}, 404)
+        if not os.path.isfile(f):
+            return self.json({'ok': False, 'error': 'Це не файл'}, 404)
+        size = os.path.getsize(f)
+        name = os.path.basename(f)
+        self.send_response(200)
+        self.send_header('Content-Type', mimetypes.guess_type(f)[0] or 'application/octet-stream')
+        self.send_header('Content-Length', str(size))
+        self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + urllib.parse.quote(name))
+        self.end_headers()
+        if self.command == 'HEAD':
+            return
+        with open(f, 'rb') as fh:
+            while True:
+                buf = fh.read(files.CHUNK)
+                if not buf:
+                    break
+                try:
+                    self.wfile.write(buf)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+
+    def do_PUT(self):
+        """Завантаження файла з браузера: PUT /api/files/upload?dir=…&name=… , тіло — сам файл."""
+        u = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(u.query, keep_blank_values=True)
+        if u.path != '/api/files/upload':
+            return self.json({'error': 'not found'}, 404)
+        if not self.authed():
+            return self.json({'error': 'auth'}, 401)
+        try:
+            n = int(self.headers.get('Content-Length') or -1)
+        except ValueError:
+            n = -1
+        if n < 0:
+            return self.json({'ok': False, 'error': 'Невідомий розмір файла'}, 411)
+        try:
+            r = files.upload(qs.get('dir', [''])[0], qs.get('name', [''])[0], n, self.rfile)
+        except files.Error as e:
+            self.close_connection = True      # тіло могло лишитись непрочитаним
+            return self.json({'ok': False, 'error': str(e)})
+        except OSError as e:
+            self.close_connection = True
+            return self.json({'ok': False, 'error': 'Помилка диска: %s' % (e.strerror or e)})
+        return self.json(dict(ok=True, **r))
 
     def do_POST(self):
         p = urllib.parse.urlparse(self.path).path
@@ -555,6 +646,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json(gazda({'do': 'static_ip', 'op': d['op'], 'iface': d.get('iface'), 'ip': d.get('ip')}, 200))
         if p == '/api/timezone':
             return self.json(gazda({'do': 'timezone', 'tz': d.get('tz')}, 60))
+        if p == '/api/files':
+            op = d.get('op')
+            if op == 'mkdir':
+                return self.files_call(files.mkdir, d.get('dir'), d.get('name'))
+            if op == 'rename':
+                return self.files_call(files.rename, d.get('path'), d.get('name'))
+            if op == 'delete':
+                r = self.files_call(files.delete, [str(x) for x in d.get('paths') or []])
+                vidbox_rescan()
+                return r
+            if op == 'move':
+                return self.files_call(files.move, [str(x) for x in d.get('paths') or []], d.get('dir'))
+            if op == 'rescan':
+                vidbox_rescan()
+                return self.json({'ok': True})
+            return self.json({'ok': False, 'error': 'Невідома дія'})
+        if p == '/api/share':
+            if d.get('op') == 'enable':
+                pw = str(d.get('password') or '')
+                if not hmac.compare_digest(pw_hash(pw, CONF['secret']), CONF['password_hash'] or ''):
+                    time.sleep(1)
+                    return self.json({'ok': False, 'error': 'Неправильний пароль панелі'})
+                return self.json(gazda({'do': 'share', 'op': 'enable', 'password': pw}, 700))
+            if d.get('op') == 'disable':
+                return self.json(gazda({'do': 'share', 'op': 'disable'}, 120))
+            return self.json({'ok': False, 'error': 'Невідома дія'})
         if p == '/api/speedtest':
             return self.json(speedtest())
         if p == '/api/scheme':

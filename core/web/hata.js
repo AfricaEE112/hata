@@ -322,12 +322,24 @@ function panelTop(s) {
   bar.hidden = false;
   const b = s.battery;
   bar.innerHTML = `${who()}<nav aria-label="Розділи">${SECTIONS.map(([k, l, id]) => `<a href="#${id}" data-k="${k}"><span>${k}</span>${l}</a>`).join('')}` +
+    `<a href="#files" data-k="7" data-files><span>7</span>файли</a>` +
     `<a class="ext" href="${esc(vidboxUrl(s))}">VidBox ↗</a></nav><span class="sp"></span>
     <dl class="stats"><div><dt>cpu</dt><dd id="tCpu">—</dd></div><div><dt>ram</dt><dd id="tRam">—</dd></div><div><dt>t°</dt><dd id="tTemp">—</dd></div>` +
     (b ? `<div><dt>бат</dt><dd style="display:flex;gap:6px;align-items:center">${segs(b.pct, 10).replace('class="segs ', 'style="width:52px;flex:none" class="segs ')}${b.pct}%</dd></div>` : '') +
     `<div><dt class="sr">час</dt><dd class="clock">${hhmm()}</dd></div></dl>${schemePicker()}`;
   bindSchemes(true);
-  $$('.top nav a[data-k]').forEach(a => a.onclick = () => { $$('.top nav a').forEach(x => x.classList.toggle('on', x === a)); });
+  $$('.top nav a[data-k]').forEach(a => a.onclick = e => { e.preventDefault(); goSection(a.dataset.k); });
+}
+
+// Перехід до розділу: 1–6 — блоки панелі (якщо ми на іншій сторінці — спершу назад на панель), 7 — файли.
+async function goSection(k) {
+  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === k));
+  if (k === '7') return filesPage();
+  const s = SECTIONS.find(x => x[0] === k);
+  if (!s) return;
+  if (!$('#sys')) await panel();
+  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === k));
+  $('#' + s[2]).scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
 }
 const vidboxUrl = s => `${location.protocol}//${location.hostname}:${s.vidbox.port}`;
 
@@ -363,7 +375,7 @@ async function panel(soft) {
       return `<div class="drow"><span class="n"><b>${esc(d.name)}</b><small>${esc(d.path || '')}</small></span>` +
         (d.mounted ? `${segs(p, 30)}<span class="v">${size(used)} <span>/ ${size(d.total)}</span></span>`
                    : `<span class="note" style="margin:0">диск не знайдено — він вимкнений або від'єднаний</span><span class="v"><span class="tag bad">відключено</span></span>`) + '</div>';
-    }).join('') + `</div><div class="dock"><span>Новий диск у доці чи USB? Його можна підключити тут.</span><button class="btn" id="findDisks">Знайти диски</button></div>`;
+    }).join('') + `</div><div class="dock"><span>Новий диск у доці чи USB? Його можна підключити тут.</span><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="openFiles">Файли</button><button class="btn" id="findDisks">Знайти диски</button></span></div>`;
 
   const svcRow = (name, desc, state, btns) => `<div class="row svc ${state === 'active' ? '' : 'off'}"><div class="l"><b><span class="okdot ${state === 'active' ? '' : 'off'}"></span>${esc(name)}</b><small>${esc(desc)}</small></div>` +
     `<div class="r"><span class="st">${state === 'active' ? 'працює' : esc(state || 'зупинена')}</span>${btns}</div></div>`;
@@ -430,6 +442,7 @@ function bindPanel() {
     toast(r.ok ? (off ? 'Вимикаю…' : 'Перезавантажую…') : r.error);
   });
   $('#findDisks').onclick = () => openFromPanel(2);
+  $('#openFiles').onclick = () => filesPage();
   bindLimit();
 }
 
@@ -643,13 +656,232 @@ async function checkUpdates(force) {
   if ($('#updBox')) { $('#updBox').innerHTML = updBox(); bindUpd(); }
 }
 
+// ───────────────────────── файли ─────────────────────────
+// Менеджер файлів на дисках Хати: перегляд, завантаження з браузера (файли й цілі теки, перетягуванням),
+// нова тека, перейменування, перенесення (вирізати → вставити), видалення. Плюс спільні папки (Samba).
+const FS = {path: '', data: null, sel: new Set(), clip: null, ren: null, uploads: [], active: 0, jobs: [], share: null};
+const ICON = {dir: '▸', video: '▶', subs: '¶', image: '▣', audio: '♪', archive: '▤', file: '·'};
+const fdate = t => new Date(t * 1000).toLocaleDateString('uk-UA', {day: '2-digit', month: '2-digit', year: '2-digit'});
+
+async function filesPage(path = FS.path) {
+  stopPanel(); fromPanel = false;
+  if (!$('.top nav a[data-files]')) { bar.hidden = false; if (LAST) panelTop(LAST); }
+  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === '7'));
+  const r = await api('/api/files' + (path ? '?path=' + encodeURIComponent(path) : ''));
+  if (r.ok === false && path) return filesPage('');     // теки вже немає — на початок
+  FS.data = r; FS.path = r.path || ''; FS.sel.clear(); FS.ren = null;
+  if (!FS.share) api('/api/share').then(x => { FS.share = x; drawShare(); });
+  drawFiles(); drawUploads(); drawShare();
+  window.scrollTo(0, 0);
+}
+
+function drawFiles() {
+  const r = FS.data || {}, items = r.items || [], atRoot = !r.up;
+  if (!$('#fm')) {
+    app.innerHTML = `<div class="wrap wide"><div id="fmPrompt"></div><div class="cols">
+      ${win('файли', '', {n: '⁷', id: 'fm', cls: 'w9'})}
+      <div style="flex:1 1 340px;min-width:0">${win('завантаження', '', {c: 'yel', id: 'up'})}${win('спільні папки', '', {c: 'vio', id: 'smb'})}</div>
+    </div></div><div class="drop" id="drop" hidden><div><b>Відпусти, щоб завантажити</b><span id="dropTo"></span></div></div>
+    <input type="file" id="fPick" multiple hidden><input type="file" id="dPick" webkitdirectory hidden>`;
+    bindDrop();
+    $('#fPick').onchange = e => { queueFiles([...e.target.files].map(f => ({file: f, rel: f.name}))); e.target.value = ''; };
+    $('#dPick').onchange = e => { queueFiles([...e.target.files].map(f => ({file: f, rel: f.webkitRelativePath || f.name}))); e.target.value = ''; };
+  }
+  const rel = (r.path || '').slice((r.root || '').length).split('/').filter(Boolean);
+  $('#fmPrompt').innerHTML = prompt(r.path || '/srv/disks', 'ls');
+  const crumbs = `<nav class="crumbs fm-crumbs" aria-label="Шлях"><button class="lnk" data-cd="${esc(r.root || '')}">диски</button>` +
+    rel.map((n, k) => `<span>/</span><button class="lnk" data-cd="${esc((r.root || '') + '/' + rel.slice(0, k + 1).join('/'))}">${esc(n)}</button>`).join('') + '</nav>';
+  const tools = atRoot ? '' : `<div class="fm-tools">
+      <button class="btn primary" id="upBtn">Завантажити файли</button><button class="btn" id="upDir">Цілу теку</button>
+      <button class="btn" id="mk">Нова тека</button><span class="sp"></span>
+      <span class="note" style="margin:0">вільно ${size(r.free)} з ${size(r.total)}</span></div>`;
+  const clip = FS.clip ? `<div class="fm-bar"><span>Переносимо: <b>${FS.clip.paths.length === 1 ? esc(FS.clip.paths[0].split('/').pop()) : FS.clip.paths.length + ' шт.'}</b></span><span class="sp"></span>
+      ${atRoot ? '<span class="note" style="margin:0">відкрий теку, куди перенести</span>' : '<button class="btn primary" id="paste">Вставити сюди</button>'}<button class="btn ghost" id="unclip">Скасувати</button></div>` : '';
+  const sel = FS.sel.size ? `<div class="fm-bar"><span>Вибрано: <b>${FS.sel.size}</b></span><span class="sp"></span>
+      <button class="btn" id="cut">Вирізати</button><button class="btn danger" id="del">Видалити</button><button class="btn ghost" id="unsel">Зняти</button></div>` : '';
+  const rows = items.map((it, k) => {
+    const path = (r.path || '') + '/' + it.name, on = FS.sel.has(path);
+    const name = FS.ren === path
+      ? `<form class="fm-ren" data-ren="${k}"><input value="${esc(it.name)}" aria-label="Нова назва" autofocus><button class="btn primary">OK</button></form>`
+      : it.dir ? `<button class="lnk fm-name" data-cd="${esc(path)}">${esc(it.name)}</button>`
+               : `<a class="fm-name" href="/api/files/dl?path=${encodeURIComponent(path)}" download>${esc(it.name)}</a>`;
+    return `<div class="fm-row${on ? ' on' : ''}">` +
+      (atRoot ? '<span></span>' : `<input type="checkbox" data-sel="${k}" ${on ? 'checked' : ''} aria-label="Вибрати ${esc(it.name)}">`) +
+      `<span class="fm-ic k-${it.kind}" aria-hidden="true">${ICON[it.kind] || '·'}</span>${name}` +
+      `<span class="fm-sz">${it.dir ? '' : size(it.size)}</span><span class="fm-dt">${fdate(it.mtime)}</span>` +
+      (atRoot ? '<span></span>' : `<span class="fm-act"><button class="btn ghost" data-rn="${k}" aria-label="Перейменувати ${esc(it.name)}" title="Перейменувати">✎</button></span>`) + '</div>';
+  }).join('');
+  const empty = atRoot ? '<p class="note">Дисків ще немає — підключи їх у панелі, блок «диски».</p>'
+    : '<div class="fm-empty">Тека порожня. Перетягни сюди файли чи теки з комп’ютера або натисни «Завантажити файли».</div>';
+  $('#fm .wbody').innerHTML = crumbs + tools + clip + sel +
+    (r.ok === false ? `<p class="err">${esc(r.error)}</p>` : '') +
+    (items.length ? `<div class="fm-list">${rows}</div>` : empty) +
+    (r.writable === false && !atRoot ? '<p class="note" style="color:var(--yel)">У цю теку Хата не має права писати.</p>' : '');
+  bindFiles();
+}
+
+function bindFiles() {
+  const r = FS.data || {}, items = r.items || [];
+  const pathOf = k => (r.path || '') + '/' + items[k].name;
+  $$('[data-cd]').forEach(b => b.onclick = () => filesPage(b.dataset.cd));
+  $$('[data-sel]').forEach(c => c.onchange = () => { const p = pathOf(+c.dataset.sel); c.checked ? FS.sel.add(p) : FS.sel.delete(p); drawFiles(); });
+  $$('[data-rn]').forEach(b => b.onclick = () => { FS.ren = pathOf(+b.dataset.rn); drawFiles(); const i = $('.fm-ren input'); if (i) { i.focus(); i.setSelectionRange(0, i.value.replace(/\.[^.]+$/, '').length); } });
+  $$('[data-ren]').forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const x = await api('/api/files', {op: 'rename', path: pathOf(+f.dataset.ren), name: f.querySelector('input').value});
+    if (x.ok === false) return toast(x.error);
+    FS.ren = null; filesPage(FS.path);
+  });
+  if ($('#upBtn')) $('#upBtn').onclick = () => $('#fPick').click();
+  if ($('#upDir')) $('#upDir').onclick = () => $('#dPick').click();
+  if ($('#mk')) $('#mk').onclick = async () => {
+    const n = window.prompt('Назва нової теки:');
+    if (!n) return;
+    const x = await api('/api/files', {op: 'mkdir', dir: FS.path, name: n});
+    x.ok === false ? toast(x.error) : filesPage(FS.path);
+  };
+  if ($('#unsel')) $('#unsel').onclick = () => { FS.sel.clear(); drawFiles(); };
+  if ($('#cut')) $('#cut').onclick = () => { FS.clip = {paths: [...FS.sel]}; FS.sel.clear(); drawFiles(); toast('Відкрий теку, куди перенести, і натисни «Вставити сюди»'); };
+  if ($('#unclip')) $('#unclip').onclick = () => { FS.clip = null; drawFiles(); };
+  if ($('#paste')) $('#paste').onclick = async () => {
+    const b = $('#paste'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Переношу…';
+    const x = await api('/api/files', {op: 'move', paths: FS.clip.paths, dir: FS.path}, 300000);
+    if (x.ok === false) { toast(x.error); b.disabled = false; b.textContent = 'Вставити сюди'; return; }
+    FS.clip = null;
+    if (x.job) { toast('Між дисками — копіюю у фоні, прогрес праворуч'); pollJobs(); } else { toast('Перенесено'); api('/api/files', {op: 'rescan'}); }
+    filesPage(FS.path);
+  };
+  if ($('#del')) $('#del').onclick = async () => {
+    const n = FS.sel.size;
+    if (!confirm(`Видалити ${n === 1 ? '«' + [...FS.sel][0].split('/').pop() + '»' : n + ' шт.'} назавжди? Кошика немає — повернути не вийде.`)) return;
+    const x = await api('/api/files', {op: 'delete', paths: [...FS.sel]}, 300000);
+    x.ok === false ? toast(x.error) : toast(`Видалено: ${x.deleted}`);
+    filesPage(FS.path);
+  };
+}
+
+// ── завантаження: черга, по два файли одночасно, прогрес і швидкість ──
+function queueFiles(list) {
+  if (!FS.data || !FS.data.up) return toast('Спершу відкрий теку на диску, куди завантажувати');
+  for (const {file, rel} of list) FS.uploads.push({file, rel, dir: FS.path, sent: 0, state: 'wait', t0: 0, xhr: null});
+  drawUploads(); pumpUploads();
+}
+
+function pumpUploads() {
+  while (FS.active < 2) {
+    const u = FS.uploads.find(x => x.state === 'wait');
+    if (!u) break;
+    FS.active++; u.state = 'go'; u.t0 = performance.now();
+    const x = u.xhr = new XMLHttpRequest();
+    x.open('PUT', `/api/files/upload?dir=${encodeURIComponent(u.dir)}&name=${encodeURIComponent(u.rel)}`);
+    x.upload.onprogress = e => { u.sent = e.loaded; drawUploads(); };
+    x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch (e) {} finish(u, j.ok ? 'done' : 'err', j.error || 'Помилка ' + x.status); };
+    x.onerror = () => finish(u, 'err', 'З’єднання обірвалось');
+    x.onabort = () => finish(u, 'cancel', '');
+    x.send(u.file);
+  }
+}
+function finish(u, state, err) {
+  u.state = state; u.err = err; u.sent = state === 'done' ? u.file.size : u.sent; FS.active--;
+  drawUploads(); pumpUploads();
+  if (!FS.uploads.some(x => x.state === 'wait' || x.state === 'go')) {
+    api('/api/files', {op: 'rescan'});                 // VidBox підхопить нове одразу
+    if ($('#fm')) filesPage(FS.path);
+  }
+}
+
+function drawUploads() {
+  if (!$('#up')) return;
+  const live = FS.uploads.filter(u => u.state !== 'done' || performance.now() - u.t0 < 600000).slice(-30);
+  const rows = live.map((u, k) => {
+    const pct = u.file.size ? u.sent / u.file.size * 100 : 100;
+    const sec = (performance.now() - u.t0) / 1000, sp = u.state === 'go' && sec > .5 ? u.sent / sec : 0;
+    const st = u.state === 'done' ? '<span class="st">готово</span>' : u.state === 'err' ? `<span class="st" style="color:var(--red)">${esc(u.err)}</span>`
+      : u.state === 'cancel' ? '<span class="st" style="color:var(--dim)">скасовано</span>'
+      : u.state === 'wait' ? '<span class="st" style="color:var(--dim)">у черзі</span>' : `<span class="st">${short(sp)}/с</span>`;
+    return `<div class="up-row"><div class="up-n"><b title="${esc(u.rel)}">${esc(u.rel)}</b>${st}</div>
+      <div class="up-p">${segs(pct, 24, u.state === 'err' ? '' : 'mono')}<span class="note" style="margin:0">${size(u.sent)} / ${size(u.file.size)}</span>
+      ${u.state === 'go' || u.state === 'wait' ? `<button class="btn ghost" data-cancel="${FS.uploads.indexOf(u)}" aria-label="Скасувати">×</button>` : ''}</div></div>`;
+  }).join('');
+  const jobs = FS.jobs.filter(j => j.state === 'working' || Date.now() / 1000 - (j.finished || 0) < 60).map(j =>
+    `<div class="up-row"><div class="up-n"><b>⇢ ${esc(j.name)}${j.count > 1 ? ` (+${j.count - 1})` : ''}</b><span class="st"${j.state === 'error' ? ' style="color:var(--red)"' : ''}>${j.state === 'done' ? 'перенесено' : j.state === 'error' ? esc(j.error) : 'переношу між дисками'}</span></div>
+     <div class="up-p">${segs(j.total ? j.done / j.total * 100 : 0, 24, 'mono')}<span class="note" style="margin:0">${size(j.done)} / ${size(j.total)}</span></div></div>`).join('');
+  $('#up .wbody').innerHTML = (jobs + rows) ||
+    `<p class="note" style="margin:0">Перетягни файли чи цілі теки з комп’ютера будь-куди на цю сторінку — вони завантажаться у відкриту теку. З телефона — кнопка «Завантажити файли».</p>`;
+  $$('[data-cancel]').forEach(b => b.onclick = () => { const u = FS.uploads[+b.dataset.cancel]; if (u.xhr && u.state === 'go') u.xhr.abort(); else { u.state = 'cancel'; drawUploads(); } });
+}
+
+let jobsT;
+async function pollJobs() {
+  clearTimeout(jobsT);
+  const r = await api('/api/files/jobs');
+  FS.jobs = r.jobs || [];
+  drawUploads();
+  if (FS.jobs.some(j => j.state === 'working')) jobsT = setTimeout(pollJobs, 1000);
+  else { api('/api/files', {op: 'rescan'}); if ($('#fm')) filesPage(FS.path); }
+}
+
+// ── перетягування: файли й цілі теки (через webkitGetAsEntry) ──
+function bindDrop() {
+  let depth = 0;
+  const show = on => { $('#drop').hidden = !on; if (on) $('#dropTo').textContent = FS.data && FS.data.up ? FS.path : 'спершу відкрий теку на диску'; };
+  document.ondragenter = e => { if ($('#fm') && [...(e.dataTransfer?.types || [])].includes('Files')) { depth++; show(true); } };
+  document.ondragleave = () => { if (--depth <= 0) { depth = 0; show(false); } };
+  document.ondragover = e => { if ($('#fm')) e.preventDefault(); };
+  document.ondrop = async e => {
+    if (!$('#fm')) return;
+    e.preventDefault(); depth = 0; show(false);
+    const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+    const out = [];
+    const walk = (en, pre) => new Promise(res => {
+      if (en.isFile) return en.file(f => { out.push({file: f, rel: pre + f.name}); res(); }, () => res());
+      const rd = en.createReader(), all = [];
+      const more = () => rd.readEntries(async batch => {
+        if (batch.length) { all.push(...batch); return more(); }
+        for (const c of all) await walk(c, pre + en.name + '/');
+        res();
+      }, () => res());
+      more();
+    });
+    if (entries.length) { for (const en of entries) await walk(en, ''); }
+    else out.push(...[...e.dataTransfer.files].map(f => ({file: f, rel: f.name})));
+    if (out.length) queueFiles(out);
+  };
+}
+
+// ── спільні папки (Samba): \\hata у Windows, smb://hata.local на Mac ──
+function drawShare() {
+  if (!$('#smb')) return;
+  const s = FS.share, ip = (LAST && (LAST.ips || [])[0]) || location.hostname, host = (LAST && LAST.host) || HOST;
+  if (!s) { $('#smb .wbody').innerHTML = '<p class="note" style="margin:0"><span class="spin"></span></p>'; return; }
+  if (s.enabled) {
+    $('#smb .wbody').innerHTML = `<p style="margin:0 0 10px"><span class="okdot"></span>Увімкнено — диски Хати видно як мережеві папки.</p>
+      <dl class="kv"><dt>Windows</dt><dd class="link">\\\\${esc(ip)}</dd><dt>Mac</dt><dd class="link">smb://${esc(host)}.local</dd>
+      <dt>вхід</dt><dd>hata · пароль панелі</dd><dt>папки</dt><dd>${(s.shares || []).map(x => esc(x.name)).join(', ') || '—'}</dd></dl>
+      <p class="note">Windows: «Провідник» → у рядок адреси <b>\\\\${esc(ip)}</b> → правою кнопкою на диску → «Підключити мережевий диск». Mac: Finder → Cmd+K → <b>smb://${esc(host)}.local</b>.</p>
+      <div class="acts"><button class="btn ghost" id="smbOff">Вимкнути</button></div>`;
+    $('#smbOff').onclick = async () => {
+      if (!confirm('Вимкнути спільні папки? Мережеві диски на ПК і Mac перестануть відкриватись.')) return;
+      FS.share = await api('/api/share', {op: 'disable'}); drawShare();
+    };
+  } else {
+    $('#smb .wbody').innerHTML = `<p class="note" style="margin-top:0">Диски Хати стануть звичайними мережевими папками у Windows («Провідник») і на Mac (Finder) — копіюй фільми просто туди, як на флешку. Працює вдома й через Tailscale.</p>
+      <form id="smbF" style="display:flex;flex-wrap:wrap;gap:10px"><label class="field" style="flex:1 1 200px"><span aria-hidden="true">❯</span><input id="smbPw" type="password" placeholder="пароль панелі" aria-label="Пароль панелі" autocomplete="current-password"></label>
+      <button class="btn primary" id="smbOn">Увімкнути</button></form><div class="err" id="smbErr" role="alert"></div>`;
+    $('#smbF').onsubmit = async e => {
+      e.preventDefault();
+      const b = $('#smbOn'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Встановлюю…';
+      const r = await api('/api/share', {op: 'enable', password: $('#smbPw').value}, 700000);
+      if (r.ok === false) { $('#smbErr').textContent = r.error; b.disabled = false; b.textContent = 'Увімкнути'; return; }
+      FS.share = r; drawShare(); toast('Спільні папки увімкнено');
+    };
+  }
+}
+
 // Клавіші 1–6 — до розділу панелі, як у btop.
 document.addEventListener('keydown', e => {
-  if (e.ctrlKey || e.metaKey || e.altKey || typing() || !$('#sys')) return;
-  const s = SECTIONS.find(x => x[0] === e.key);
-  if (!s) return;
-  $('#' + s[2]).scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
-  $$('.top nav a').forEach(a => a.classList.toggle('on', a.dataset.k === s[0]));
+  if (e.ctrlKey || e.metaKey || e.altKey || typing() || !$('.top nav a[data-k]')) return;
+  if (/^[1-7]$/.test(e.key)) goSection(e.key);
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && $('#cpuG')) live(); });
 

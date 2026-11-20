@@ -209,6 +209,10 @@ def do_mount(a):
             run(['umount', disk['mountpoint']], 30)
         if not os.path.ismount(point):
             run(['mount', point], 60, check=True)
+        if fstype == 'auto' and os.stat(point).st_uid == 0:
+            # ext4 тощо: корінь нового диска належить root — дамо hata писати туди (файли, завантаження, Samba)
+            os.chown(point, *USER_IDS())
+    share_reload()
     return {'path': point}
 
 
@@ -227,6 +231,7 @@ def do_unmount(a):
         if os.path.ismount(point):
             run(['umount', point], 60, check=True)
         run(['systemctl', 'daemon-reload'], 30)
+    share_reload()
     return {}
 
 
@@ -691,6 +696,125 @@ def do_static_ip(a):
     raise Fail('З адресою %s роутер не відповідає — повернув як було. %s' % (addr, (r.stderr or '').strip()[-200:]))
 
 
+# ───────────────────────── спільні папки (Samba) ─────────────────────────
+# Кожен диск Хати — окрема спільна папка: \\hata\<диск> у Windows, smb://hata.local у Finder.
+# Вхід — користувач hata з паролем панелі (той самий, що на всьому). Лише вдома й через Tailscale.
+
+SMB_CONF = '/etc/samba/smb.conf'
+AVAHI_SMB = '/etc/avahi/services/hata-smb.service'
+
+
+def hata_disks():
+    return sorted({os.path.basename(l.split()[1]) for l in read(FSTAB).splitlines()
+                   if l.endswith(FSTAB_MARK) and len(l.split()) > 1})
+
+
+def write_smb_conf():
+    host = socket.gethostname()
+    shares = ''.join(f'''
+[{n}]
+   comment = Диск {n} (Хата)
+   path = {DISKS}/{n}
+   valid users = hata
+   force user = hata
+   force group = hata
+   read only = no
+   browseable = yes
+   create mask = 0664
+   directory mask = 0775
+''' for n in hata_disks())
+    text = f'''# Записано Hata (панель → файли → спільні папки). Змінюй через панель — ручні зміни буде перезаписано.
+[global]
+   workgroup = WORKGROUP
+   server string = Хата
+   netbios name = {host.upper()[:15]}
+   server role = standalone server
+   map to guest = never
+   server min protocol = SMB2
+   hosts allow = 127. 10. 172.16.0.0/12 192.168. 100.64.0.0/10 fd7a:115c:a1e0::/48
+   hosts deny = 0.0.0.0/0
+   load printers = no
+   printing = bsd
+   printcap name = /dev/null
+   disable spoolss = yes
+   log file = /var/log/samba/log.%m
+   max log size = 1000
+   veto files = /._*/.DS_Store/Thumbs.db/
+   delete veto files = yes
+{shares}'''
+    if os.path.exists(SMB_CONF) and not os.path.exists(SMB_CONF + '.orig') and 'Записано Hata' not in read(SMB_CONF):
+        shutil.copy2(SMB_CONF, SMB_CONF + '.orig')
+    with open(SMB_CONF + '.tmp', 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.replace(SMB_CONF + '.tmp', SMB_CONF)
+    if os.path.isdir('/etc/avahi/services'):     # щоб Хата з'являлась у бічній панелі Finder
+        with open(AVAHI_SMB, 'w') as f:
+            f.write('<?xml version="1.0" standalone="no"?>\n<!DOCTYPE service-group SYSTEM "avahi-service.dtd">\n'
+                    '<service-group><name replace-wildcards="yes">%h</name>'
+                    '<service><type>_smb._tcp</type><port>445</port></service>'
+                    '<service><type>_device-info._tcp</type><port>0</port><txt-record>model=Xserve</txt-record></service>'
+                    '</service-group>\n')
+
+
+def share_on():
+    return bool(load_state().get('share'))
+
+
+def share_reload():
+    """Диски змінились — оновити список спільних папок (якщо вони ввімкнені)."""
+    if share_on() and shutil.which('smbd'):
+        write_smb_conf()
+        run(['systemctl', 'reload-or-restart', 'smbd'], 60)
+
+
+def do_share(a):
+    op = a.get('op') or 'status'
+    if op == 'status':
+        on = share_on()
+        active = run(['systemctl', 'is-active', 'smbd'], 10).stdout.strip() == 'active' if shutil.which('smbd') else False
+        return {'enabled': on, 'active': active, 'installed': bool(shutil.which('smbd')), 'user': 'hata',
+                'shares': [{'name': n, 'path': f'{DISKS}/{n}'} for n in hata_disks()] if on else []}
+    if op == 'enable':
+        pw = str(a.get('password') or '')
+        if len(pw) < 6:
+            raise Fail('Потрібен пароль панелі')
+        ensure_pkgs('samba')
+        try:
+            ensure_pkgs('wsdd')          # щоб Хата сама з'являлась у «Мережі» Windows (є не в кожній версії Ubuntu)
+        except Fail:
+            pass
+        with LOCK:
+            write_smb_conf()
+            r = subprocess.run(['smbpasswd', '-a', '-s', 'hata'], input=f'{pw}\n{pw}\n', text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            if r.returncode:
+                raise Fail('Не вдалося задати пароль Samba: ' + (r.stderr or r.stdout).strip()[-200:])
+            run(['smbpasswd', '-e', 'hata'], 30)
+            for svc in ('smbd', 'nmbd', 'wsdd'):
+                if run(['systemctl', 'cat', svc], 10).returncode == 0:
+                    run(['systemctl', 'enable', '--now', svc], 60)
+            run(['systemctl', 'restart', 'smbd'], 60)
+            run(['systemctl', 'try-restart', 'avahi-daemon'], 30)
+            if shutil.which('ufw') and 'Status: active' in run(['ufw', 'status'], 10).stdout:
+                run(['ufw', 'allow', 'Samba'], 30)
+            st = load_state()
+            st['share'] = True
+            save_state(st)
+        return do_share({'op': 'status'})
+    if op == 'disable':
+        with LOCK:
+            for svc in ('wsdd', 'nmbd', 'smbd'):
+                run(['systemctl', 'disable', '--now', svc], 60)
+            if os.path.exists(AVAHI_SMB):
+                os.remove(AVAHI_SMB)
+                run(['systemctl', 'try-restart', 'avahi-daemon'], 30)
+            st = load_state()
+            st['share'] = False
+            save_state(st)
+        return do_share({'op': 'status'})
+    raise Fail('Невідома дія зі спільними папками')
+
+
 ACTIONS = {
     'ping': lambda a: {'pong': True},
     'status': do_status,
@@ -707,6 +831,7 @@ ACTIONS = {
     'wifi': do_wifi,
     'timezone': do_timezone,
     'static_ip': do_static_ip,
+    'share': do_share,
 }
 
 
