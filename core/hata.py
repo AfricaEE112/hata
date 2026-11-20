@@ -17,6 +17,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import socket
 import sys
 import threading
@@ -28,6 +29,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import files   # noqa: E402 — модуль «Файли» поруч
 import house   # noqa: E402 — розділ «Будинок» (заміри від ESP)
+import backup  # noqa: E402 — розділ «Копії»
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, 'web')
@@ -183,6 +185,25 @@ def demo_gazda(req):
         return {'ok': True, 'version': 'cd4bff2 2026-11-19T15:00:00+02:00', 'commits': [
             {'hash': 'a1f3c2e', 'msg': 'Аніме: опис і жанри в апці'},
             {'hash': '7b9e011', 'msg': 'Майстер: швидкі кліки по теках'}]}
+    if d == 'disk_health':
+        if req.get('op') == 'sleep':
+            DEMO_STATE.setdefault('sleep', {})[req.get('dev')] = req.get('minutes')
+        sl = DEMO_STATE.get('sleep', {})
+        names = list(DEMO_STATE['mounted'].values())
+        disks = [{'dev': '/dev/nvme0n1', 'names': ['система'], 'model': 'SAMSUNG MZVL2512HCJQ', 'serial': 'S6X1', 'size': 512 * G, 'rot': False,
+                  'usb': False, 'system': True, 'loop': False, 'sleep': 0, 'idle': 3, 'sleepable': False, 'usage': {},
+                  'smart': {'state': 'active', 'passed': True, 'temp': 41, 'hours': 6120, 'cycles': 1830, 'life': 96, 'media_errors': 0, 'spare': 100, 'at': time.time() - 120}}]
+        if names:
+            disks.append({'dev': '/dev/sda', 'names': names[:1], 'model': 'WDC WD20SPZX-22UA7T0', 'serial': 'WD-WX1', 'size': 2000 * G, 'rot': True,
+                          'usb': True, 'system': False, 'loop': False, 'sleep': sl.get('/dev/sda', 20), 'idle': 140, 'sleepable': True,
+                          'usage': {names[0]: {'total': 2000 * G, 'free': 640 * G}},
+                          'smart': {'state': 'active', 'passed': True, 'temp': 38, 'hours': 21450, 'cycles': 4210, 'realloc': 0, 'pending': 0, 'uncorrect': 0, 'crc': 0, 'at': time.time() - 200}})
+        if len(names) > 1:
+            disks.append({'dev': '/dev/sdb', 'names': names[1:2], 'model': 'TOSHIBA MQ04ABF100', 'serial': 'TOS1', 'size': 1000 * G, 'rot': True,
+                          'usb': True, 'system': False, 'loop': False, 'sleep': sl.get('/dev/sdb', 0), 'idle': 5400, 'sleepable': True,
+                          'usage': {names[1]: {'total': 1000 * G, 'free': 120 * G}},
+                          'smart': {'state': 'standby', 'passed': True, 'temp': 44, 'hours': 30311, 'cycles': 9800, 'realloc': 16, 'pending': 2, 'uncorrect': 0, 'crc': 0, 'at': time.time() - 900}})
+        return {'ok': True, 'disks': disks, 'choices': [0, 10, 20, 30, 60, 120]}
     if d == 'status':
         return {'ok': True, 'host': 'hata', 'uptime': 93784, 'load': 0.42, 'cpus': 8, 'cpu_model': '11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz', 'temp': 47.5,
                 'mem': {'total': 8 * G, 'avail': 5.6 * G}, 'os': 'Ubuntu 24.04.1 LTS', 'version': 'cd4bff2 2026-11-19T15:00:00+02:00', 'tz': DEMO_STATE.get('tz', 'Europe/Kyiv'),
@@ -195,9 +216,116 @@ def demo_gazda(req):
 
 
 DEMO_ROOT = os.path.join(DATA, 'demo-disks')
+DISKS_ROOT = '/srv/disks'
 if DEMO:
     BROWSE_ROOTS = (DEMO_ROOT,)
     files.ROOT = DEMO_ROOT
+    DISKS_ROOT = DEMO_ROOT
+    backup.MOUNTED = False
+
+
+# ───────────────────────── копії ─────────────────────────
+# Щодня у вибраний час: налаштування й бази Хати (/var/lib/hata без кешів) і вибрані теки → «Копії Хати» на іншому диску.
+
+BK_DEFAULT = {'target': '', 'folders': [], 'time': '03:30', 'keep': 14, 'last': None}
+
+
+def bk_conf():
+    return dict(BK_DEFAULT, **(CONF.get('backup') or {}))
+
+
+def bk_sources(c):
+    src = [('hata', DATA)]
+    for f in c['folders']:
+        label = os.path.basename(f.rstrip('/')) or 'тека'
+        while any(l == label for l, _ in src):
+            label += '+'
+        src.append((label, f))
+    return src
+
+
+def bk_done(info, err):
+    with LOCK:
+        c = bk_conf()
+        c['last'] = {'at': int(time.time()), 'ok': err is None and not (info or {}).get('errors'), 'error': err,
+                     **({k: info[k] for k in ('name', 'took', 'files', 'bytes', 'copied', 'linked', 'errors', 'errorList', 'links')} if info else {})}
+        CONF['backup'] = c
+        save(CONF)
+    print('Копії: %s' % ('готово — %s, %d файлів' % (info['name'], info['files']) if info else 'не вдалося: %s' % err), flush=True)
+
+
+def bk_start():
+    c = bk_conf()
+    if not c['target']:
+        return {'ok': False, 'error': 'Спершу вибери диск для копій'}
+    target = os.path.join(DISKS_ROOT, c['target'])
+    if not backup.start(target, bk_sources(c), int(c['keep']), bk_done):
+        return {'ok': False, 'error': 'Копія вже робиться'}
+    return {'ok': True}
+
+
+def bk_scheduler():
+    """Раз на хвилину: настав час і сьогодні ще не копіювали — копіюємо (сервер був вимкнений о 03:30 — зробимо, щойно ввімкнеться)."""
+    while True:
+        time.sleep(60)
+        try:
+            c = bk_conf()
+            if not c['target'] or backup.JOB['running']:
+                continue
+            now = time.localtime()
+            last = (c.get('last') or {}).get('at') or 0
+            if time.strftime('%H:%M', now) >= c['time'] and time.strftime('%Y-%m-%d', time.localtime(last)) != time.strftime('%Y-%m-%d', now):
+                bk_start()
+        except Exception as e:
+            print('Копії: планувальник:', repr(e), flush=True)
+
+
+def bk_status():
+    c = bk_conf()
+    target = os.path.join(DISKS_ROOT, c['target']) if c['target'] else ''
+    try:
+        disks = sorted(n for n in os.listdir(DISKS_ROOT) if os.path.isdir(os.path.join(DISKS_ROOT, n)) and (DEMO or os.path.ismount(os.path.join(DISKS_ROOT, n))))
+    except OSError:
+        disks = []
+    try:
+        du = shutil.disk_usage(target) if target else None
+    except OSError:
+        du = None
+    snaps = backup.snapshots(target) if target else []
+    return {'conf': c, 'disks': disks, 'root': DISKS_ROOT, 'job': dict(backup.JOB), 'snapshots': snaps[:30],
+            'free': du.free if du else None, 'total': du.total if du else None, 'data': DATA,
+            'next': None if not c['target'] else c['time']}
+
+
+def bk_save(d):
+    c = bk_conf()
+    if 'target' in d:
+        t = str(d['target'] or '')
+        if t and not os.path.isdir(os.path.join(DISKS_ROOT, t)):
+            return {'ok': False, 'error': 'Диск не знайдено'}
+        c['target'] = t
+    if 'folders' in d:
+        fs = []
+        for f in d['folders'] if isinstance(d['folders'], list) else []:
+            f = os.path.realpath(str(f))
+            if not os.path.isdir(f) or not any(f == r or f.startswith(r + os.sep) for r in BROWSE_ROOTS):
+                return {'ok': False, 'error': 'Теки не знайдено: %s' % f}
+            if f not in fs:
+                fs.append(f)
+        c['folders'] = fs
+    if 'time' in d:
+        if not re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', str(d['time'])):
+            return {'ok': False, 'error': 'Час — у вигляді 03:30'}
+        c['time'] = d['time']
+    if 'keep' in d:
+        try:
+            c['keep'] = max(1, min(90, int(d['keep'])))
+        except (TypeError, ValueError):
+            return {'ok': False, 'error': 'Скільки копій тримати — число'}
+    with LOCK:
+        CONF['backup'] = c
+        save(CONF)
+    return {'ok': True}
 
 
 def vidbox_rescan():
@@ -540,6 +668,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.download(qs.get('path', [''])[0])
         if p == '/api/share':
             return self.json(gazda({'do': 'share', 'op': 'status'}, 30))
+        if p == '/api/disks/health':
+            return self.json(gazda({'do': 'disk_health', 'op': 'status'}, 60))
+        if p == '/api/backup':
+            return self.json(bk_status())
         if p == '/api/house/now':
             return self.json(house.now_json())
         if p == '/api/house/series':
@@ -693,6 +825,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if d.get('op') == 'disable':
                 return self.json(gazda({'do': 'share', 'op': 'disable'}, 120))
             return self.json({'ok': False, 'error': 'Невідома дія'})
+        if p == '/api/disks/health':
+            if d.get('op') not in ('refresh', 'sleep'):
+                return self.json({'ok': False, 'error': 'Невідома дія'})
+            return self.json(gazda({'do': 'disk_health', 'op': d['op'], 'dev': d.get('dev'), 'minutes': d.get('minutes')}, 120))
+        if p == '/api/backup':
+            if d.get('op') == 'run':
+                return self.json(bk_start())
+            if d.get('op') == 'save':
+                return self.json(bk_save(d))
+            return self.json({'ok': False, 'error': 'Невідома дія'})
         if p == '/api/house/key':
             with LOCK:
                 CONF['house_key'] = secrets.token_hex(12)
@@ -733,6 +875,7 @@ def main():
         os.makedirs(DEMO_ROOT, exist_ok=True)
     save(CONF)
     house.init(DATA)
+    threading.Thread(target=bk_scheduler, daemon=True).start()
     srv = Server(('0.0.0.0', PORT), Handler)
     print('Hata: панель на порту %d%s' % (PORT, ' (демо без gazda)' if DEMO else ''), flush=True)
     srv.serve_forever()

@@ -317,7 +317,7 @@ const SVC = {vidbox: 'відео й аніме', hata: 'ця панель', 'hat
 const HIST = {cpu: [], net: [], lastNet: null};
 let panelTimer, liveTimer, LAST = null, UPD = null;
 
-function stopPanel() { clearTimeout(panelTimer); clearTimeout(liveTimer); clearTimeout(houseTimer); }
+function stopPanel() { clearTimeout(panelTimer); clearTimeout(liveTimer); clearTimeout(houseTimer); clearTimeout(disksTimer); }
 
 function panelTop(s) {
   bar.hidden = false;
@@ -335,6 +335,7 @@ function panelTop(s) {
 // Перехід до розділу: 1–6 — блоки панелі (якщо ми на іншій сторінці — спершу назад на панель), 7 — файли.
 async function goSection(k) {
   $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === k));
+  if (k === '2') return disksPage();
   if (k === '7') return filesPage();
   if (k === '8') return housePage();
   const s = SECTIONS.find(x => x[0] === k);
@@ -377,7 +378,7 @@ async function panel(soft) {
       return `<div class="drow"><span class="n"><b>${esc(d.name)}</b><small>${esc(d.path || '')}</small></span>` +
         (d.mounted ? `${segs(p, 30)}<span class="v">${size(used)} <span>/ ${size(d.total)}</span></span>`
                    : `<span class="note" style="margin:0">диск не знайдено — він вимкнений або від'єднаний</span><span class="v"><span class="tag bad">відключено</span></span>`) + '</div>';
-    }).join('') + `</div><div class="dock"><span>Новий диск у доці чи USB? Його можна підключити тут.</span><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="openFiles">Файли</button><button class="btn" id="findDisks">Знайти диски</button></span></div>`;
+    }).join('') + `</div><div class="dock"><span>Новий диск у доці чи USB? Його можна підключити тут.</span><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="openDisks">Здоров’я й копії</button><button class="btn" id="openFiles">Файли</button><button class="btn" id="findDisks">Знайти диски</button></span></div>`;
 
   const svcRow = (name, desc, state, btns) => `<div class="row svc ${state === 'active' ? '' : 'off'}"><div class="l"><b><span class="okdot ${state === 'active' ? '' : 'off'}"></span>${esc(name)}</b><small>${esc(desc)}</small></div>` +
     `<div class="r"><span class="st">${state === 'active' ? 'працює' : esc(state || 'зупинена')}</span>${btns}</div></div>`;
@@ -429,10 +430,22 @@ async function panel(soft) {
   bindUpd();
   live();
   journal();
+  diskWarn();
   if (!UPD) checkUpdates();
   panelTimer = setTimeout(nextPanel, 30000);
 }
 const nextPanel = () => { if (STATE.setup && !document.hidden && !typing() && !$('details.schemes[open]')) panel(true); else panelTimer = setTimeout(nextPanel, 30000); };
+
+// На огляді: якщо з якимось диском біда — рядок-попередження над списком дисків.
+async function diskWarn() {
+  const h = await api('/api/disks/health');
+  const box = $('#disks .wbody');
+  if (!box || !h.disks) return;
+  const bad = h.disks.map(d => [d, diskVerdict(d)]).filter(([, v]) => v[0] === 'red' || v[0] === 'yel');
+  $('#dkWarn')?.remove();
+  if (bad.length) box.insertAdjacentHTML('afterbegin', `<p class="dk-warn" id="dkWarn">${bad.map(([d, v]) => `<span style="color:var(--${v[0]})">▲ ${esc(d.names.join(' · '))}: ${esc(v[1])}</span>`).join('<br>')} <button class="linkbtn" data-dk>детальніше</button></p>`);
+  $('#dkWarn [data-dk]')?.addEventListener('click', disksPage);
+}
 
 function bindPanel() {
   $$('[data-svc]').forEach(x => x.onclick = () => service(x, x.dataset.svc, 'restart'));
@@ -445,6 +458,7 @@ function bindPanel() {
   });
   $('#findDisks').onclick = () => openFromPanel(2);
   $('#openFiles').onclick = () => filesPage();
+  $('#openDisks').onclick = () => disksPage();
   bindLimit();
 }
 
@@ -879,6 +893,153 @@ function drawShare() {
       FS.share = r; drawShare(); toast('Спільні папки увімкнено');
     };
   }
+}
+
+// ───────────────────────── диски: здоров'я, сон, копії ─────────────────────────
+// SMART читає gazda (root) раз на 5 хв, не будячи сплячих дисків. Копії робить сама панель (core/backup.py).
+const DK = {health: null, bk: null, pick: null, picking: false};
+let disksTimer;
+const hoursText = h => h == null ? '—' : `${h.toLocaleString('uk-UA')} год` + (h >= 8760 ? ` ≈ ${(h / 8760).toFixed(1).replace('.', ',')} р.` : '');
+const agoText = t => { const s = Math.max(0, Math.round(Date.now() / 1000 - t)); return s < 90 ? 'щойно' : s < 3600 ? `${Math.round(s / 60)} хв тому` : s < 86400 ? `${Math.round(s / 3600)} год тому` : new Date(t * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'short'}); };
+const minsText = m => !m ? 'ніколи' : m < 60 ? `${m} хв` : `${m / 60} год`;
+
+// Висновок про диск звичайними словами: [рівень, текст]
+function diskVerdict(d) {
+  const s = d.smart || {};
+  if (s.state === 'none' || (!s.state && !s.at)) return ['dim', s.why ? `SMART недоступний: ${s.why}` : 'SMART ще не прочитано'];
+  const out = [];
+  if (s.passed === false) out.push(['red', 'SMART каже, що диск відмовляє. Скопіюй важливе якнайшвидше й заміни диск.']);
+  if (s.failing && s.failing.length) out.push(['red', `Показники нижче межі: ${s.failing.join(', ')}.`]);
+  if (s.pending > 0 || s.uncorrect > 0) out.push(['red', `${(s.pending || 0) + (s.uncorrect || 0)} нестабільних чи нечитабельних секторів — диск може втрачати дані. Зроби копію важливого.`]);
+  if (s.realloc > 0) out.push(['yel', `${s.realloc} перепризначених секторів: диск почав зношуватись. Поки працює, але стеж, чи число не росте.`]);
+  if (s.media_errors > 0) out.push(['red', `${s.media_errors} помилок носія — SSD може втрачати дані.`]);
+  if (s.life != null && s.life <= 10) out.push(['yel', `Ресурс SSD майже вичерпано (лишилось ${s.life}%).`]);
+  if (s.temp >= 55) out.push(['red', `Гарячий: ${s.temp} °C. Дай йому повітря або перестав з-під ноутбука.`]);
+  else if (s.temp >= 50) out.push(['yel', `Теплий: ${s.temp} °C — вище за комфортні для HDD 50 °C.`]);
+  if (s.crc > 0) out.push(['yel', `${s.crc} помилок передачі — зазвичай винен кабель чи USB-адаптер, а не сам диск.`]);
+  if (!out.length) return ['acc', s.state === 'standby' ? 'Здоровий, зараз спить.' : 'Диск здоровий.'];
+  return out.sort((a, b) => (a[0] === 'red' ? 0 : 1) - (b[0] === 'red' ? 0 : 1))[0].concat([out.slice(1).map(x => x[1])]);
+}
+
+function diskCard(d, choices) {
+  const s = d.smart || {}, [lvl, text, more] = diskVerdict(d);
+  const kind = (d.rot ? 'HDD' : d.loop ? 'файл-диск' : 'SSD') + (d.usb ? ' · USB' : d.system ? ' · внутрішній' : '');
+  const state = d.loop ? '' : s.state === 'standby' ? '<span class="okdot off"></span>спить' : s.state === 'active' ? '<span class="okdot"></span>працює' : '';
+  const t = s.temp;
+  const rows = [
+    ['робота', hoursText(s.hours)], ['увімкнень', s.cycles != null ? s.cycles.toLocaleString('uk-UA') : null],
+    ['перепризначені', s.realloc], ['нестабільні', s.pending], ['невиправні', s.uncorrect], ['помилки кабелю', s.crc],
+    ['ресурс', s.life != null ? `${s.life}%` : null], ['резерв', s.spare != null ? `${s.spare}%` : null], ['помилки носія', s.media_errors],
+  ].filter(r => r[1] != null && r[1] !== '—' || r[0] === 'робота' && s.hours != null);
+  const bad = k => ({перепризначені: s.realloc > 0, нестабільні: s.pending > 0, невиправні: s.uncorrect > 0, 'помилки кабелю': s.crc > 0, 'помилки носія': s.media_errors > 0})[k];
+  const usage = Object.entries(d.usage || {}).map(([n, u]) => u ? `<span>${esc(n)}</span>${segs((u.total - u.free) / u.total * 100, 30)}<span class="v">${size(u.total - u.free)} / ${size(u.total)}</span>` : '').join('');
+  return win(d.names.join(' · '), `
+    <p class="dk-sub">${esc(d.model || s.model || 'диск')}${d.size ? ' · ' + size(d.size) : ''} · ${kind}${state ? ` · ${state}` : ''}</p>
+    <div class="dk-top">
+      ${t != null ? `<div class="dk-temp" style="--c:var(--${t >= 55 ? 'red' : t >= 50 ? 'yel' : 'acc'})"><b>${t}°</b><small>${s.state === 'standby' ? 'до сну' : 'зараз'}</small></div>` : ''}
+      <div class="dk-verdict ${lvl}"><b>${esc(text)}</b>${(more || []).map(m => `<small>${esc(m)}</small>`).join('')}</div>
+    </div>
+    ${usage ? `<div class="meters" style="margin-top:14px">${usage}</div>` : ''}
+    ${rows.length ? `<dl class="kv dk-kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd class="${bad(k) ? 'bad' : ''}">${esc(v)}</dd>`).join('')}</dl>` : ''}
+    ${d.sleepable ? `<p class="note" style="margin-top:16px">засинати без роботи через</p>
+      <div class="seg dk-sleep" role="group" aria-label="Засинати без роботи">${choices.map(m => `<button data-sleep="${m}" data-dev="${esc(d.dev)}" class="${d.sleep === m ? 'on' : ''}">${minsText(m)}</button>`).join('')}</div>
+      <p class="note">${s.state === 'standby' ? 'Зараз спить — прокинеться сам, щойно щось знадобиться (кілька секунд розкрутки).' : d.idle != null ? `Без роботи ${d.idle < 60 ? 'менше хвилини' : Math.round(d.idle / 60) + ' хв'}.` : ''} Сон береже диск і тишу, але часте засинання–прокидання теж зношує — 20–30 хв зазвичай оптимально.</p>` : ''}
+    <div class="acts">${d.loop ? '' : `<button class="btn" data-smart="${esc(d.dev)}">Оновити SMART</button>`}
+      ${d.names.filter(n => n !== 'система').map(n => `<button class="btn ghost" data-fopen="${esc(n)}">Файли: ${esc(n)}</button>`).join('')}
+      <span class="sp"></span><span class="note" style="margin:0">${s.at ? 'перевірено ' + agoText(s.at) : ''}</span></div>`,
+    {c: lvl === 'red' ? 'red' : lvl === 'yel' ? 'yel' : 'acc', cls: 'dk', badge: lvl === 'red' ? 'увага' : ''});
+}
+
+function backupHTML() {
+  const b = DK.bk || {}, c = b.conf || {}, j = b.job || {}, last = c.last;
+  const disks = b.disks || [];
+  const same = f => c.target && (f === b.root + '/' + c.target || f.startsWith(b.root + '/' + c.target + '/'));
+  const folders = (c.folders || []).map(f => `<div class="row"><div class="l"><b>${esc(f)}</b>${same(f) ? '<small style="color:var(--yel)">на тому самому диску, що й копії — від поломки диска не врятує</small>' : ''}</div>
+    <div class="r"><button class="btn ghost" data-bkrm="${esc(f)}" aria-label="Прибрати ${esc(f)}">✕</button></div></div>`).join('');
+  const lastText = !last ? 'Копій ще не було.' : last.error ? `<span style="color:var(--red)">Остання спроба ${agoText(last.at)} не вдалася: ${esc(last.error)}</span>`
+    : `Остання копія ${agoText(last.at)} ${last.ok ? '<span style="color:var(--acc)">✓</span>' : `<span style="color:var(--yel)">з помилками (${last.errors})</span>`}: ${(last.files || 0).toLocaleString('uk-UA')} файлів, ${size(last.bytes)} — нового скопійовано ${size(last.copied)}${last.took != null ? `, ${last.took} с` : ''}.`;
+  const picker = DK.picking ? `<div class="dk-pick"><div class="crumbs">${esc(DK.pick && DK.pick.path || 'диски')}</div>
+      ${DK.pick && DK.pick.path ? `<div class="row"><div class="l"><b><a href="#" data-bkgo="${esc(DK.pick.up || '')}">..</a></b></div><div class="r">${DK.pick.up ? `<button class="btn primary" data-bkadd="${esc(DK.pick.path)}">Копіювати цю теку</button>` : ''}</div></div>` : ''}
+      ${(DK.pick && DK.pick.dirs || []).map(x => `<div class="row"><div class="l"><b><a href="#" data-bkgo="${esc(x.path)}">${esc(x.name)}/</a></b></div></div>`).join('') || '<p class="note">Тут порожньо.</p>'}
+      <div class="acts"><button class="btn ghost" id="bkPickClose">Готово</button></div></div>` : '';
+  return `<p class="lead" style="margin-bottom:12px">Щодня в заданий час: налаштування й бази Хати (прогрес у VidBox і манзі, «Будинок», Хата) і вибрані теки — на інший диск. Незмінене не копіюється вдруге, тож копій можна тримати багато.</p>
+    <div class="dk-form">
+      <div><label class="f" for="bkTarget">диск для копій</label>
+      <select id="bkTarget"><option value="">— не копіювати —</option>${disks.map(n => `<option value="${esc(n)}"${n === c.target ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></div>
+      <div><label class="f" for="bkTime">щодня о</label><input id="bkTime" type="time" value="${esc(c.time || '03:30')}"></div>
+      <div><label class="f" for="bkKeep">тримати копій</label><input id="bkKeep" type="number" min="1" max="90" value="${c.keep || 14}"></div>
+    </div>
+    ${b.free != null ? `<p class="note">На диску «${esc(c.target)}» вільно ${size(b.free)} з ${size(b.total)}.</p>` : ''}
+    <p class="note" style="margin-top:16px">що копіювати</p>
+    <div class="row"><div class="l"><b>Хата і VidBox</b><small>налаштування, бази, прогрес — завжди (без кешів кадрів і обкладинок)</small></div><div class="r"><span class="tag ok">завжди</span></div></div>
+    ${folders}
+    ${picker || `<div class="acts" style="margin-top:8px"><button class="btn" id="bkPick">Додати теку</button></div>`}
+    <p class="note" style="margin-top:16px">${j.running ? `<span class="spin"></span> Копіюю${j.step ? ': ' + esc(j.step) : ''}…` : lastText}</p>
+    <div class="acts"><button class="btn primary" id="bkRun"${!c.target || j.running ? ' disabled' : ''}>Зробити копію зараз</button></div>
+    ${(b.snapshots || []).length ? `<p class="note" style="margin-top:18px">копії на диску «${esc(c.target)}»</p><ol class="dk-snaps">${b.snapshots.map(s => `<li><button class="linkbtn" data-fpath="${esc(s.path)}">${esc(s.name)}</button>
+      <span>${s.files != null ? `${s.files.toLocaleString('uk-UA')} файлів · ${size(s.bytes)}` : ''}${s.errors ? ` · <span style="color:var(--yel)">помилок ${s.errors}</span>` : ''}</span></li>`).join('')}</ol>
+      <p class="note">Відновити: відкрий копію у «Файлах» і перенеси потрібне назад.</p>` : ''}`;
+}
+
+async function disksPage() {
+  stopPanel(); fromPanel = false;
+  if (!$('.top nav a[data-house]')) { bar.hidden = false; if (LAST) panelTop(LAST); }
+  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === '2'));
+  if (!$('#dkBody')) {
+    app.innerHTML = `<div class="wrap wide">${prompt('~/диски', 'smartctl -a /dev/sd*')}<div id="dkBody"><p class="note"><span class="spin"></span></p></div></div>`;
+    window.scrollTo(0, 0);
+  }
+  const [h, b] = await Promise.all([api('/api/disks/health'), api('/api/backup')]);
+  if (!$('#dkBody')) return;
+  DK.health = h; DK.bk = b;
+  drawDisks();
+  clearTimeout(disksTimer);
+  disksTimer = setTimeout(() => { if ($('#dkBody') && !typing() && !DK.picking) disksPage(); else if ($('#dkBody')) disksTimer = setTimeout(disksPage, 30000); },
+    (DK.bk.job || {}).running ? 3000 : 30000);
+}
+
+function drawDisks() {
+  const h = DK.health || {}, list = h.disks || [];
+  const cards = h.ok === false ? win('диски', `<p class="err">${esc(h.error)}</p>`, {c: 'red'}) : list.map(d => diskCard(d, h.choices || [0, 10, 20, 30, 60])).join('');
+  const html = `<div class="dk-grid">${cards}</div>
+    <div class="cols">${win('копії', backupHTML(), {c: 'vio', id: 'bk', cls: 'w2'})}
+      ${win('ще диск?', `<p class="note" style="margin-top:0">Новий диск у доці чи USB підключається тут — так само, як у майстрі.</p><div class="acts"><button class="btn" id="dkFind">Знайти диски</button></div>`, {c: 'dim'})}</div>`;
+  const box = $('#dkBody');
+  if (box.dataset.html === html) return;
+  box.innerHTML = html; box.dataset.html = html;
+  bindDisks();
+}
+
+function bindDisks() {
+  $$('[data-sleep]').forEach(btn => btn.onclick = async () => {
+    const r = await api('/api/disks/health', {op: 'sleep', dev: btn.dataset.dev, minutes: +btn.dataset.sleep});
+    toast(r.ok ? (+btn.dataset.sleep ? `Засинатиме через ${minsText(+btn.dataset.sleep)} без роботи` : 'Не засинатиме') : r.error);
+    disksPage();
+  });
+  $$('[data-smart]').forEach(btn => btn.onclick = async () => {
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Читаю…';
+    const r = await api('/api/disks/health', {op: 'refresh', dev: btn.dataset.smart}, 130000);
+    if (r.ok === false) toast(r.error);
+    disksPage();
+  });
+  $$('[data-fopen]').forEach(b => b.onclick = () => filesPage((DK.bk && DK.bk.root || '/srv/disks') + '/' + b.dataset.fopen));
+  $$('[data-fpath]').forEach(b => b.onclick = () => filesPage(b.dataset.fpath));
+  $('#dkFind').onclick = () => openFromPanel(2);
+  const save = async d => { const r = await api('/api/backup', {op: 'save', ...d}); if (r.ok === false) toast(r.error); await disksPage(); return r; };
+  $('#bkTarget').onchange = e => save({target: e.target.value}).then(r => r.ok && toast(e.target.value ? `Копії йтимуть на «${e.target.value}»` : 'Копії вимкнено'));
+  $('#bkTime').onchange = e => save({time: e.target.value}).then(r => r.ok && toast(`Щодня о ${e.target.value}`));
+  $('#bkKeep').onchange = e => save({keep: +e.target.value});
+  $$('[data-bkrm]').forEach(b => b.onclick = () => save({folders: DK.bk.conf.folders.filter(f => f !== b.dataset.bkrm)}));
+  const browse = async p => { DK.pick = await api('/api/dirs' + (p ? '?path=' + encodeURIComponent(p) : '')); DK.picking = true; drawDisks(); };
+  if ($('#bkPick')) $('#bkPick').onclick = () => browse(DK.bk.root);
+  $$('[data-bkgo]').forEach(a => a.onclick = e => { e.preventDefault(); browse(a.dataset.bkgo); });
+  $$('[data-bkadd]').forEach(b => b.onclick = () => { DK.picking = false; save({folders: (DK.bk.conf.folders || []).concat(b.dataset.bkadd)}); });
+  if ($('#bkPickClose')) $('#bkPickClose').onclick = () => { DK.picking = false; drawDisks(); };
+  $('#bkRun').onclick = async () => {
+    const r = await api('/api/backup', {op: 'run'});
+    toast(r.ok ? 'Копіюю у фоні' : r.error);
+    disksPage();
+  };
 }
 
 // ───────────────────────── будинок (заміри від ESP) ─────────────────────────

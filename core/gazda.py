@@ -522,13 +522,199 @@ def wifi_link(iface):
     return {'ssid': iw_text(ssid.group(1)) if ssid else None, 'signal': int(sig.group(1)) if sig else None}
 
 
+# ───────────────────────── здоров'я дисків (SMART), сон ─────────────────────────
+# smartctl читаємо з -n standby: якщо диск спить, не будимо (лише кнопка «Оновити» будить).
+# Сон: якщо на диску N хвилин не було читань/записів — кажемо йому заснути (smartctl -s standby,now).
+
+SMART = {}        # пристрій → останнє прочитане (з часом)
+DISK_IO = {}      # sda → [ознака активності, з якого часу без змін, чи вже приспали]
+SMART_EVERY = 300
+SLEEP_CHOICES = (0, 10, 20, 30, 60, 120)
+
+
+def lsblk_tree():
+    r = run(['lsblk', '-J', '-b', '-o', 'NAME,PATH,TYPE,TRAN,MODEL,SERIAL,SIZE,ROTA,MOUNTPOINT,FSTYPE'], 20)
+    try:
+        return json.loads(r.stdout or '{}').get('blockdevices', [])
+    except ValueError:
+        return []
+
+
+def phys_disks():
+    """Фізичні диски Хати: системний і ті, що підключені в /srv/disks (з усіма їхніми розділами)."""
+    out = []
+    for d in lsblk_tree():
+        mounts = []
+
+        def walk(n):
+            if n.get('mountpoint'):
+                mounts.append(n['mountpoint'])
+            for c in n.get('children') or []:
+                walk(c)
+        walk(d)
+        system = any(m in ('/', '/boot', '/boot/efi') for m in mounts)
+        ours = [os.path.basename(m) for m in mounts if m.startswith(DISKS + '/')]
+        if not system and not ours:
+            continue
+        out.append({'dev': d.get('path'), 'kname': d.get('name'), 'names': (['система'] if system else []) + ours,
+                    'model': (d.get('model') or '').strip(), 'serial': (d.get('serial') or '').strip(),
+                    'size': int(d.get('size') or 0), 'rot': str(d.get('rota')) in ('1', 'True', 'true'),
+                    'usb': d.get('tran') == 'usb', 'system': system, 'loop': d.get('type') == 'loop'})
+    return out
+
+
+ATTR = {5: 'realloc', 9: 'hours', 12: 'cycles', 187: 'uncorrect_rep', 188: 'timeout', 194: 'temp', 190: 'temp_air',
+        196: 'realloc_ev', 197: 'pending', 198: 'uncorrect', 199: 'crc', 177: 'wear_level', 231: 'life_left', 233: 'media_wear'}
+
+
+def parse_smart(j):
+    s = {'state': 'active', 'model': j.get('model_name') or j.get('model_family') or '', 'serial': j.get('serial_number') or '',
+         'firmware': j.get('firmware_version') or '', 'rpm': j.get('rotation_rate'),
+         'passed': (j.get('smart_status') or {}).get('passed'), 'temp': (j.get('temperature') or {}).get('current'),
+         'hours': (j.get('power_on_time') or {}).get('hours'), 'cycles': j.get('power_cycle_count')}
+    for a in (j.get('ata_smart_attributes') or {}).get('table') or []:
+        k = ATTR.get(a.get('id'))
+        if not k:
+            continue
+        raw = (a.get('raw') or {}).get('value')
+        if k in ('temp', 'temp_air'):
+            raw = raw & 0xFF if isinstance(raw, int) else raw     # у старших байтах — мін/макс
+            if s['temp'] is None:
+                s['temp'] = raw
+            continue
+        if k in ('wear_level', 'life_left', 'media_wear'):
+            s['life'] = a.get('value')                # нормалізоване 100 → 0
+            continue
+        s[k] = raw
+        if a.get('when_failed'):
+            s.setdefault('failing', []).append(a.get('name'))
+    nv = j.get('nvme_smart_health_information_log')
+    if nv:
+        s.update(temp=s['temp'] if s['temp'] is not None else nv.get('temperature'), hours=nv.get('power_on_hours', s['hours']),
+                 cycles=nv.get('power_cycles', s['cycles']), life=100 - int(nv.get('percentage_used') or 0),
+                 media_errors=nv.get('media_errors'), spare=nv.get('available_spare'), critical=nv.get('critical_warning'))
+    return s
+
+
+def smart_read(dev, wake=False):
+    """Прочитати SMART. Повертає словник зі state: active | standby | none (недоступно) і причиною."""
+    msgs = ''
+    for extra in ([], ['-d', 'sat']):
+        cmd = ['smartctl', '-j', '-a'] + ([] if wake else ['-n', 'standby']) + extra + [dev]
+        try:
+            r = run(cmd, 60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return {'state': 'none', 'why': 'smartctl не запустився: %s' % e}
+        try:
+            j = json.loads(r.stdout or '{}')
+        except ValueError:
+            j = {}
+        sc = j.get('smartctl') or {}
+        ex = sc.get('exit_status', r.returncode)
+        msgs = ' '.join(m.get('string', '') for m in sc.get('messages') or []).strip()
+        if re.search(r'STANDBY|SLEEP', msgs, re.I):
+            return {'state': 'standby'}
+        if ex & 3 and not (j.get('smart_status') or j.get('ata_smart_attributes') or j.get('nvme_smart_health_information_log')):
+            continue                     # не відкрився або не той тип — пробуємо як SAT (USB-адаптери)
+        s = parse_smart(j)
+        if s['passed'] is None and s['temp'] is None and s['hours'] is None:
+            return {'state': 'none', 'why': msgs or 'SMART вимкнено або не підтримується', 'model': s['model']}
+        return s
+    return {'state': 'none', 'why': msgs or 'SMART недоступний (адаптер не передає дані диска)'}
+
+
+def disk_io(kname):
+    for line in read('/proc/diskstats').splitlines():
+        p = line.split()
+        if len(p) > 9 and p[2] == kname:
+            return (p[5], p[9])          # прочитано й записано секторів
+    return None
+
+
+def sleep_key(d):
+    return d['serial'] or d['dev']
+
+
+def disk_care(now):
+    """Раз на 20 с з keeper: SMART раз на 5 хв (не будячи), приспати бездіяльні HDD."""
+    sleep = load_state().get('sleep') or {}
+    for d in phys_disks():
+        dev, kname = d['dev'], d['kname']
+        io = disk_io(kname)
+        st = DISK_IO.setdefault(kname, [io, now, False])
+        if io != st[0]:
+            DISK_IO[kname] = st = [io, now, False]
+            if (SMART.get(dev) or {}).get('state') == 'standby':
+                SMART[dev]['state'] = 'active'
+        cache = SMART.get(dev) or {}
+        if not d['loop'] and now - cache.get('at', 0) > SMART_EVERY:
+            got = smart_read(dev)
+            if got.get('state') == 'standby' and cache.get('state') not in (None, 'none'):
+                cache = dict(cache, state='standby', at=now)        # спить — лишаємо останні значення
+            else:
+                cache = dict(got, at=now)
+            SMART[dev] = cache
+        mins = int(sleep.get(sleep_key(d)) or 0)
+        if mins and d['rot'] and not d['system'] and not st[2] and now - st[1] >= mins * 60:
+            r = run(['smartctl', '-s', 'standby,now', dev], 30)
+            if r.returncode & 3:
+                r = run(['smartctl', '-d', 'sat', '-s', 'standby,now', dev], 30)
+            st[2] = True
+            if not r.returncode & 3:
+                SMART.setdefault(dev, {})['state'] = 'standby'
+                print('gazda: диск %s заснув після %d хв без роботи' % ('/'.join(d['names']), mins), flush=True)
+
+
+def do_disk_health(a):
+    op = a.get('op') or 'status'
+    disks = {d['dev']: d for d in phys_disks()}
+    if op == 'refresh':                  # кнопка «Оновити»: читаємо зараз, навіть якщо диск спить
+        dev = a.get('dev')
+        if dev not in disks:
+            raise Fail('Диск не знайдено')
+        if disks[dev]['loop']:
+            raise Fail('Це не фізичний диск — SMART тут немає')
+        SMART[dev] = dict(smart_read(dev, wake=True), at=time.time())
+        DISK_IO[disks[dev]['kname']] = [disk_io(disks[dev]['kname']), time.time(), False]
+    elif op == 'sleep':
+        dev, mins = a.get('dev'), a.get('minutes')
+        if dev not in disks:
+            raise Fail('Диск не знайдено')
+        if mins not in SLEEP_CHOICES:
+            raise Fail('Невідомий час')
+        if disks[dev]['system'] or not disks[dev]['rot']:
+            raise Fail('Засинання — лише для жорстких дисків з даними')
+        with LOCK:
+            st = load_state()
+            st.setdefault('sleep', {})[sleep_key(disks[dev])] = mins
+            save_state(st)
+        if disks[dev]['kname'] in DISK_IO:
+            DISK_IO[disks[dev]['kname']][2] = False
+    elif op != 'status':
+        raise Fail('Невідома дія')
+    sleep = load_state().get('sleep') or {}
+    now = time.time()
+    out = []
+    for d in disks.values():
+        io = DISK_IO.get(d['kname'])
+        sm = dict(SMART.get(d['dev']) or {})
+        if d['loop']:
+            sm = {'state': 'none', 'why': 'віртуальний диск (файл) — SMART немає'}
+        out.append(dict(d, smart=sm, sleep=int(sleep.get(sleep_key(d)) or 0),
+                        idle=int(now - io[1]) if io else None, sleepable=d['rot'] and not d['system'] and not d['loop'],
+                        usage={n: usage(os.path.join(DISKS, n)) for n in d['names'] if n != 'система'}))
+    out.sort(key=lambda d: (not d['system'], d['names']))
+    return {'disks': out, 'choices': list(SLEEP_CHOICES)}
+
+
 KEEPER_SAID = {}
 
 
 def keeper():
     """Фонова турбота, раз на 20 с:
     - диск з fstab з'явився пізніше за завантаження (USB, док без живлення) — підмонтувати;
-    - енергозбереження Wi-Fi знову ввімкнулось (після перепідключення) — вимкнути: серверу воно лише ріже швидкість."""
+    - енергозбереження Wi-Fi знову ввімкнулось (після перепідключення) — вимкнути: серверу воно лише ріже швидкість;
+    - SMART дисків раз на 5 хв (не будячи сплячих) і сон бездіяльних HDD."""
     while True:
         try:
             for line in read(FSTAB).splitlines():
@@ -542,6 +728,8 @@ def keeper():
                     if KEEPER_SAID.get(point) != msg:      # не засмічуємо журнал однаковою помилкою щоразу
                         print('gazda: підмонтував' if r.returncode == 0 else 'gazda: не підмонтував', point, msg, flush=True)
                         KEEPER_SAID[point] = msg
+            if shutil.which('smartctl'):
+                disk_care(time.time())
             iface = wifi_iface()
             if iface and shutil.which('iw') and 'on' in run(['iw', 'dev', iface, 'get', 'power_save'], 10).stdout:
                 run(['iw', 'dev', iface, 'set', 'power_save', 'off'], 10)
@@ -832,6 +1020,7 @@ ACTIONS = {
     'timezone': do_timezone,
     'static_ip': do_static_ip,
     'share': do_share,
+    'disk_health': do_disk_health,
 }
 
 

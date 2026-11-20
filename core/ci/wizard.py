@@ -107,6 +107,22 @@ with sync_playwright() as p:
     ev = pg.evaluate("async () => (await fetch('/api/house/events?range=24h')).json()")
     assert ev['gaps'] and ev['gaps'][0]['kind'] == 'power', ev
     pg.keyboard.press('8'); pg.wait_for_selector('#hchart svg'); pg.wait_for_timeout(500); shot('house')
+    # Диски й копії: SMART на тестовому диску (файл) недоступний, але сторінка відкривається; копія на той самий диск робиться
+    hh = pg.evaluate("async () => (await fetch('/api/disks/health')).json()")
+    print('disk health:', [(d['names'], d['smart'].get('state')) for d in hh.get('disks', [])])
+    assert hh.get('ok') and any('media' in d['names'] for d in hh['disks']), hh
+    bk = pg.evaluate("""async () => (await fetch('/api/backup', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                       body: JSON.stringify({op: 'save', target: 'media', folders: ['/srv/disks/media/IMG.Manga'], time: '03:30', keep: 3})})).json()""")
+    assert bk.get('ok'), bk
+    assert pg.evaluate("async () => (await fetch('/api/backup', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{\"op\": \"run\"}'})).json()")['ok']
+    for i in range(60):
+        st = pg.evaluate("async () => (await fetch('/api/backup')).json()")
+        if not st['job'].get('running') and (st['conf'].get('last') or {}).get('at'):
+            break
+        time.sleep(1)
+    print('backup:', st['conf'].get('last'), [s['name'] for s in st['snapshots']])
+    assert st['conf']['last'].get('error') is None and st['snapshots'] and st['conf']['last']['files'] > 5, st['conf']['last']
+    pg.keyboard.press('2'); pg.wait_for_selector('#bk'); pg.wait_for_timeout(500); shot('disks')
     pg.keyboard.press('1'); pg.wait_for_selector('#sys')
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="папір"]'); shot('panel-paper')
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="чай"]')
