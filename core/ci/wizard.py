@@ -47,6 +47,12 @@ with sync_playwright() as p:
     for i, d in enumerate(['/srv/disks/media/Фільми/Тестовий фільм.mp4', '/srv/disks/media/Аніме/Cowboy Bebop/Cowboy Bebop - 01.mp4',
                            '/srv/disks/media/Аніме/Cowboy Bebop/Cowboy Bebop - 02.mp4']):
         sh(f'sudo ffmpeg -nostdin -v error -y -f lavfi -i "testsrc2=s=640x360:r=25,noise=alls=20:allf=t" -t 6 -pix_fmt yuv420p "{d}"')
+    # манга: тайтл з розділами-теками (webp) і тайтл-архів
+    for ch in (1, 2):
+        sh(f'sudo mkdir -p "/srv/disks/media/IMG.Manga/Тест/Chapter {ch:03d}"')
+        for pgn in (1, 2, 3):
+            sh(f'sudo ffmpeg -nostdin -v error -y -f lavfi -i "testsrc2=s=600x900" -frames:v 1 "/srv/disks/media/IMG.Manga/Тест/Chapter {ch:03d}/{pgn}.webp"')
+    sh('cd "/srv/disks/media/IMG.Manga/Тест/Chapter 001" && sudo python3 -c "import zipfile,glob; z=zipfile.ZipFile(\'/srv/disks/media/IMG.Manga/Архів.zip\',\'w\'); [z.write(f) for f in glob.glob(\'*.webp\')]"')
 
     pg.click('#next'); pg.wait_for_selector('[data-go]')
     def into(name, path):    # кнопки «Тут відео/аніме» є на кожному рівні — чекаємо, поки справді відкрилась потрібна тека
@@ -110,6 +116,30 @@ print('VidBox library:', [v['file'] for v in lib['videos']])
 print('VidBox anime:', [(t['title'], t['n']) for t in anime['titles']])
 assert [v['file'] for v in lib['videos']] == ['Тестовий фільм.mp4'], 'бібліотека VidBox неправильна'
 assert anime['titles'] and anime['titles'][0]['n'] == 2, 'аніме не підхопилось'
+# манга: папку пропонує сам (IMG.Manga), додаємо її, читаємо сторінку й зберігаємо прогрес
+st = get('http://localhost:8800/api/settings', cookie=ck)
+print('VidBox manga suggest:', st.get('mangaSuggest'))
+assert '/srv/disks/media/IMG.Manga' in st.get('mangaSuggest', []), 'теку з мангою не запропоновано'
+assert get('http://localhost:8800/api/settings', {'manga_folder': '/srv/disks/media/IMG.Manga'}, cookie=ck)['ok']
+for i in range(20):
+    manga = get('http://localhost:8800/api/manga', cookie=ck)
+    if len(manga['titles']) == 2:
+        break
+    time.sleep(1)
+print('VidBox manga:', [(t['title'], t['n'], t['pages']) for t in manga['titles']])
+assert sorted((t['title'], t['n'], t['pages']) for t in manga['titles']) == [('Архів', 1, 3), ('Тест', 2, 6)], 'манга не підхопилась'
+t = next(x for x in manga['titles'] if x['title'] == 'Тест')
+mt = get('http://localhost:8800/api/manga/t/' + t['tid'], cookie=ck)
+cid = mt['chapters'][1]['cid']
+req = urllib.request.Request('http://localhost:8800/manga/page/%s/2' % cid, headers={'Cookie': ck})
+with urllib.request.urlopen(req, timeout=10) as r:
+    assert r.headers['Content-Type'] == 'image/webp' and r.read(4) == b'RIFF', 'сторінка манги не віддається'
+req = urllib.request.Request('http://localhost:8800/manga/cover/' + t['tid'], headers={'Cookie': ck})
+with urllib.request.urlopen(req, timeout=60) as r:
+    assert r.status == 200 and r.read(2) == b'\xff\xd8', 'обкладинка з першої сторінки не зробилась'
+assert get('http://localhost:8800/api/manga/progress', {'cid': cid, 'page': 2}, cookie=ck)['ok']
+t = next(x for x in get('http://localhost:8800/api/manga', cookie=ck)['titles'] if x['title'] == 'Тест')
+assert t['cont'] and t['cont']['cid'] == cid and t['cont']['page'] == 2, t
 assert not errs, errs
 open(f'{OUT}/OK', 'w').write('ok\n')
 print('OK')

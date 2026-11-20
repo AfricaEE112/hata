@@ -190,10 +190,10 @@ document.addEventListener('keydown', e => {
   const t = e.target;
   if (t.closest && t.closest('input, textarea, select, [contenteditable]')) { if (e.key === 'Escape' && t.id === 'q') t.blur(); return; }
   if (sheetId || !picker.hidden) return;
-  const onPlayer = (baseHash || '').startsWith('/v/');
+  const onPlayer = /^\/(v|r)\//.test(baseHash || '');
   if (e.key === '/' || e.code === 'Slash') { e.preventDefault(); $('#q').focus(); return; }
   if (onPlayer) return;
-  if (/^Digit[1-6]$/.test(e.code)) { e.preventDefault(); go(['#/', '#/lib', '#/anime', '#/pl', '#/top', '#/settings'][+e.code.slice(5) - 1]); }
+  if (/^Digit[1-7]$/.test(e.code)) { e.preventDefault(); go(['#/', '#/lib', '#/anime', '#/manga', '#/pl', '#/top', '#/settings'][+e.code.slice(5) - 1]); }
   else if (e.code === 'KeyR') { e.preventDefault(); randomVideo(false); }
 });
 
@@ -388,7 +388,7 @@ async function renderBase(h, keep) {
   baseHash = h;
   const parts = h.split('/').filter(Boolean);
   if (parts[0] !== 'v') listBase = h;
-  const tab = parts[0] === 'v' ? '' : (parts[0] || 'home');
+  const tab = parts[0] === 'v' ? '' : parts[0] === 'r' ? 'manga' : (parts[0] || 'home');
   $$('[data-tab]').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   shelfN = 0;
   try {
@@ -396,6 +396,8 @@ async function renderBase(h, keep) {
     else if (parts[0] === 'lib') await renderLib();
     else if (parts[0] === 'top') await renderTop();
     else if (parts[0] === 'anime') await (parts[1] ? renderAnimeTitle(parts[1]) : renderAnime());
+    else if (parts[0] === 'manga') await (parts[1] ? renderMangaTitle(parts[1]) : renderManga());
+    else if (parts[0] === 'r') await renderReader(parts[1], parts[2] != null ? +parts[2] : null);
     else if (parts[0] === 'pl') await (parts[1] ? renderPlaylist(parts[1]) : renderPlaylists());
     else if (parts[0] === 'settings') await renderSettings();
     else await renderHome();
@@ -784,6 +786,15 @@ async function renderSettings() {
       <button class="btn" id="animeBrowse">${I.folder}Огляд</button><button class="btn primary" id="animeset">${I.plus}Додати</button></div>`}
     <p class="warn" id="aerr" hidden></p>
   </div></section>
+  <section class="set win">${winBar('~/.config/vidbox/манга')}<div class="win-body"><h2>Манга</h2>
+    <p class="note" style="margin-top:0">Читалка з обкладинками: кожна підпапка або архів .zip/.cbz — тайтл, картинки — сторінки, підпапки й архіви всередині — розділи. Обкладинки й описи — з AniList, а якщо там немає — з MangaUpdates.</p>
+    ${st.manga_folder ? `<div class="flist"><div class="frow">${I.folder}<div><b>${esc(st.manga_folder)}</b><small>${st.mangaExists ? `${st.mangaTitles} ${plural(st.mangaTitles, 'тайтл', 'тайтли', 'тайтлів')} · ${st.mangaChapters} ${plural(st.mangaChapters, 'розділ', 'розділи', 'розділів')}` : 'Папку не знайдено. Можливо, диск від’єднано.'}</small></div>` +
+      `<button class="btn ghost icon" id="mangaRe" title="Переглянути папку заново" aria-label="Переглянути папку з мангою заново">${I.refresh}</button><button class="btn ghost icon" id="mangaoff" title="Прибрати папку з мангою" aria-label="Прибрати папку з мангою">${I.trash}</button></div></div>`
+    : `${(st.mangaSuggest || []).length ? `<div class="msug"><span>Знайшов:</span>${st.mangaSuggest.map(p => `<button class="btn" data-msug="${esc(p)}">${I.plus}${esc(p)}</button>`).join('')}</div>` : ''}
+      <div class="fadd"><input id="mangaf" type="text" placeholder="Шлях до папки з мангою, наприклад /srv/disks/disk/IMG.Manga" aria-label="Шлях до папки з мангою">
+      <button class="btn" id="mangaBrowse">${I.folder}Огляд</button><button class="btn primary" id="mangaset">${I.plus}Додати</button></div>`}
+    <p class="warn" id="merr" hidden></p>
+  </div></section>
   <section class="set win">${winBar('~/.config/vidbox/перегляд')}<div class="win-body"><h2>Перегляд</h2>
     ${row('Продовжувати з місця, де зупинився', 'Якщо вимкнути, відео щоразу починається спочатку.', sw('resume', st.resume))}
     ${row('Вмикати наступне відео', 'Коли відео закінчилось, вмикається наступне з тієї ж папки.', sw('autoplay_next', st.autoplay_next))}
@@ -835,6 +846,21 @@ async function renderSettings() {
   if ($('#animeBrowse')) $('#animeBrowse').onclick = () => openPicker('', path => { $('#animef').value = path; });
   if ($('#animeoff')) $('#animeoff').onclick = () => { if (confirm('Прибрати папку з аніме? Розділ «Аніме» зникне, файли на диску лишаться.')) setAnime(''); };
 
+  const setManga = async a => {
+    const r = await api('/api/settings', {method: 'POST', body: JSON.stringify({manga_folder: a})});
+    const e = $('#merr');
+    if (!r.ok) { e.textContent = r.error || 'Не вдалося зберегти'; e.hidden = false; return; }
+    e.hidden = true;
+    toast(a ? 'Папку з мангою додано, переглядаю…' : 'Розділ манги вимкнено. Самі файли не видаляються');
+    setTimeout(() => { if (baseHash === '/settings') renderBase('/settings', true); }, 1500);
+  };
+  const addManga = () => { const v = $('#mangaf').value.trim(); if (!v) { $('#mangaf').focus(); return toast('Введи шлях або натисни «Огляд»'); } setManga(v); };
+  if ($('#mangaset')) $('#mangaset').onclick = addManga;
+  if ($('#mangaf')) $('#mangaf').onkeydown = e => { if (e.key === 'Enter') addManga(); };
+  if ($('#mangaBrowse')) $('#mangaBrowse').onclick = () => openPicker('', path => { $('#mangaf').value = path; });
+  $$('[data-msug]').forEach(b => b.onclick = () => setManga(b.dataset.msug));
+  if ($('#mangaoff')) $('#mangaoff').onclick = () => { if (confirm('Прибрати папку з мангою? Розділ «Манга» стане порожнім, файли на диску лишаться, прогрес читання збережеться.')) setManga(''); };
+  if ($('#mangaRe')) $('#mangaRe').onclick = async () => { const r = await api('/api/manga/rescan', {method: 'POST', body: '{}'}); toast(`Знайдено ${r.titles} ${plural(r.titles, 'тайтл', 'тайтли', 'тайтлів')}`); renderBase('/settings', true); };
   $$('[data-theme-pick]').forEach(b => b.onclick = () => {
     applyTheme(b.dataset.themePick);
     $$('[data-theme-pick]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
@@ -1046,6 +1072,352 @@ async function renderAnimeTitle(sid) {
     }).join('')}</ol>`;
   $('#aplay').onclick = () => playAnime(t, startId);
   $$('[data-ep]').forEach(b => b.onclick = () => playAnime(t, b.dataset.ep));
+}
+
+// ── манга ──
+// Бібліотека з обкладинками, сторінка тайтлу з розділами й читалка: справа наліво (як у японській манзі),
+// зліва направо, стрічкою або розворотом. Прогрес зберігається на сервері, тож продовжити можна з будь-якого пристрою.
+const MG = {filter: LS.get('mfilter', 'all'), sort: LS.get('msort', 'name')};
+const MG_MODES = [['rtl', '← По сторінці', 'Справа наліво, як у японській манзі'], ['ltr', 'По сторінці →', 'Зліва направо'],
+  ['strip', 'Стрічка', 'Усі сторінки вниз одна за одною'], ['spread', 'Розворот', 'Дві сторінки поруч, справа наліво']];
+const MG_STATUS = {FINISHED: 'завершена', RELEASING: 'виходить', NOT_YET_RELEASED: 'анонс', CANCELLED: 'скасована', HIATUS: 'на паузі'};
+const MG_FMT = {MANGA: 'манга', ONE_SHOT: 'ваншот', NOVEL: 'ранобе', Manga: 'манга', Manhwa: 'манхва', Manhua: 'маньхуа', Doujinshi: 'доджінші'};
+const mgState = t => t.read >= t.n ? 'done' : (t.lastAt ? 'reading' : 'none');
+const chPos = c => c.label + (c.pages > 1 ? ` · стор. ${c.page} / ${c.pages}` : '');
+function mgProgress(t) {
+  if (t.single) return t.cont ? t.cont.page / t.cont.pages : (t.read ? 1 : 0);
+  return Math.min(1, (t.read + (t.cont && t.cont.pages ? (t.cont.page - 1) / t.cont.pages : 0)) / t.n);
+}
+function mgSub(t) {
+  if (t.read >= t.n) return t.single ? `${t.pages} стор. · прочитано` : `${t.n} ${plural(t.n, 'розділ', 'розділи', 'розділів')} · прочитано`;
+  if (t.single) return t.cont ? `стор. ${t.cont.page} / ${t.pages}` : `${t.pages} ${plural(t.pages, 'сторінка', 'сторінки', 'сторінок')}`;
+  return t.lastAt ? `гл. ${t.read} / ${t.n}` : `${t.n} ${plural(t.n, 'розділ', 'розділи', 'розділів')}`;
+}
+const mangaCard = t => {
+  const p = mgProgress(t), st = mgState(t);
+  const badge = t.new ? `<span class="aep">+${t.new} ${plural(t.new, 'нова', 'нові', 'нових')}</span>` : st === 'done' ? '<span class="aep done">✓ прочитано</span>' : '';
+  return `<a class="acard" href="#/manga/${t.tid}"><div class="poster"><img loading="lazy" decoding="async" src="${t.cover}" alt="" onerror="this.remove()"><span class="ph">${esc((t.title.trim()[0] || '?').toUpperCase())}</span>
+    ${badge}${p > 0 && st !== 'done' ? `<span class="pbar"><i style="width:${(p * 100).toFixed(1)}%"></i></span>` : ''}</div>
+    <b>${esc(t.title)}</b><small>${t.meta && t.meta.year ? t.meta.year + ' · ' : ''}${mgSub(t)}</small></a>`;
+};
+const mgRead = (cid, page) => `#/r/${cid}${page > 1 ? '/' + page : ''}`;
+function contCard(t) {
+  const c = t.cont, p = c.pages ? (c.page - 1) / c.pages : 0;
+  return `<a class="mcont" href="${mgRead(c.cid, c.page)}"><span class="poster"><img loading="lazy" decoding="async" src="${t.cover}" alt="" onerror="this.remove()"><span class="ph">${esc((t.title.trim()[0] || '?').toUpperCase())}</span></span>
+    <span class="mc-t"><b>${esc(t.title)}</b><small>${esc(t.single ? `стор. ${c.page} / ${c.pages}` : `${c.label} · стор. ${c.page} / ${c.pages}`)}</small>
+    <span class="mc-bar"><i style="width:${(p * 100).toFixed(1)}%"></i></span><em>${esc(ago(t.lastAt))}</em></span></a>`;
+}
+const MG_FILTERS = [['all', 'Усі'], ['reading', 'Читаю'], ['new', 'Нові розділи'], ['done', 'Прочитано'], ['none', 'Не почато']];
+const MG_SORTS = {name: ['за назвою', byName], last: ['нещодавно читані', (a, b) => b.lastAt - a.lastAt || byName(a, b)],
+  added: ['нещодавно додані', (a, b) => b.added - a.added || byName(a, b)], size: ['найдовші', (a, b) => b.pages - a.pages || byName(a, b)]};
+async function renderManga() {
+  const d = await api('/api/manga');
+  const head = `${promptLine('~/манга', 'ls')}<div class="page-head"><h1 class="title">Манга</h1>${d.titles.length ? `<span class="count">${d.titles.length}</span>` : ''}</div>`;
+  if (!d.folder || d.missing) {
+    app.innerHTML = head + `<div class="empty"><p>${d.missing ? `Папку <code>${esc(d.folder)}</code> не знайдено. Можливо, диск від’єднано.` : 'Вкажи папку з мангою в налаштуваннях. Кожна підпапка або архів .zip/.cbz у ній стане тайтлом, а картинки — сторінками.'}</p><br><a class="btn primary" href="#/settings">Відкрити налаштування</a></div>`;
+    return;
+  }
+  if (!d.titles.length) {
+    app.innerHTML = head + `<div class="empty"><p>${d.scanning ? 'Переглядаю папку…' : `У папці <code>${esc(d.folder)}</code> поки немає манги. Поклади кожен тайтл в окрему підпапку з картинками.`}</p></div>`;
+    if (d.scanning) setTimeout(() => { if (baseHash === '/manga') renderBase('/manga', true); }, 2500);
+    return;
+  }
+  const cont = d.titles.filter(t => t.cont && t.lastAt).sort((a, b) => b.lastAt - a.lastAt).slice(0, 6);
+  app.innerHTML = head + `<p class="lead mstat">${d.titles.length} ${plural(d.titles.length, 'тайтл', 'тайтли', 'тайтлів')} · ${d.chapters} ${plural(d.chapters, 'розділ', 'розділи', 'розділів')} · <code>${esc(d.folder)}</code></p>` +
+    (cont.length ? `<section class="ashelf"><h2>Продовжити читати</h2><div class="mconts">${cont.map(contCard).join('')}</div></section>` : '') +
+    `<section class="ashelf"><div class="mtools"><div class="chips" role="group" aria-label="Фільтр">${MG_FILTERS.map(([k, l]) =>
+      `<button class="chip${MG.filter === k ? ' on' : ''}" data-mf="${k}" aria-pressed="${MG.filter === k}">${l}<span class="n"></span></button>`).join('')}</div>
+      <label class="sel"><span class="sr">Сортування</span><select id="msort">${Object.entries(MG_SORTS).map(([k, [l]]) => `<option value="${k}"${MG.sort === k ? ' selected' : ''}>${l}</option>`).join('')}</select>${I.chev}</label></div>
+      <div class="agrid" id="mgrid"></div></section>`;
+  const draw = () => {
+    const pass = t => MG.filter === 'all' || (MG.filter === 'new' ? t.new > 0 : mgState(t) === MG.filter);
+    $$('[data-mf]').forEach(b => { const k = b.dataset.mf; $('.n', b).textContent = k === 'all' ? '' : ' ' + d.titles.filter(t => k === 'new' ? t.new > 0 : mgState(t) === k).length; });
+    const list = d.titles.filter(pass).sort(MG_SORTS[MG.sort][1]);
+    $('#mgrid').innerHTML = list.length ? list.map(mangaCard).join('') : `<p class="note">Тут поки порожньо.</p>`;
+  };
+  draw();
+  $$('[data-mf]').forEach(b => b.onclick = () => {
+    MG.filter = b.dataset.mf; LS.set('mfilter', MG.filter);
+    $$('[data-mf]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+    draw();
+  });
+  $('#msort').onchange = e => { MG.sort = e.target.value; LS.set('msort', MG.sort); draw(); };
+}
+function mangaMeta(t) {
+  const m = t.meta;
+  if (!m) return '';
+  const alt = [m.english, m.romaji, m.native, ...(m.alt || [])].filter((x, i, a) => x && x !== t.title && a.indexOf(x) === i).slice(0, 3);
+  const row = [m.year, MG_FMT[m.format] || m.format, m.chapters ? `${m.chapters} ${plural(m.chapters, 'розділ', 'розділи', 'розділів')}` : m.volumes ? `${m.volumes} т.` : '',
+    MG_STATUS[m.status] || m.status, m.score ? `★ ${(m.score / 10).toFixed(1).replace('.', ',')}` : ''].filter(Boolean).map(x => `<span class="tag">${esc(x)}</span>`).join('');
+  return (alt.length ? `<p class="aalt">${alt.map(esc).join(' · ')}</p>` : '') +
+    `<div class="ameta">${row}${(m.genres || []).map(g => `<span class="tag ghost">${esc(g)}</span>`).join('')}</div>`;
+}
+async function setMangaMode(tid, mode) {
+  await api('/api/manga/mode', {method: 'POST', body: JSON.stringify({tid, mode})}).catch(() => null);
+}
+async function renderMangaTitle(tid) {
+  const t = await api('/api/manga/t/' + tid).catch(() => null);
+  if (!t || !t.chapters) { app.innerHTML = `<div class="empty"><h1 class="title">Тайтл не знайдено</h1><br><a class="btn" href="#/manga">До манги</a></div>`; return; }
+  const c = t.cont, first = t.chapters[0];
+  const label = c ? (t.single ? `Продовжити <em>стор. ${c.page}</em>` : `Продовжити <em>${esc(c.label)} · стор. ${c.page}</em>`) : t.read >= t.n ? 'Читати ще раз' : 'Почати читати';
+  const segs = Math.min(30, Math.max(10, t.n)), p = mgProgress(t);
+  const src = t.meta ? (t.meta.src === 'mangaupdates' ? 'MangaUpdates' : 'AniList') : '';
+  const desc = t.meta && t.meta.desc;
+  app.innerHTML = `${promptLine('~/манга/' + t.title, 'ls')}
+    <a class="mback" href="#/manga">${I.left}манга</a>
+    <div class="ahead mhead"><div class="poster big"><img src="${t.cover}" alt="" onerror="this.remove()"><span class="ph">${esc((t.title.trim()[0] || '?').toUpperCase())}</span></div>
+    <div class="ainfo"><h1 class="title">${esc(t.title)}</h1>${mangaMeta(t)}
+      ${desc ? `<p class="mdesc" id="mdesc">${esc(desc).replace(/\n/g, '<br>')}</p>${desc.length > 260 ? '<button class="linkbtn" id="mmore">Детальніше</button>' : ''}` : ''}
+      <div class="acts"><a class="btn primary" href="${c ? mgRead(c.cid, c.page) : mgRead(first.cid)}">${I.play}${label}</a>${c ? `<a class="btn ghost" href="${mgRead(first.cid)}">З початку</a>` : ''}</div>
+      <div class="mmode" role="group" aria-label="Як читати цей тайтл"><span>читати</span>${MG_MODES.map(([k, l, h]) =>
+        `<button class="${t.mode === k ? 'on' : ''}" data-mm="${k}" title="${h}" aria-pressed="${t.mode === k}">${l}</button>`).join('')}</div>
+      <div class="mprog"><div><span>${t.single ? (c ? `стор. ${c.page} з ${t.pages}` : `${t.pages} ${plural(t.pages, 'сторінка', 'сторінки', 'сторінок')}`) : `прочитано ${t.read} з ${t.n}`}</span><span>${Math.round(p * 100)}%</span></div>
+        <span class="msegs" aria-hidden="true">${Array.from({length: segs}, (_, i) => `<i class="${(i + 1) / segs <= p + 1e-9 ? 'on' : (i / segs < p ? 'part' : '')}"></i>`).join('')}</span></div>
+    </div></div>
+    ${t.single ? '' : `<section class="win mch">${winBar('~/манга/' + esc(t.folder))}<div class="win-body">
+      <div class="mch-head"><h2>Розділи</h2><span class="count">${t.n}</span><span class="sp"></span>
+        <button class="btn ghost" id="mflip">${MG.newest ? I.arrDown + 'нові зверху' : I.arrUp + 'з першої'}</button></div>
+      <ol class="mlist" id="mlist"></ol></div></section>`}
+    <section class="msrc"><p>${t.meta ? `Опис і обкладинка з <a href="${esc(t.meta.url)}" target="_blank" rel="noopener">${src}</a>.` : 'AniList і MangaUpdates цей тайтл поки не знайшли, тому обкладинка — перша сторінка.'}
+      ${t.meta ? 'Не той тайтл?' : 'Знаєш, як він там називається?'} Встав посилання з AniList чи MangaUpdates або точну назву.</p>
+      <div class="fadd"><input id="mlink" type="text" value="${esc(t.hint)}" placeholder="https://anilist.co/manga/… або назва" aria-label="Посилання на AniList чи MangaUpdates або назва"><button class="btn" id="mlinkset">Шукати</button></div></section>`;
+  $$('[data-mm]').forEach(b => b.onclick = () => {
+    $$('[data-mm]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+    setMangaMode(tid, b.dataset.mm);
+  });
+  if ($('#mmore')) $('#mmore').onclick = e => { $('#mdesc').classList.add('open'); e.target.remove(); };
+  $('#mlinkset').onclick = async () => {
+    await api('/api/manga/link', {method: 'POST', body: JSON.stringify({tid, link: $('#mlink').value.trim()})});
+    toast('Шукаю. Опис і обкладинка з’являться за кілька секунд');
+    setTimeout(() => { if (baseHash === '/manga/' + tid) renderBase(baseHash, true); }, 6000);
+  };
+  if (t.single) return;
+  const draw = () => {
+    const list = MG.newest ? t.chapters.slice().reverse() : t.chapters;
+    $('#mlist').innerHTML = list.map(ch => {
+      const cur = c && c.cid === ch.cid, part = !ch.done && ch.page > 0;
+      const st = ch.done ? '✓ прочитано' : part ? `стор. ${ch.page} / ${ch.pages}` : ch.new ? 'нова' : '';
+      const sub = [ch.sub, `${ch.pages} ${plural(ch.pages, 'сторінка', 'сторінки', 'сторінок')}`].filter(Boolean).join(' · ');
+      return `<li class="${ch.done ? 'done' : ''}${cur ? ' cur' : ''}${ch.new && !ch.done ? ' new' : ''}"><a href="${mgRead(ch.cid, part ? ch.page : 0)}"><i class="dot" aria-hidden="true"></i>
+        <span class="ml-t"><b>${esc(ch.label)}</b><small>${esc(sub)}</small></span>
+        <span class="ml-bar" aria-hidden="true"><i style="width:${ch.done ? 100 : part ? (ch.page / ch.pages * 100).toFixed(1) : 0}%"></i></span><span class="ml-st">${st}</span></a>
+        <button class="btn ghost icon mtick" data-tick="${ch.cid}" title="${ch.done ? 'Позначити непрочитаним' : 'Позначити прочитаним'}" aria-label="${ch.done ? 'Позначити непрочитаним' : 'Позначити прочитаним'}: ${esc(ch.label)}" aria-pressed="${ch.done}">✓</button></li>`;
+    }).join('');
+    $$('[data-tick]').forEach(b => b.onclick = async () => {
+      const i = t.chapters.findIndex(x => x.cid === b.dataset.tick), ch = t.chapters[i];
+      let cids = [ch.cid];
+      if (!ch.done) {
+        const before = t.chapters.slice(0, i).filter(x => !x.done);
+        if (before.length && confirm(`Позначити прочитаними й ${before.length} ${plural(before.length, 'попередній розділ', 'попередні розділи', 'попередніх розділів')}?`)) cids = before.map(x => x.cid).concat(cids);
+      }
+      await api('/api/manga/mark', {method: 'POST', body: JSON.stringify({cids, read: !ch.done})});
+      renderBase(baseHash, true);
+    });
+  };
+  draw();
+  $('#mflip').onclick = e => {
+    MG.newest = !MG.newest; LS.set('mnewest', MG.newest);
+    e.currentTarget.innerHTML = MG.newest ? I.arrDown + 'нові зверху' : I.arrUp + 'з першої';
+    draw();
+  };
+}
+MG.newest = LS.get('mnewest', false);
+
+// ── читалка ──
+async function renderReader(cid, startPage) {
+  const ch = await api('/api/manga/ch/' + cid).catch(() => null);
+  if (!ch || !ch.pages) { app.innerHTML = `<div class="empty"><h1 class="title">Розділ не знайдено</h1>Можливо, файли перемістили.<br><br><a class="btn" href="#/manga">До манги</a></div>`; return; }
+  const N = ch.pages, url = n => `/manga/page/${cid}/${n}`;
+  let mode = ch.mode, page = Math.min(N, Math.max(1, startPage || (ch.done ? 1 : ch.page) || 1));
+  let shown = [], ended = false, saveT = 0, uiOn = true, io = null;
+  const dims = {};      // n → ширина/висота, щоб розвороти-скани (ширші за висоту) показувати поодинці
+  const imgs = {};
+  const load = n => {
+    if (n < 1 || n > N) return null;
+    if (!imgs[n]) {
+      const im = new Image();
+      im.decoding = 'async';
+      imgs[n] = new Promise(res => { im.onload = () => { dims[n] = im.naturalWidth / im.naturalHeight; res(im); }; im.onerror = () => res(null); });
+      im.src = url(n);
+    }
+    return imgs[n];
+  };
+  document.documentElement.classList.add('locked', 'reading');
+  app.innerHTML = `<div class="rd" id="rd" data-mode="${mode}">
+    <div class="rd-stage" id="rdStage" aria-live="polite"></div>
+    <div class="rd-strip" id="rdStrip" hidden></div>
+    <div class="rd-end" id="rdEnd" hidden></div>
+    <header class="rd-top"><a class="btn ghost icon" href="#/manga/${ch.tid}" aria-label="До тайтлу">${I.left}</a>
+      <div class="rd-t"><b>${esc(ch.title)}</b><small id="rdPos"></small></div>
+      <div class="rd-modes" role="group" aria-label="Режим читання">${MG_MODES.map(([k, l, h]) => `<button data-rm="${k}" title="${h}">${l}</button>`).join('')}</div>
+      <button class="btn ghost rd-m1" id="rdMode" aria-label="Змінити режим читання"></button>
+      <button class="btn ghost icon rd-fs" id="rdFs" title="На весь екран (F)" aria-label="На весь екран">⛶</button></header>
+    <footer class="rd-bot">
+      <button class="btn ghost" id="rdPrevCh"></button>
+      <span class="rd-n" id="rdA"></span><input type="range" id="rdSlider" min="1" max="${N}" value="${page}" aria-label="Сторінка"><span class="rd-n" id="rdB"></span>
+      <button class="btn ghost" id="rdNextCh"></button></footer>
+    <p class="rd-hint" id="rdHint" aria-hidden="true"></p></div>`;
+  const rd = $('#rd'), stage = $('#rdStage'), strip = $('#rdStrip'), endEl = $('#rdEnd'), slider = $('#rdSlider');
+  const rtl = () => mode === 'rtl' || mode === 'spread';
+  const save = (done) => {
+    clearTimeout(saveT);
+    const body = JSON.stringify({cid, page, done: !!done});
+    saveT = setTimeout(() => api('/api/manga/progress', {method: 'POST', body}).catch(() => {}), done ? 0 : 700);
+  };
+  const flush = () => { clearTimeout(saveT); try { navigator.sendBeacon('/api/manga/progress', JSON.stringify({cid, page})); } catch (e) {} };
+  const setUi = on => { uiOn = on; rd.classList.toggle('ui', on); };
+  const pos = () => {
+    $('#rdPos').textContent = `${ch.count > 1 ? ch.label + ' · ' : ''}стор. ${shown.length > 1 ? shown.join('–') : page} / ${N}`;
+    slider.value = page;
+  };
+  const chBtns = () => {
+    // кнопки розділів стоять з того боку, куди гортаємо: справа наліво «далі» — ліворуч
+    const a = $('#rdPrevCh'), b = $('#rdNextCh');
+    const lab = (t, left) => t ? (left ? I.left + esc(t.label) : esc(t.label) + I.right) : '';
+    const [l, r] = rtl() ? ['next', 'prev'] : ['prev', 'next'];
+    a.innerHTML = lab(ch[l], true); a.dataset.go = l; a.style.visibility = ch[l] ? '' : 'hidden';
+    b.innerHTML = lab(ch[r], false); b.dataset.go = r; b.style.visibility = ch[r] ? '' : 'hidden';
+    a.title = ch[l] ? (l === 'next' ? 'Наступний розділ' : 'Попередній розділ') : '';
+    b.title = ch[r] ? (r === 'next' ? 'Наступний розділ' : 'Попередній розділ') : '';
+    slider.dir = rtl() ? 'rtl' : 'ltr';
+    $('#rdA').textContent = rtl() ? N : 1;
+    $('#rdB').textContent = rtl() ? 1 : N;
+    $$('[data-rm]').forEach(x => { x.classList.toggle('on', x.dataset.rm === mode); x.setAttribute('aria-pressed', x.dataset.rm === mode); });
+    $('#rdMode').textContent = {rtl: '← стор.', ltr: 'стор. →', strip: 'стрічка', spread: 'розворот'}[mode];
+  };
+  const wide = n => dims[n] > 1.05;
+  async function draw() {
+    ended = false;
+    endEl.hidden = true;
+    stage.hidden = false;
+    if (mode === 'spread' && page > 1 && page % 2) page -= 1;   // розвороти: 1 окремо, далі 2–3, 4–5…
+    const want = page;
+    let two = mode === 'spread' && page > 1 && page < N;
+    const [a, b] = await Promise.all([load(page), two ? load(page + 1) : null]);
+    if (want !== page || mode === 'strip') return;
+    if (two && (wide(page) || wide(page + 1) || !b)) two = false;
+    shown = two ? [page, page + 1] : [page];
+    const el = n => `<img src="${url(n)}" alt="Сторінка ${n}" draggable="false">`;
+    stage.innerHTML = two ? el(page + 1) + el(page) : el(page);   // розворот справа наліво: менша сторінка праворуч
+    stage.classList.toggle('two', two);
+    pos();
+    save(false);
+    for (let k = 1; k <= 4; k++) load(page + shown.length - 1 + k);
+  }
+  function showEnd() {
+    ended = true;
+    page = N;
+    save(true);
+    stage.hidden = true;
+    endEl.hidden = false;
+    endEl.innerHTML = `<div class="rd-card"><p class="ok">✓ ${esc(ch.count > 1 ? ch.label : ch.title)} — прочитано</p>
+      ${ch.next ? `<h2>Далі: ${esc(ch.next.label)}</h2><p>${ch.next.pages} ${plural(ch.next.pages, 'сторінка', 'сторінки', 'сторінок')}</p><a class="btn primary" href="#/r/${ch.next.cid}" id="rdGoNext">${I.play}Читати далі</a>`
+        : `<h2>${ch.count > 1 ? 'Це останній розділ' : 'Кінець'}</h2><p>Нові розділи з’являться тут, щойно ти покладеш їх у папку.</p>`}
+      <a class="btn ghost" href="#/manga/${ch.tid}">До тайтлу</a></div>`;
+    setUi(true);
+    const g = $('#rdGoNext');
+    if (g) g.focus({preventScroll: true});
+  }
+  const step = d => {
+    if (mode === 'strip') return;
+    if (ended) { if (d < 0) { ended = false; draw(); } else if (ch.next) go('#/r/' + ch.next.cid, true); return; }
+    if (d > 0) {
+      const nxt = page + shown.length;
+      if (nxt > N) return showEnd();
+      page = nxt;
+    } else {
+      if (page <= 1) return ch.prev ? toast(`Це перша сторінка. Попередній розділ: ${ch.prev.label}`) : null;
+      page = Math.max(1, page - (mode === 'spread' && page > 2 ? 2 : 1));
+    }
+    if (uiOn) { setUi(false); if (rd.contains(document.activeElement)) document.activeElement.blur(); }
+    draw();
+  };
+  // стрічка: усі сторінки вниз, поточну визначаємо за тим, що на екрані
+  function drawStrip() {
+    stage.hidden = true;
+    endEl.hidden = true;
+    strip.hidden = false;
+    strip.innerHTML = Array.from({length: N}, (_, i) => `<img data-n="${i + 1}" loading="lazy" decoding="async" src="${url(i + 1)}" alt="Сторінка ${i + 1}">`).join('') +
+      `<div class="rd-card in-strip">${ch.next ? `<h2>Далі: ${esc(ch.next.label)}</h2><a class="btn primary" href="#/r/${ch.next.cid}">${I.play}Читати далі</a>` : `<h2>${ch.count > 1 ? 'Це останній розділ' : 'Кінець'}</h2>`}<a class="btn ghost" href="#/manga/${ch.tid}">До тайтлу</a></div>`;
+    shown = [page];
+    io = new IntersectionObserver(es => {
+      for (const e of es) if (e.isIntersecting) { page = +e.target.dataset.n; shown = [page]; pos(); save(page >= N); }
+    }, {root: strip, rootMargin: '-45% 0px -45% 0px'});
+    $$('img', strip).forEach(im => { io.observe(im); im.onload = () => im.classList.add('ok'); });
+    const target = strip.querySelector(`[data-n="${page}"]`);
+    if (target && page > 1) requestAnimationFrame(() => target.scrollIntoView());
+    pos();
+  }
+  const setMode = m => {
+    if (m === mode) return;
+    mode = m;
+    rd.dataset.mode = m;
+    setMangaMode(ch.tid, m);
+    if (io) { io.disconnect(); io = null; }
+    strip.hidden = m !== 'strip';
+    strip.innerHTML = m === 'strip' ? strip.innerHTML : '';
+    chBtns();
+    if (m === 'strip') drawStrip(); else draw();
+    toast(MG_MODES.find(x => x[0] === m)[2]);
+  };
+  $$('[data-rm]').forEach(b => b.onclick = () => setMode(b.dataset.rm));
+  $('#rdMode').onclick = () => { const k = MG_MODES.findIndex(x => x[0] === mode); setMode(MG_MODES[(k + 1) % MG_MODES.length][0]); };
+  $('#rdPrevCh').onclick = $('#rdNextCh').onclick = e => {
+    const t = ch[e.currentTarget.dataset.go];
+    if (t) go('#/r/' + t.cid, true);
+  };
+  slider.oninput = () => { if (mode === 'strip') { const im = strip.querySelector(`[data-n="${slider.value}"]`); if (im) im.scrollIntoView(); return; } page = +slider.value; draw(); };
+  $('#rdFs').onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else if (rd.requestFullscreen) rd.requestFullscreen().catch(() => {}); };
+  // дотики: краї — гортати, середина — показати/сховати панель; свайп — гортати
+  let sx = 0, sy = 0, st = 0;
+  stage.addEventListener('pointerdown', e => { sx = e.clientX; sy = e.clientY; st = Date.now(); });
+  stage.addEventListener('pointerup', e => {
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5 && Date.now() - st < 800) { step((dx > 0) === rtl() ? 1 : -1); return; }
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) return;
+    const x = e.clientX / innerWidth;
+    if (x < 0.34) step(rtl() ? 1 : -1);
+    else if (x > 0.66) step(rtl() ? -1 : 1);
+    else setUi(!uiOn);
+  });
+  strip.addEventListener('click', e => { if (!e.target.closest('a')) setUi(!uiOn); });
+  const key = e => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest('input, select, textarea')) return;
+    const k = e.key;
+    if ((k === ' ' || k === 'Enter') && e.target.closest('button, a')) return;
+    if (k === 'Escape') { if (!document.fullscreenElement) go('#/manga/' + ch.tid); return; }
+    if (k === 'f' || k === 'F' || k === 'а' || k === 'А') { e.preventDefault(); $('#rdFs').click(); return; }
+    if (mode === 'strip') return;
+    if (k === 'ArrowLeft') { e.preventDefault(); step(rtl() ? 1 : -1); }
+    else if (k === 'ArrowRight') { e.preventDefault(); step(rtl() ? -1 : 1); }
+    else if (k === ' ' || k === 'PageDown' || k === 'ArrowDown') { e.preventDefault(); step(e.shiftKey ? -1 : 1); }
+    else if (k === 'PageUp' || k === 'ArrowUp' || k === 'Backspace') { e.preventDefault(); step(-1); }
+    else if (k === 'Home') { e.preventDefault(); page = 1; draw(); }
+    else if (k === 'End') { e.preventDefault(); page = N; draw(); }
+  };
+  document.addEventListener('keydown', key);
+  const vis = () => { if (document.hidden) flush(); };
+  document.addEventListener('visibilitychange', vis);
+  addEventListener('pagehide', flush);
+  cleanup = () => {
+    flush();
+    if (io) io.disconnect();
+    document.removeEventListener('keydown', key);
+    document.removeEventListener('visibilitychange', vis);
+    removeEventListener('pagehide', flush);
+    document.documentElement.classList.remove('locked', 'reading');
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  };
+  chBtns();
+  setUi(true);
+  if (mode === 'strip') drawStrip(); else await draw();
+  if (!LS.get('mhint', false) && mode !== 'strip') {
+    const h = $('#rdHint');
+    h.textContent = rtl() ? 'Торкнись лівого краю — далі, правого — назад. Середина ховає панель.' : 'Торкнись правого краю — далі, лівого — назад. Середина ховає панель.';
+    h.classList.add('show');
+    setTimeout(() => h.classList.remove('show'), 4200);
+    LS.set('mhint', true);
+  }
 }
 
 function getQueue() { try { return JSON.parse(sessionStorage.getItem('vb_queue')); } catch (e) { return null; } }

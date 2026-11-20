@@ -20,6 +20,7 @@ import io
 import urllib.request
 import zipfile
 import datetime
+import difflib
 import hashlib
 import html
 import hmac
@@ -110,6 +111,10 @@ CREATE TABLE IF NOT EXISTS sessions(
   start_pos REAL, max_pos REAL, watched REAL, duration REAL, ended INTEGER DEFAULT 0);
 CREATE INDEX IF NOT EXISTS ix_sessions_video ON sessions(video_id);
 CREATE TABLE IF NOT EXISTS weekly(week TEXT PRIMARY KEY, created REAL, data TEXT);
+CREATE TABLE IF NOT EXISTS manga_progress(cid TEXT PRIMARY KEY, tid TEXT, page INTEGER, pages INTEGER,
+  at REAL, done INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS manga_seen(cid TEXT PRIMARY KEY, tid TEXT, first REAL);
+CREATE TABLE IF NOT EXISTS manga_titles(tid TEXT PRIMARY KEY, mode TEXT, hint TEXT);
 '''
 
 
@@ -243,6 +248,7 @@ def scan():
             print('Перенесено історію для %d переміщених відео.' % moved)
         DB.bump()
         MEDIA_EVENT.set()
+        manga_scan_bg()
         return len(seen), len([r for r in rows if r[0] not in existing])
 
 
@@ -380,18 +386,23 @@ def anilist_want(sid, top):
     hint = anilist_hint(top)
     if m and m.get('v') == ANILIST_V and m.get('hint', '') == hint and (m.get('id') or time.time() - m.get('at', 0) < 7 * 86400):
         return
-    if time.time() - ANILIST_FAIL.get(sid, 0) < 600:
+    meta_queue(sid, anime_title(top), anilist_fetch, sid, top)
+
+
+def meta_queue(key, label, fn, *args):
+    """Спільна черга AniList для аніме й манги: ліміт запитів один на всіх."""
+    if time.time() - ANILIST_FAIL.get(key, 0) < 600:
         return
     with ANILIST_LOCK:
-        if sid in ANILIST_PENDING:
+        if key in ANILIST_PENDING:
             return
-        ANILIST_PENDING.add(sid)
-        start = not getattr(anilist_want, 'worker', None)
+        ANILIST_PENDING.add(key)
+        start = not getattr(meta_queue, 'worker', None)
         if start:
-            anilist_want.worker = threading.Thread(target=anilist_worker, daemon=True)
-    ANILIST_Q.put((sid, top))
+            meta_queue.worker = threading.Thread(target=anilist_worker, daemon=True)
+    ANILIST_Q.put((key, label, fn, args))
     if start:
-        anilist_want.worker.start()
+        meta_queue.worker.start()
 
 
 def anilist_queries(top):
@@ -470,16 +481,16 @@ def anilist_fetch(sid, top):
 
 def anilist_worker():
     while True:
-        sid, top = ANILIST_Q.get()
+        key, label, fn, args = ANILIST_Q.get()
         try:
-            anilist_fetch(sid, top)
+            fn(*args)
         except Exception as e:
-            ANILIST_FAIL[sid] = time.time()
-            print('AniList: не вдалося для «%s» (%s)' % (anime_title(top), e))
+            ANILIST_FAIL[key] = time.time()
+            print('Метадані: не вдалося для «%s» (%s)' % (label, e))
             time.sleep(5)
         finally:
             with ANILIST_LOCK:
-                ANILIST_PENDING.discard(sid)
+                ANILIST_PENDING.discard(key)
 
 
 def anime_cover_version(sid, top):
@@ -500,6 +511,626 @@ def anime_meta_public(sid):
         return None
     return {k: m.get(k) for k in ('id', 'url', 'romaji', 'english', 'native', 'year', 'episodes', 'score',
                                   'format', 'genres', 'desc', 'color')}
+
+
+# ───────────────────────────── манга ─────────────────────────────
+# Окрема папка: кожна підпапка (або .zip/.cbz) — тайтл. Картинки прямо в теці тайтлу — одна «книжка»;
+# підтеки й архіви всередині — розділи. Нічого не копіюється: сторінки віддаються прямо з диска.
+# Обкладинка: cover.jpg у теці → AniList → MangaUpdates → перша сторінка.
+
+IMG_TYPES = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+             '.gif': 'image/gif', '.avif': 'image/avif', '.bmp': 'image/bmp', '.jxl': 'image/jxl'}
+ARC_EXT = {'.zip', '.cbz'}
+COVER_NAMES = ('cover', 'poster', 'folder')
+MANGA_MODES = {'rtl', 'ltr', 'strip', 'spread'}
+MANGA = {'root': '', 'titles': {}, 'chapters': {}, 'at': 0, 'scanning': False}
+MANGA_LOCK = threading.Lock()
+MANGA_META_V = 1
+ZIPS = collections.OrderedDict()
+ZIPS_LOCK = threading.Lock()
+THUMB_SEM = threading.Semaphore(2)
+
+
+def manga_skip(name):
+    return name.startswith(('.', '$', '._')) or name.lower() in SKIP_DIRS or name == '__MACOSX'
+
+
+def manga_id(*parts):
+    return hashlib.sha1('\x00'.join(parts).encode('utf-8', 'surrogateescape')).hexdigest()
+
+
+def manga_title(top):
+    stem = os.path.splitext(top)[0] if os.path.splitext(top)[1].lower() in ARC_EXT else top
+    t = anime_title(stem)
+    t = re.sub(r'\(\s*(digital|raw|eng|jp|jpn|complete|completed|ongoing|(19|20)\d\d)\s*\)', ' ', t, flags=re.I)
+    return re.sub(r'\s{2,}', ' ', t).strip(' -.') or stem
+
+
+CH_RE = re.compile(r'(?:^|[\s_.\-\[(#])(?:ch(?:apter|ap)?|гл(?:ава)?|розділ|раздел|episode|ep|第)\.?\s*_?(\d+(?:[.,]\d+)?)', re.I)
+VOL_RE = re.compile(r'(?:^|[\s_.\-\[(])(?:vol(?:ume)?|v|том|т)\.?\s*_?(\d+)', re.I)
+
+
+def manga_label(name):
+    """«Vol.02 Ch.012 - Назва» → ('Том 2 · Глава 12', '12', 'Назва'). Повертає (підпис, номер, підзаголовок)."""
+    base = re.sub(r'\.(zip|cbz)$', '', name.strip(), flags=re.I)
+    num = lambda s: re.sub(r'^0+(?=\d)', '', s.replace(',', '.'))
+    ch, vol = CH_RE.search(base), VOL_RE.search(base)
+    if re.fullmatch(r'\s*\d+(?:[.,]\d+)?\s*', base):
+        return 'Глава ' + num(base.strip()), num(base.strip()), ''
+    if ch:
+        rest = re.sub(r'^[話话回]', '', base[ch.end():]).strip(' -_.:—–)]/')
+        lab = ('Том %s · ' % num(vol.group(1)) if vol and vol.start() < ch.start() else '') + 'Глава ' + num(ch.group(1))
+        return lab, num(ch.group(1)), rest
+    if vol:
+        rest = base[vol.end():].strip(' -_.:—–)]/')
+        return 'Том ' + num(vol.group(1)), num(vol.group(1)), rest
+    return clean_title(base), None, ''
+
+
+def manga_chapter(top, rel, kind, path, pages, name):
+    pages.sort(key=nat_key)
+    # підпис з усього шляху: «Vol 1/Ch 3.cbz» → «Том 1 · Глава 3»
+    full = re.sub(r'\.(zip|cbz)(?=$|[/\\!])', '', rel, flags=re.I).replace('!', '/').replace('\\', '/')
+    label, n, sub = manga_label(' / '.join(x for x in full.split('/') if x)) if name else ('', None, '')
+    if name and not n:
+        label, n, sub = manga_label(name)
+    return {'cid': manga_id('manga', top, rel)[:16], 'rel': rel, 'kind': kind, 'path': path, 'pages': pages,
+            'label': label, 'num': n, 'sub': sub, 'name': name}
+
+
+def manga_zip_chapters(zpath, top, rel):
+    with zipfile.ZipFile(zpath) as z:
+        names = [i.filename for i in z.infolist() if not i.is_dir()]
+    groups = {}
+    for n in names:
+        parts = n.replace('\\', '/').split('/')
+        if any(manga_skip(p) for p in parts) or os.path.splitext(n)[1].lower() not in IMG_TYPES:
+            continue
+        groups.setdefault('/'.join(parts[:-1]), []).append(n)
+    if len(groups) > 1 and len(groups.get('', [])) <= 3:
+        groups.pop('', None)       # обкладинка поруч із розділами
+    stem = os.path.splitext(os.path.basename(zpath))[0]
+    out = []
+    for g, pages in groups.items():
+        name = g.split('/')[-1] if g else (stem if rel else '')
+        out.append(manga_chapter(top, rel + ('!' + g if g else ''), 'zip', zpath, pages, name))
+    return out
+
+
+def manga_dir_chapters(tdir, top):
+    out = []
+
+    def walk(d, rel, depth):
+        imgs, subs, arcs = [], [], []
+        with os.scandir(d) as it:
+            for e in it:
+                if manga_skip(e.name):
+                    continue
+                try:
+                    if e.is_dir():
+                        subs.append(e)
+                        continue
+                except OSError:
+                    continue
+                ext = os.path.splitext(e.name)[1].lower()
+                if ext in IMG_TYPES:
+                    imgs.append(e.name)
+                elif ext in ARC_EXT:
+                    arcs.append(e)
+        if rel == '' and imgs:
+            if subs or arcs:       # у корені поруч із розділами — обкладинка чи титулка
+                imgs = imgs if len(imgs) > 3 else []
+            else:
+                imgs = [n for n in imgs if os.path.splitext(n)[0].lower() not in COVER_NAMES] or imgs
+        if imgs:
+            out.append(manga_chapter(top, rel, 'dir', d, imgs, os.path.basename(d) if rel else ''))
+        for a in arcs:
+            try:
+                out.extend(manga_zip_chapters(a.path, top, os.path.join(rel, a.name)))
+            except (OSError, zipfile.BadZipFile) as err:
+                print('Манга: не вдалося відкрити архів %s (%s)' % (a.path, err))
+        if depth < 5:
+            for s in subs:
+                walk(s.path, os.path.join(rel, s.name), depth + 1)
+    walk(tdir, '', 0)
+    out.sort(key=lambda c: nat_key(c['rel']))
+    return out
+
+
+def manga_scan():
+    """Переглядає папку манги й будує покажчик тайтлів і розділів (у пам'яті, без копіювання)."""
+    global MANGA
+    root = C.cfg.get('manga_folder') or ''
+    if not root or not os.path.isdir(root):
+        MANGA = {'root': root, 'titles': {}, 'chapters': {}, 'at': time.time(), 'scanning': False, 'missing': bool(root)}
+        return
+    with MANGA_LOCK:
+        MANGA['scanning'] = True
+        t0 = time.time()
+        titles, chapters = {}, {}
+        try:
+            entries = sorted(os.scandir(root), key=lambda e: nat_key(e.name))
+        except OSError as e:
+            print('Манга: немає доступу до %s (%s)' % (root, e))
+            entries = []
+        for e in entries:
+            if manga_skip(e.name):
+                continue
+            try:
+                if e.is_dir():
+                    chs = manga_dir_chapters(e.path, e.name)
+                elif os.path.splitext(e.name)[1].lower() in ARC_EXT:
+                    chs = manga_zip_chapters(e.path, e.name, '')
+                else:
+                    continue
+            except (OSError, zipfile.BadZipFile) as err:
+                print('Манга: пропускаю «%s» (%s)' % (e.name, err))
+                continue
+            if not chs:
+                continue
+            tid = manga_id('mangat', e.name)[:12]
+            for c in chs:
+                c['tid'] = tid
+                chapters[c['cid']] = c
+            titles[tid] = {'tid': tid, 'top': e.name, 'path': e.path, 'isdir': e.is_dir(),
+                           'title': manga_title(e.name), 'chapters': [c['cid'] for c in chs]}
+        seen = {r['cid']: r['first'] for r in DB.q('SELECT cid, first FROM manga_seen')}
+        known = {r['tid'] for r in DB.q('SELECT DISTINCT tid FROM manga_seen')}
+        now, new = time.time(), []
+        for cid, c in chapters.items():
+            if cid not in seen:
+                # перше сканування й нові тайтли — не «нові розділи», інакше нове було б усе
+                seen[cid] = now if (seen and c['tid'] in known) else 0
+                new.append((cid, c['tid'], seen[cid]))
+            c['first'] = seen[cid]
+        if new:
+            DB.many('INSERT OR IGNORE INTO manga_seen(cid, tid, first) VALUES(?,?,?)', new)
+        MANGA = {'root': root, 'titles': titles, 'chapters': chapters, 'at': time.time(), 'scanning': False}
+        with ZIPS_LOCK:
+            for z in ZIPS.values():
+                z.close()
+            ZIPS.clear()
+        print('Манга: %d тайтлів, %d розділів, %d сторінок (%.1f с)' % (
+            len(titles), len(chapters), sum(len(c['pages']) for c in chapters.values()), time.time() - t0))
+
+
+def manga_scan_bg():
+    def go():
+        try:
+            manga_scan()
+        except Exception:
+            traceback.print_exc()
+    threading.Thread(target=go, daemon=True).start()
+
+
+def manga_dir():
+    return os.path.join(C.data, 'manga')
+
+
+def manga_settings():
+    return {r['tid']: r for r in DB.q('SELECT * FROM manga_titles')}
+
+
+def manga_set(tid, **kw):
+    DB.x('INSERT OR IGNORE INTO manga_titles(tid) VALUES(?)', (tid,))
+    for k, v in kw.items():
+        DB.x('UPDATE manga_titles SET %s=? WHERE tid=?' % k, (v, tid))
+
+
+def manga_progress():
+    return {r['cid']: r for r in DB.q('SELECT * FROM manga_progress')}
+
+
+def manga_cover_file(t):
+    if t['isdir']:
+        for name in COVER_NAMES:
+            for ext in ('.jpg', '.jpeg', '.png', '.webp'):
+                f = os.path.join(t['path'], name + ext)
+                if os.path.isfile(f):
+                    return f
+    for f in (os.path.join(manga_dir(), t['tid'] + '.jpg'), os.path.join(manga_dir(), 'thumbs', t['tid'] + '.jpg')):
+        if os.path.isfile(f):
+            return f
+    return None
+
+
+def manga_info(t, idx, prog, sets):
+    chs = [idx['chapters'][c] for c in t['chapters']]
+    done = lambda c: bool(prog.get(c['cid']) and prog[c['cid']]['done'])
+    started = [c for c in chs if c['cid'] in prog]
+    last = max(started, key=lambda c: prog[c['cid']]['at']) if started else None
+    last_at = prog[last['cid']]['at'] if last else 0
+    start_at = min(prog[c['cid']]['at'] for c in started) if started else 0
+    cont = None
+    if last:
+        p = prog[last['cid']]
+        if not p['done']:
+            cont = (last, max(1, p['page'] or 1))
+        else:
+            i = chs.index(last)
+            nxt = next((c for c in chs[i + 1:] if not done(c)), None)
+            cont = (nxt, max(1, prog[nxt['cid']]['page'] or 1) if nxt['cid'] in prog else 1) if nxt else None
+    read = sum(done(c) for c in chs)
+    f = manga_cover_file(t)
+    s = sets.get(t['tid'])
+    return {'tid': t['tid'], 'title': t['title'], 'n': len(chs), 'pages': sum(len(c['pages']) for c in chs),
+            'single': len(chs) == 1, 'read': read, 'lastAt': last_at,
+            # нові — ті, що з'явились у папці вже після того, як почав читати, і ще не прочитані
+            'new': sum(1 for c in chs if start_at and c['first'] > start_at and not done(c)), 'startAt': start_at,
+            'added': max((c['first'] for c in chs), default=0),
+            'mode': (s['mode'] if s and s['mode'] in MANGA_MODES else 'rtl'),
+            'cover': '/manga/cover/%s?v=%d' % (t['tid'], int(os.path.getmtime(f)) if f else 0),
+            'meta': manga_meta_public(t['tid']),
+            'cont': cont and {'cid': cont[0]['cid'], 'label': cont[0]['label'], 'page': cont[1],
+                              'pages': len(cont[0]['pages'])}}
+
+
+def manga_list_json():
+    idx = MANGA
+    prog, sets = manga_progress(), manga_settings()
+    for t in idx['titles'].values():
+        manga_want(t, sets.get(t['tid']))
+    out = [manga_info(t, idx, prog, sets) for t in idx['titles'].values()]
+    return {'folder': idx['root'], 'missing': idx.get('missing', False), 'scanning': idx.get('scanning', False),
+            'titles': out, 'chapters': len(idx['chapters'])}
+
+
+def manga_title_json(tid):
+    idx = MANGA
+    t = idx['titles'].get(tid)
+    if not t:
+        return None
+    prog, sets = manga_progress(), manga_settings()
+    info = manga_info(t, idx, prog, sets)
+    start_at = info['startAt']
+    info['chapters'] = [{'cid': c['cid'], 'label': c['label'] or t['title'], 'sub': c['sub'], 'name': c['name'],
+                         'pages': len(c['pages']), 'page': prog[c['cid']]['page'] if c['cid'] in prog else 0,
+                         'done': bool(c['cid'] in prog and prog[c['cid']]['done']),
+                         'new': bool(start_at and c['first'] > start_at), 'added': c['first']}
+                        for c in (idx['chapters'][x] for x in t['chapters'])]
+    s = sets.get(tid)
+    info['hint'] = (s['hint'] if s else '') or ''
+    info['folder'] = t['top']
+    return info
+
+
+def manga_chapter_json(cid):
+    idx = MANGA
+    c = idx['chapters'].get(cid)
+    if not c:
+        return None
+    t = idx['titles'][c['tid']]
+    i = t['chapters'].index(cid)
+    p = DB.one('SELECT * FROM manga_progress WHERE cid=?', (cid,))
+    s = DB.one('SELECT mode FROM manga_titles WHERE tid=?', (t['tid'],))
+    near = lambda j: (lambda x: {'cid': x['cid'], 'label': x['label'] or t['title'], 'pages': len(x['pages'])})(
+        idx['chapters'][t['chapters'][j]]) if 0 <= j < len(t['chapters']) else None
+    return {'cid': cid, 'tid': t['tid'], 'title': t['title'], 'label': c['label'] or t['title'], 'sub': c['sub'],
+            'pages': len(c['pages']), 'page': (p['page'] if p else 0) or 0, 'done': bool(p and p['done']),
+            'mode': s['mode'] if s and s['mode'] in MANGA_MODES else 'rtl',
+            'index': i, 'count': len(t['chapters']), 'prev': near(i - 1), 'next': near(i + 1)}
+
+
+def manga_save_progress(d):
+    cid = str(d.get('cid', ''))
+    c = MANGA['chapters'].get(cid)
+    if not c:
+        return {'ok': False}
+    n = len(c['pages'])
+    try:
+        page = max(1, min(n, int(d.get('page') or 1)))
+    except (TypeError, ValueError):
+        page = 1
+    done = 1 if (d.get('done') or page >= n) else 0
+    DB.x('''INSERT INTO manga_progress(cid, tid, page, pages, at, done) VALUES(?,?,?,?,?,?)
+            ON CONFLICT(cid) DO UPDATE SET page=excluded.page, pages=excluded.pages, at=excluded.at,
+              done=MAX(manga_progress.done, excluded.done)''', (cid, c['tid'], page, n, time.time(), done))
+    return {'ok': True, 'done': bool(done)}
+
+
+def manga_mark(d):
+    cids = [c for c in (d.get('cids') or []) if isinstance(c, str) and c in MANGA['chapters']]
+    if d.get('read'):
+        now = time.time()
+        DB.many('''INSERT INTO manga_progress(cid, tid, page, pages, at, done) VALUES(?,?,?,?,?,1)
+                   ON CONFLICT(cid) DO UPDATE SET page=excluded.page, pages=excluded.pages, done=1''',
+                [(c, MANGA['chapters'][c]['tid'], len(MANGA['chapters'][c]['pages']),
+                  len(MANGA['chapters'][c]['pages']), now - 1e-3 * i) for i, c in enumerate(reversed(cids))])
+    else:
+        DB.many('DELETE FROM manga_progress WHERE cid=?', [(c,) for c in cids])
+    return {'ok': True}
+
+
+# ── сторінки ──
+
+def manga_zip_read(path, name):
+    """Відкриті архіви тримаємо кілька штук, щоб не читати їхній зміст на кожну сторінку."""
+    with ZIPS_LOCK:
+        z = ZIPS.pop(path, None)
+        if z is None:
+            z = zipfile.ZipFile(path)
+        ZIPS[path] = z
+        while len(ZIPS) > 6:
+            ZIPS.popitem(last=False)[1].close()
+        return z.read(name)
+
+
+def manga_page(c, n):
+    """(шлях або None, байти або None, тип) для сторінки n (з 1)."""
+    name = c['pages'][n - 1]
+    ctype = IMG_TYPES.get(os.path.splitext(name)[1].lower(), 'application/octet-stream')
+    if c['kind'] == 'dir':
+        return os.path.join(c['path'], name), None, ctype
+    return None, manga_zip_read(c['path'], name), ctype
+
+
+def manga_thumb(t):
+    """Обкладинка з першої сторінки (якщо немає cover.jpg і метаданих): зменшена копія в кеші."""
+    out = os.path.join(manga_dir(), 'thumbs', t['tid'] + '.jpg')
+    if os.path.isfile(out):
+        return out
+    c = MANGA['chapters'].get(t['chapters'][0])
+    if not c:
+        return None
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    path, data, _ = manga_page(c, 1)
+    with THUMB_SEM:
+        try:
+            from PIL import Image   # якщо є Pillow — швидше й без ffmpeg
+            im = Image.open(path or io.BytesIO(data))
+            im = im.convert('RGB')
+            im.thumbnail((480, 720))
+            im.save(out + '.part.jpg', 'JPEG', quality=84)
+            os.replace(out + '.part.jpg', out)
+            return out
+        except Exception:
+            pass
+        if not C.ffmpeg:
+            return None
+        src = path
+        if data is not None:
+            src = out + '.src' + os.path.splitext(c['pages'][0])[1].lower()
+            with open(src, 'wb') as f:
+                f.write(data)
+        try:
+            r = run([C.ffmpeg, '-v', 'error', '-y', '-i', src, '-vf', 'scale=480:-2', '-frames:v', '1', '-q:v', '4',
+                     out + '.part.jpg'], 60)
+            if r.returncode == 0 and os.path.isfile(out + '.part.jpg'):
+                os.replace(out + '.part.jpg', out)
+                return out
+        except Exception:
+            pass
+        finally:
+            if data is not None:
+                try:
+                    os.remove(src)
+                except OSError:
+                    pass
+    return None
+
+
+# ── метадані: AniList, потім MangaUpdates ──
+
+def manga_meta(tid):
+    try:
+        with open(os.path.join(manga_dir(), tid + '.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def manga_meta_public(tid):
+    m = manga_meta(tid)
+    if not m or not m.get('id'):
+        return None
+    return {k: m.get(k) for k in ('src', 'id', 'url', 'romaji', 'english', 'native', 'alt', 'year', 'chapters',
+                                  'volumes', 'score', 'format', 'status', 'genres', 'desc', 'color')}
+
+
+def manga_hint(t, s):
+    h = (s['hint'] if s else '') or ''
+    if not h and t['isdir']:
+        for n in ('anilist.txt', 'mangaupdates.txt'):
+            try:
+                with open(os.path.join(t['path'], n), encoding='utf-8-sig') as f:
+                    h = f.read().strip()
+                    if n == 'mangaupdates.txt' and h.isdigit():
+                        h = 'mu:' + h
+                    break
+            except OSError:
+                pass
+    return h
+
+
+def manga_want(t, s, force=False):
+    hint = manga_hint(t, s)
+    m = manga_meta(t['tid'])
+    if not force and m and m.get('v') == MANGA_META_V and m.get('hint', '') == hint and \
+            (m.get('id') or time.time() - m.get('at', 0) < 7 * 86400):
+        return
+    meta_queue('m:' + t['tid'], t['title'], manga_fetch, t['tid'], t['title'], hint)
+
+
+def html_text(s):
+    s = re.sub(r'<br\s*/?>', '\n', s or '', flags=re.I)
+    s = html.unescape(re.sub(r'<[^>]+>', '', s))
+    return re.sub(r'\n{3,}', '\n\n', s.replace('\r', '')).strip()
+
+
+def norm_title(s):
+    return re.sub(r'[^0-9a-zа-яіїєґ぀-ヿ一-鿿]+', '', (s or '').lower())
+
+
+def title_close(q, names):
+    a = norm_title(q)
+    if not a:
+        return False
+    for n in names:
+        b = norm_title(n)
+        if b and (a == b or (len(a) > 4 and (a in b or b in a)) or difflib.SequenceMatcher(None, a, b).ratio() >= 0.6):
+            return True
+    return False
+
+
+MANGA_AL_FIELDS = ('id siteUrl title{romaji english native} synonyms coverImage{extraLarge large color} '
+                   'description(asHtml:false) genres startDate{year} chapters volumes averageScore format status')
+
+
+def anilist_manga(search=None, mid=None):
+    if mid:
+        res = anilist_post('query($i:Int){Media(id:$i,type:MANGA){%s}}' % MANGA_AL_FIELDS, {'i': mid})
+    else:
+        res = anilist_post('query($s:String){Media(search:$s,type:MANGA,format_not:NOVEL,sort:SEARCH_MATCH){%s}}'
+                           % MANGA_AL_FIELDS, {'s': search})
+    m = (res.get('data') or {}).get('Media')
+    if not m:
+        return None
+    t = m.get('title') or {}
+    if search and not title_close(search, [t.get('romaji'), t.get('english'), t.get('native')] + (m.get('synonyms') or [])):
+        print('Манга: AniList запропонував «%s» для «%s» — не схоже, шукаю далі' % (t.get('romaji'), search))
+        return None
+    cov = m.get('coverImage') or {}
+    return {'src': 'anilist', 'id': m.get('id'), 'url': m.get('siteUrl'), 'romaji': t.get('romaji'),
+            'english': t.get('english'), 'native': t.get('native'), 'alt': (m.get('synonyms') or [])[:4],
+            'year': (m.get('startDate') or {}).get('year'), 'chapters': m.get('chapters'), 'volumes': m.get('volumes'),
+            'score': m.get('averageScore'), 'format': m.get('format'), 'status': m.get('status'),
+            'genres': m.get('genres') or [], 'desc': html_text(m.get('description')), 'color': cov.get('color'),
+            'image': cov.get('extraLarge') or cov.get('large')}
+
+
+def mu_req(path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    for attempt in range(3):
+        req = urllib.request.Request('https://api.mangaupdates.com/v1' + path, data=data, method='POST' if data else 'GET',
+                                     headers={'Content-Type': 'application/json', 'Accept': 'application/json',
+                                              'User-Agent': 'VidBox/%s (+https://github.com/AfricaEE112/hata)' % VERSION})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                time.sleep(min(int(e.headers.get('Retry-After') or 30), 120) + 1)
+                continue
+            if e.code == 404:
+                return None
+            raise
+    raise RuntimeError('MangaUpdates не відповідає (ліміт запитів)')
+
+
+def mu_series(sid):
+    r = mu_req('/series/%d' % sid)
+    if not r or not r.get('series_id'):
+        return None
+    alt = [a.get('title') for a in (r.get('associated') or []) if a.get('title')]
+    native = next((a for a in alt if re.search(r'[぀-ヿ一-鿿]', a)), None)
+    img = ((r.get('image') or {}).get('url') or {})
+    try:
+        year = int(str(r.get('year') or '')[:4])
+    except ValueError:
+        year = None
+    rating = r.get('bayesian_rating') or 0
+    return {'src': 'mangaupdates', 'id': r.get('series_id'), 'url': r.get('url'), 'romaji': r.get('title'),
+            'english': None, 'native': native, 'alt': [a for a in alt if a != native][:4], 'year': year,
+            'chapters': None, 'volumes': None, 'score': round(rating * 10) if rating else None,
+            'format': r.get('type'), 'status': html_text(r.get('status') or '') or None,
+            'genres': [g.get('genre') for g in (r.get('genres') or []) if g.get('genre')],
+            'desc': html_text(r.get('description')), 'color': None, 'image': img.get('original') or img.get('thumb')}
+
+
+def mu_search(q):
+    r = mu_req('/series/search', {'search': q, 'perpage': 8}) or {}
+    for hit in r.get('results') or []:
+        rec = hit.get('record') or {}
+        if (rec.get('type') or '').lower() in ('novel', 'artbook'):
+            continue
+        if title_close(q, [rec.get('title'), hit.get('hit_title')]):
+            time.sleep(1)
+            return mu_series(int(rec['series_id']))
+    return None
+
+
+def manga_queries(title):
+    t = re.sub(r'\(\s*\d{4}\s*\)|\b(19|20)\d{2}\b', ' ', title)
+    t = re.sub(r'\b(vol(ume)?s?|v)\.?\s*\d+(\s*-\s*\d+)?\b|\bch(apter)?s?\.?\s*\d+(\s*-\s*\d+)?\b', ' ', t, flags=re.I)
+    t = re.sub(r'\s{2,}', ' ', t).strip(' -.')
+    out = [t] if t else []
+    if title not in out:
+        out.append(title)
+    return out
+
+
+def manga_fetch(tid, title, hint):
+    d = manga_dir()
+    os.makedirs(d, exist_ok=True)
+    al = mu = None
+    queries = []
+    h = (hint or '').strip()
+    if h:
+        m = re.search(r'anilist\.co/manga/(\d+)', h)
+        m2 = re.search(r'mangaupdates\.com/series/([0-9a-z]+)', h, re.I)
+        m3 = re.fullmatch(r'mu:\s*(\d+)', h, re.I)
+        if m:
+            al = int(m.group(1))
+        elif m2:
+            mu = int(m2.group(1).lower(), 36)
+        elif m3:
+            mu = int(m3.group(1))
+        elif h.isdigit():
+            al = int(h)
+        else:
+            queries = [h]
+    else:
+        queries = manga_queries(title)
+    meta = None
+    if al:
+        meta = anilist_manga(mid=al)
+    elif mu:
+        meta = mu_series(mu)
+    else:
+        for q in queries:
+            meta = anilist_manga(search=q)
+            time.sleep(2.2)
+            if meta:
+                break
+        if not meta:
+            for q in queries:
+                meta = mu_search(q)
+                time.sleep(1)
+                if meta:
+                    break
+    out = {'v': MANGA_META_V, 'at': time.time(), 'hint': h, 'q': queries}
+    if meta:
+        url = meta.pop('image', None)
+        if url:
+            req = urllib.request.Request(url, headers={'User-Agent': 'VidBox/%s' % VERSION})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                img = r.read()
+            with open(os.path.join(d, tid + '.part'), 'wb') as f:
+                f.write(img)
+            os.replace(os.path.join(d, tid + '.part'), os.path.join(d, tid + '.jpg'))
+        out.update(meta)
+        print('Манга: «%s» → %s (%s)' % (title, meta.get('romaji') or meta.get('english'), meta['src']))
+    else:
+        out['none'] = True
+        try:
+            os.remove(os.path.join(d, tid + '.jpg'))
+        except OSError:
+            pass
+        print('Манга: «%s» не знайдено ні на AniList, ні на MangaUpdates — обкладинка з першої сторінки' % title)
+    with open(os.path.join(d, tid + '.json'), 'w', encoding='utf-8') as f:
+        json.dump(out, f, ensure_ascii=False)
+
+
+def manga_link(d):
+    tid = str(d.get('tid', ''))
+    t = MANGA['titles'].get(tid)
+    if not t:
+        return {'ok': False, 'error': 'Тайтл не знайдено'}
+    link = str(d.get('link') or '').strip()[:300]
+    manga_set(tid, hint=link)
+    ANILIST_FAIL.pop('m:' + tid, None)
+    manga_want(t, {'hint': link}, force=True)
+    return {'ok': True}
 
 
 RELINK_COPY = ('vote', 'position', 'position_at', 'added', 'first_seen', 'duration', 'width', 'height',
@@ -1525,7 +2156,7 @@ def video_stats(vid):
 # і підхоплюється при наступному запуску.
 
 DEFAULTS = {
-    'folders': [], 'anime_folder': '', 'port': 8800, 'open_browser': True, 'rescan_min': 10,
+    'folders': [], 'anime_folder': '', 'manga_folder': '', 'port': 8800, 'open_browser': True, 'rescan_min': 10,
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},
@@ -1652,6 +2283,15 @@ def apply_settings(d):
                 cfg['anime_folder'] = a
                 C.anime = a
                 changed_folders = True
+        if 'manga_folder' in d:
+            a = str(d['manga_folder'] or '').strip()
+            if a:
+                a = os.path.abspath(os.path.expanduser(a))
+                if not os.path.isdir(a):
+                    return {'ok': False, 'error': 'Папку з мангою не знайдено: ' + a}
+            if a != cfg.get('manga_folder', ''):
+                cfg['manga_folder'] = a
+                manga_scan_bg()
         if 'folders' in d:
             folders, err = check_folders(d['folders'] if isinstance(d['folders'], list) else [])
             if err:
@@ -1743,6 +2383,9 @@ def settings_json():
         animeCount=counts.get(os.path.normcase(C.anime), 0) if C.anime else 0,
         animeTitles=len(anime_series()) if C.anime else 0,
         animeExists=bool(cfg.get('anime_folder')) and os.path.isdir(cfg['anime_folder']),
+        mangaTitles=len(MANGA['titles']), mangaChapters=len(MANGA['chapters']),
+        mangaExists=bool(cfg.get('manga_folder')) and os.path.isdir(cfg['manga_folder']),
+        mangaSuggest=manga_suggest() if not cfg.get('manga_folder') else [],
         orphans=len(orphan_ids()), hasPassword=bool(cfg['password_hash']),
         ffmpeg=C.ffmpeg, data=C.data, version=VERSION, portNow=C.port,
         urls=['http://%s:%d' % (ip, C.port) for ip in lan_ips()])
@@ -1797,6 +2440,33 @@ def ffmpeg_version():
     return _ffmpeg_ver[0]
 
 
+def manga_suggest():
+    """Теки зі словом «манга» поруч із відео або на дисках Hata — щоб додати одним натиском."""
+    bases = ['/srv/disks'] if os.path.isdir('/srv/disks') else []
+    for f in list(C.cfg.get('folders') or []) + [C.cfg.get('anime_folder') or '']:
+        if f:
+            bases.append(os.path.dirname(os.path.normpath(f)))
+    out, seen = [], set()
+
+    def look(d, depth):
+        try:
+            with os.scandir(d) as it:
+                subs = [e for e in it if e.is_dir() and not manga_skip(e.name)]
+        except OSError:
+            return
+        for e in subs:
+            if re.search(r'manga|манга|манґа|manhwa|комікс|comics', e.name, re.I) and e.path not in seen:
+                seen.add(e.path)
+                out.append(e.path)
+            elif depth < 2:
+                look(e.path, depth + 1)
+    for b in dict.fromkeys(x for x in bases if x):
+        look(b, 0)
+        if len(out) >= 5:
+            break
+    return out[:5]
+
+
 def list_dirs(path):
     """Огляд папок ПК для вибору папки з відео (показує лише папки, не файли)."""
     if not path:
@@ -1807,6 +2477,8 @@ def list_dirs(path):
             drives = ['/']
         home = os.path.expanduser('~')
         quick = [os.path.join(home, n) for n in ('Videos', 'Відео', 'Desktop', 'Downloads')]
+        if os.path.isdir('/srv/disks'):    # під Hata диски підключені тут
+            quick = [e.path for e in os.scandir('/srv/disks') if e.is_dir()] + quick
         return {'path': '', 'parent': None,
                 'dirs': [{'name': d, 'path': d} for d in drives],
                 'quick': [{'name': os.path.basename(q), 'path': q} for q in quick if os.path.isdir(q)]}
@@ -1962,6 +2634,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if first:
             return self.send_file(thumb_path(first['id']), 'image/jpeg')
         return self.send_json({'error': 'no cover'}, 404)
+
+    def send_manga_cover(self, tid):
+        t = MANGA['titles'].get(tid)
+        if not t:
+            return self.send_json({'error': 'not found'}, 404)
+        f = manga_cover_file(t) or manga_thumb(t)
+        if f:
+            ext = os.path.splitext(f)[1].lower()
+            return self.send_file(f, IMG_TYPES.get(ext, 'image/jpeg'), 'private, max-age=86400')
+        fp, data, ctype = manga_page(MANGA['chapters'][t['chapters'][0]], 1)   # без ffmpeg і Pillow — як є
+        if fp:
+            return self.send_file(fp, ctype)
+        return self.send_bytes(data, ctype)
 
     def redirect(self, to, extra=None):
         h = {'Location': to}
@@ -2137,7 +2822,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 html = LOGIN_HTML.replace('{err}', '<p class="err">Неправильний пароль</p>')
                 return self.send_bytes(html.encode(), 'text/html; charset=utf-8', 401)
             if not self.authed():
-                if path.startswith(('/api/', '/stream/', '/thumb/', '/live/', '/dlfile/')):
+                if path.startswith(('/api/', '/stream/', '/thumb/', '/live/', '/dlfile/', '/manga/', '/anime/')):
                     return self.send_json({'error': 'auth'}, 401)
                 return self.redirect('/login')
 
@@ -2203,6 +2888,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 m = re.fullmatch(r'/anime/cover/(\w+)', path)
                 if m:
                     return self.send_anime_cover(m.group(1))
+                if path == '/api/manga':
+                    return self.send_json(manga_list_json())
+                m = re.fullmatch(r'/api/manga/(t|ch)/(\w+)', path)
+                if m:
+                    d = (manga_title_json if m.group(1) == 't' else manga_chapter_json)(m.group(2))
+                    return self.send_json(d or {'error': 'not found'}, 200 if d else 404)
+                m = re.fullmatch(r'/manga/cover/(\w+)', path)
+                if m:
+                    return self.send_manga_cover(m.group(1))
+                m = re.fullmatch(r'/manga/page/(\w+)/(\d{1,5})', path)
+                if m:
+                    c = MANGA['chapters'].get(m.group(1))
+                    n = int(m.group(2))
+                    if not c or not 1 <= n <= len(c['pages']):
+                        return self.send_json({'error': 'not found'}, 404)
+                    fp, data, ctype = manga_page(c, n)
+                    if fp:
+                        return self.send_file(fp, ctype, 'private, max-age=604800')
+                    return self.send_bytes(data, ctype, cache='private, max-age=604800')
                 if path == '/api/fs':
                     return self.send_json(list_dirs(qs.get('path', [''])[0]))
                 return self.send_web(path)
@@ -2249,6 +2953,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     DB.x('UPDATE videos SET vote=? WHERE id=?', (vote, vid))
                     DB.bump()
                     return self.send_json(dict(ok=True, **video_stats(vid)))
+                if path == '/api/manga/progress':
+                    return self.send_json(manga_save_progress(self.json_body()))
+                if path == '/api/manga/mark':
+                    return self.send_json(manga_mark(self.json_body()))
+                if path == '/api/manga/mode':
+                    d = self.json_body()
+                    if d.get('mode') not in MANGA_MODES or d.get('tid') not in MANGA['titles']:
+                        return self.send_json({'ok': False}, 400)
+                    manga_set(d['tid'], mode=d['mode'])
+                    return self.send_json({'ok': True})
+                if path == '/api/manga/link':
+                    return self.send_json(manga_link(self.json_body()))
+                if path == '/api/manga/rescan':
+                    manga_scan()
+                    return self.send_json({'ok': True, 'titles': len(MANGA['titles'])})
                 if path == '/api/week/refresh':
                     return self.send_json(get_week(force=True))
                 if path == '/api/rescan':
