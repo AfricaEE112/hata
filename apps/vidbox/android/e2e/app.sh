@@ -89,6 +89,19 @@ tap_text "Дивитися з першої"; sleep 3
 dismiss_hint; sleep 4
 shot 09d-anime-player
 adb shell input keyevent 4; sleep 2
+# ── манга ──
+open_route manga; sleep 3
+shot 09g-manga
+TID=$(python3 -c "import json;print([t['tid'] for t in json.load(open('/tmp/manga.json'))['titles'] if t['title']=='Steel Rain'][0])")
+open_route "manga/$TID"; sleep 3
+shot 09h-manga-title
+tap_text "Почати читати"; sleep 4
+shot 09i-reader
+adb shell input swipe 200 1000 900 1000 250; sleep 2      # справа наліво: свайп праворуч — далі
+shot 09j-reader-next
+adb shell input keyevent 25; sleep 2                       # гучність тихіше — теж далі
+adb shell input keyevent 4; sleep 2
+curl -s "localhost:8800/api/manga" | python3 -c "import json,sys; t=[x for x in json.load(sys.stdin)['titles'] if x['title']=='Steel Rain'][0]; print('manga progress:', t['cont'])" >> "$OUT/NOTES.txt"
 # ── завантаження на телефон ──
 open_route "i/$(id_of 'Захід сонця')"; sleep 3
 dismiss_anr; sleep 1

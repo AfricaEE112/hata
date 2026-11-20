@@ -75,6 +75,15 @@ class Api(private val prefs: Prefs) {
     fun dlFileUrl(id: String, h: Int) = url("/dlfile/$id?h=$h")
     suspend fun anime() = parseAnimeList(get("/api/anime"))
     suspend fun animeTitle(sid: String) = parseAnimeTitle(get("/api/anime/$sid"))
+    suspend fun manga() = parseMangaList(get("/api/manga"))
+    suspend fun mangaTitle(tid: String) = parseMangaTitle(get("/api/manga/t/$tid"))
+    suspend fun mangaChapter(cid: String) = parseMangaRead(get("/api/manga/ch/$cid"))
+    suspend fun mangaProgress(cid: String, page: Int, done: Boolean) =
+        post("/api/manga/progress", JSONObject().put("cid", cid).put("page", page).put("done", done))
+    suspend fun mangaMode(tid: String, mode: String) = post("/api/manga/mode", JSONObject().put("tid", tid).put("mode", mode))
+    suspend fun mangaMark(cids: List<String>, read: Boolean) =
+        post("/api/manga/mark", JSONObject().put("cids", org.json.JSONArray(cids)).put("read", read))
+    fun pageUrl(cid: String, n: Int) = url("/manga/page/$cid/$n")
     suspend fun prepare(id: String, force: Boolean) = parsePrep(post("/api/prepare/$id" + if (force) "?mode=h264" else ""))
     suspend fun prepareStatus(id: String) = parsePrep(get("/api/prepare/$id"))
     suspend fun requestSprite(id: String): Long = post("/api/sprite/$id").optLong("sprite")

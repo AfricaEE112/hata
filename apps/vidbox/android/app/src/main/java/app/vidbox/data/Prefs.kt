@@ -21,6 +21,15 @@ class Prefs(ctx: Context) {
     var theme: String
         get() = str("theme", "arch")
         set(v) = put("theme", v)
+    /** Схема, вибрана зараз у панелі Хати (для теми «Як у Хаті»). */
+    var hataTheme: String
+        get() = str("hata_theme")
+        set(v) = put("hata_theme", v)
+
+    /** Фільтр бібліотеки манги: all, reading, new, done, none. */
+    var mangaFilter: String
+        get() = str("manga_filter", "all")
+        set(v) = put("manga_filter", v)
 
     /** Якість відео: auto, orig, 1080, 720, 480. */
     var quality: String

@@ -29,6 +29,10 @@ data class Pal(
     val acc: Color,
     val acc2: Color,
     val on: Color,
+    /** Світла тема (Папір): інша схема Material і темні значки в рядку стану. */
+    val light: Boolean = false,
+    /** Схема з панелі Хати. */
+    val hata: Boolean = false,
 )
 
 private fun c(hex: Long) = Color(0xFF000000 or hex)
@@ -44,9 +48,20 @@ val PALS = listOf(
     Pal("sweet", "Sweet", "Неоновий рожевий і бірюза", c(0x100e1a), c(0x1a1729), c(0x272239), c(0x3a3354), c(0xf5f1ff), c(0xa69fc6), c(0xff4fd8), c(0x38d9f5), c(0x24061f)),
     Pal("exodia", "Exodia", "Фіолетовий з кислотно-зеленим", c(0x09060f), c(0x130e1e), c(0x1e162f), c(0x30254a), c(0xefe9ff), c(0xa395c8), c(0xb56bff), c(0x46f59a), c(0x14061f)),
     Pal("projector", "Проєктор", "Тепле бурштинове світло", c(0x0f1420), c(0x161d2b), c(0x1f2839), c(0x2c3649), c(0xede6d8), c(0x8f99aa), c(0xf2b544), c(0xff7a59), c(0x1c1508)),
+    // схеми панелі Хати
+    Pal("chai", "Чай", "Теплий темний з м’ятним", c(0x161511), c(0x1d1b16), c(0x28251e), c(0x4d473d), c(0xece4d2), c(0xa39a86), c(0x7cc6b1), c(0xe3c16f), c(0x14130f), hata = true),
+    Pal("nich", "Ніч", "Глибокий синій", c(0x181825), c(0x1e1e2e), c(0x313244), c(0x45475a), c(0xcdd6f4), c(0xa6adc8), c(0x89b4fa), c(0xcba6f7), c(0x11111b), hata = true),
+    Pal("lain", "lain", "Холодний сірий", c(0x16181e), c(0x1c1e25), c(0x272a33), c(0x4a5062), c(0xdfe3ee), c(0x9aa1b4), c(0xb4c3f0), c(0xe8a0b4), c(0x161820), hata = true),
+    Pal("yahoda", "Ягода", "Ягідний з рожевим", c(0x220c1b), c(0x2a1022), c(0x3a1630), c(0x6b2f5a), c(0xf6dcec), c(0xc99bb8), c(0xf4a6d7), c(0xc9a4f5), c(0x2a1022), hata = true),
+    Pal("nothing", "nothing", "Чорний і білий з червоним", c(0x000000), c(0x0a0a0a), c(0x161616), c(0x3a3a3a), c(0xf2f2f2), c(0xa3a3a3), c(0xf2f2f2), c(0xe8352f), c(0x000000), hata = true),
+    Pal("papir", "Папір", "Світла, як папір", c(0xe9e1cf), c(0xf3ecdc), c(0xe0d6c0), c(0xb9ad95), c(0x2a261f), c(0x655b4b), c(0x2f7d6d), c(0x946a0c), c(0xf6f1e5), light = true, hata = true),
 )
 
-fun pal(id: String) = PALS.firstOrNull { it.id == id } ?: PALS[0]
+/** id «hata» — тема йде за схемою, вибраною в панелі Хати (сервер каже, яка вона зараз). */
+fun pal(id: String, hata: String? = null): Pal {
+    val real = if (id == "hata") hata ?: "chai" else id
+    return PALS.firstOrNull { it.id == real } ?: PALS[0]
+}
 
 val LocalPal = staticCompositionLocalOf { PALS[0] }
 
@@ -75,7 +90,13 @@ fun body(size: TextUnit = 15.sp, weight: FontWeight = FontWeight.Normal) =
 
 @Composable
 fun VidBoxTheme(p: Pal, content: @Composable () -> Unit) {
-    val scheme = darkColorScheme(
+    val scheme = if (p.light) androidx.compose.material3.lightColorScheme(
+        primary = p.acc, onPrimary = p.on, secondary = p.acc2, onSecondary = p.on,
+        background = p.bg, onBackground = p.fg, surface = p.bg2, onSurface = p.fg,
+        surfaceVariant = p.bg3, onSurfaceVariant = p.mute, outline = p.line, outlineVariant = p.line,
+        surfaceContainer = p.bg2, surfaceContainerHigh = p.bg3, surfaceContainerHighest = p.bg3,
+        surfaceContainerLow = p.bg2, surfaceContainerLowest = p.bg,
+    ) else darkColorScheme(
         primary = p.acc, onPrimary = p.on, secondary = p.acc2, onSecondary = p.on,
         background = p.bg, onBackground = p.fg, surface = p.bg2, onSurface = p.fg,
         surfaceVariant = p.bg3, onSurfaceVariant = p.mute, outline = p.line, outlineVariant = p.line,

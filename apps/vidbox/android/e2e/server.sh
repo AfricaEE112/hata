@@ -21,7 +21,15 @@ for n in 01 02 10; do
   gen -f lavfi -i "testsrc2=s=1280x720:r=24" -f lavfi -i "sine=f=500:r=44100" -t 10 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest "$A/[SubsPlease] Sousou no Frieren - $n (1080p).mkv"
 done
 gen -f lavfi -i "smptebars=s=1280x720:r=24" -f lavfi -i "sine=f=300:r=44100" -t 10 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest "$HOME/anime/Cowboy Bebop/Cowboy Bebop - 01 - Asteroid Blues.mp4"
-ls -laR "$V" "$HOME/anime"
+# манга: тайтл з розділами-теками і тайтл-«книжка» (сторінки прямо в теці)
+M="$HOME/manga"
+for ch in 1 2; do
+  mkdir -p "$M/Steel Rain/Chapter 00$ch"
+  for pg in 1 2 3 4; do gen -f lavfi -i "testsrc2=s=900x1300" -frames:v 1 "$M/Steel Rain/Chapter 00$ch/$pg.jpg"; done
+done
+mkdir -p "$M/Kaze no Tabibito"
+for pg in 1 2 3 4 5 6; do gen -f lavfi -i "smptebars=s=900x1300" -frames:v 1 "$M/Kaze no Tabibito/$pg.jpg"; done
+ls -laR "$V" "$HOME/anime" "$M"
 
 nohup python3 "$(dirname "$0")/../../vidbox.py" "$V" --data "$HOME/vbdata" --no-browser > /tmp/vidbox-server.log 2>&1 &
 for i in $(seq 1 60); do curl -sf localhost:8800/api/hello && break; sleep 1; done
@@ -29,6 +37,9 @@ echo
 curl -sf -XPOST localhost:8800/api/settings -d "{\"anime_folder\": \"$HOME/anime\"}"; echo
 sleep 3
 curl -sf localhost:8800/api/anime > /tmp/anime.json; cat /tmp/anime.json; echo
+curl -sf -XPOST localhost:8800/api/settings -d "{\"manga_folder\": \"$HOME/manga\"}"; echo
+sleep 2
+curl -sf localhost:8800/api/manga > /tmp/manga.json; cat /tmp/manga.json; echo
 
 # чекаємо, поки сервер прочитає файли й наріже кадри
 python3 - <<'EOF'

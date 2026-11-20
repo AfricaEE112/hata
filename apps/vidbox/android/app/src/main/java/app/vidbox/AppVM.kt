@@ -51,8 +51,12 @@ data class Player(val id: String, val startAt: Double? = null) : Route { overrid
 data object Anime : Route { override val key = "anime" }
 data object Downloads : Route { override val key = "downloads" }
 data class AnimeShow(val sid: String) : Route { override val key = "anime/$sid" }
+data object Manga : Route { override val key = "manga" }
+data class MangaShow(val tid: String) : Route { override val key = "manga/$tid" }
+/** Читалка на весь екран; page = з якої сторінки (null — де зупинився). */
+data class Reader(val cid: String, val page: Int? = null) : Route { override val key = "r/$cid" }
 
-val TABS = listOf(Home, Lib, Anime, Playlists, Top, Settings)
+val TABS = listOf(Home, Lib, Anime, Manga, Playlists, Top, Settings)
 
 class Nav {
     val stack = mutableStateListOf<Route>(Home)
@@ -110,6 +114,9 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     var ui by mutableStateOf(Ui())
         private set
     var themeId by mutableStateOf(prefs.theme)
+        private set
+    /** Схема в панелі Хати; null — VidBox працює не під Хатою. */
+    var hataTheme by mutableStateOf(prefs.hataTheme.ifEmpty { null })
         private set
     var queue by mutableStateOf<Queue?>(null)
     /** Кнопки (контролер Quest, пульт, клавіатура) для плеєра. */
@@ -229,6 +236,10 @@ class AppVM(app: Application) : AndroidViewModel(app) {
             if (!uiFromServer) {   // сортування беремо з ПК лише раз — далі воно наше, локальне
                 ui = l.cfg.ui
                 uiFromServer = true
+            }
+            if (l.cfg.hataTheme != hataTheme) {
+                hataTheme = l.cfg.hataTheme
+                prefs.hataTheme = l.cfg.hataTheme ?: ""
             }
             if (System.currentTimeMillis() - themeSetAt > 10_000 && l.cfg.theme != themeId) {
                 themeId = l.cfg.theme
@@ -425,6 +436,46 @@ class AppVM(app: Application) : AndroidViewModel(app) {
             t.eps.forEach { animeEps[it.v.id] = it.v }
             animeShows[sid] = t
         }
+    }
+
+    // ── манга ──
+    var mangaList by mutableStateOf<app.vidbox.data.MangaList?>(null)
+    val mangaShows = mutableStateMapOf<String, app.vidbox.data.MangaTitle>()
+    var mangaFilter by mutableStateOf(prefs.mangaFilter)
+    var mangaNewest by mutableStateOf(false)
+
+    fun loadManga() = viewModelScope.launch {
+        runCatching { api.manga() }.onSuccess { mangaList = it }.onFailure { if (it is AuthException) nav.go(Connect) }
+    }
+
+    fun loadMangaShow(tid: String) = viewModelScope.launch {
+        runCatching { api.mangaTitle(tid) }.onSuccess { mangaShows[tid] = it }
+    }
+
+    private var mangaSave: Job? = null
+
+    /** Де зупинився в читалці → на ПК. Гортання підряд зберігається раз, після паузи. */
+    fun mangaRead(cid: String, page: Int, done: Boolean, now: Boolean = false) {
+        mangaSave?.cancel()
+        mangaSave = viewModelScope.launch {
+            if (!now) delay(800)
+            runCatching { api.mangaProgress(cid, page, done) }
+        }
+    }
+
+    fun setMangaFilter(f: String) {
+        mangaFilter = f
+        prefs.mangaFilter = f
+    }
+
+    fun setMangaMode(tid: String, mode: String) {
+        mangaShows[tid]?.let { mangaShows[tid] = it.copy(mode = mode) }
+        viewModelScope.launch { runCatching { api.mangaMode(tid, mode) } }
+    }
+
+    fun markManga(tid: String, cids: List<String>, read: Boolean) = viewModelScope.launch {
+        runCatching { api.mangaMark(cids, read) }
+        loadMangaShow(tid)
     }
 
     fun playAnime(t: AnimeTitle, id: String) {

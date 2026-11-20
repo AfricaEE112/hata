@@ -66,6 +66,7 @@ data class Cfg(
     val resume: Boolean = true,
     val ui: Ui = Ui(),
     val theme: String = "arch",
+    val hataTheme: String? = null,
 )
 
 data class Library(
@@ -168,6 +169,7 @@ fun parseLibrary(o: JSONObject): Library {
             resume = c.optBoolean("resume", true),
             ui = parseUi(c.optJSONObject("ui")),
             theme = c.optString("theme", "arch"),
+            hataTheme = if (c.isNull("hataTheme")) null else c.optString("hataTheme").ifEmpty { null },
         ),
     )
 }

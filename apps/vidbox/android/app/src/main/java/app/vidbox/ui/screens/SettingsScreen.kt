@@ -52,6 +52,7 @@ import app.vidbox.ui.Ic
 import app.vidbox.ui.Kind
 import app.vidbox.ui.LocalPal
 import app.vidbox.ui.PALS
+import app.vidbox.ui.pal
 import app.vidbox.ui.PAD
 import app.vidbox.ui.PageTitle
 import app.vidbox.ui.PromptLine
@@ -100,23 +101,34 @@ fun SettingsScreen(vm: AppVM) {
             Win("~/.config/vidbox/", w, bold = "theme") {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Спільна з сайтом: зміниш тут — зміниться і в браузері.", style = body(13.sp), color = p.mute, modifier = Modifier.padding(horizontal = 4.dp))
-                    PALS.chunked(2).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            row.forEach { t ->
-                                val on = t.id == vm.themeId
-                                Row(
-                                    Modifier.weight(1f).clip(RoundedCornerShape(9.dp)).background(t.bg2)
-                                        .border(if (on) 2.dp else 1.dp, if (on) t.acc else p.line, RoundedCornerShape(9.dp))
-                                        .clickable { vm.setTheme(t.id) }.padding(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Box(Modifier.size(14.dp).clip(CircleShape).background(t.acc))
-                                    Box(Modifier.padding(start = 4.dp).size(14.dp).clip(CircleShape).background(t.acc2))
-                                    Spacer(Modifier.width(9.dp))
-                                    Text(t.name, style = mono(12.5.sp, if (on) FontWeight.Bold else FontWeight.Normal), color = t.fg, maxLines = 1)
+                    // «Як у Хаті» — лише коли VidBox працює під Хатою
+                    val hataNow = vm.hataTheme
+                    val options = PALS.filter { !it.hata }.map { it.id to it } +
+                        listOf("" to null) +
+                        (if (hataNow != null) listOf("hata" to pal("hata", hataNow)) else emptyList()) +
+                        PALS.filter { it.hata }.map { it.id to it }
+                    val groups = options.indexOfFirst { it.first == "" }.let { listOf(options.take(it), options.drop(it + 1)) }
+                    groups.forEachIndexed { gi, list ->
+                        if (gi == 1) Text("Схеми Хати", style = body(13.sp, FontWeight.SemiBold), color = p.mute, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
+                        list.chunked(2).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                row.forEach { (id, t) ->
+                                    t!!
+                                    val on = id == vm.themeId
+                                    Row(
+                                        Modifier.weight(1f).clip(RoundedCornerShape(9.dp)).background(t.bg2)
+                                            .border(if (on) 2.dp else 1.dp, if (on) t.acc else p.line, RoundedCornerShape(9.dp))
+                                            .clickable { vm.setTheme(id) }.padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(Modifier.size(14.dp).clip(CircleShape).background(t.acc))
+                                        Box(Modifier.padding(start = 4.dp).size(14.dp).clip(CircleShape).background(t.acc2))
+                                        Spacer(Modifier.width(9.dp))
+                                        Text(if (id == "hata") "Як у Хаті" else t.name, style = mono(12.5.sp, if (on) FontWeight.Bold else FontWeight.Normal), color = t.fg, maxLines = 1)
+                                    }
                                 }
+                                if (row.size < 2) Spacer(Modifier.weight(1f))
                             }
-                            if (row.size < 2) Spacer(Modifier.weight(1f))
                         }
                     }
                 }

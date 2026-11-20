@@ -227,6 +227,7 @@ def write_vidbox(folders, anime):
     vb['folders'] = folders
     vb['anime_folder'] = anime or ''
     vb['open_browser'] = False
+    vb.setdefault('theme', 'hata')      # VidBox під Хатою — у кольорах панелі
     vb['secret'] = CONF['secret']
     vb['password_hash'] = CONF['password_hash']
     with open(p + '.tmp', 'w', encoding='utf-8') as f:

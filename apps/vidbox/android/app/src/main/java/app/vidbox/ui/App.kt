@@ -69,10 +69,23 @@ import app.vidbox.ui.screens.TopScreen
 import app.vidbox.ui.screens.AnimeScreen
 import app.vidbox.ui.screens.DownloadsScreen
 import app.vidbox.ui.screens.AnimeShowScreen
+import app.vidbox.ui.screens.MangaScreen
+import app.vidbox.ui.screens.MangaShowScreen
+import app.vidbox.ui.screens.ReaderScreen
+import app.vidbox.Manga
+import app.vidbox.MangaShow
+import app.vidbox.Reader
 
 @Composable
 fun App(vm: AppVM, activity: MainActivity) {
-    VidBoxTheme(pal(vm.themeId)) {
+    val theme = pal(vm.themeId, vm.hataTheme)
+    androidx.compose.runtime.LaunchedEffect(theme.light) {    // світла тема — темні значки в рядку стану
+        androidx.core.view.WindowCompat.getInsetsController(activity.window, activity.window.decorView).apply {
+            isAppearanceLightStatusBars = theme.light
+            isAppearanceLightNavigationBars = theme.light
+        }
+    }
+    VidBoxTheme(theme) {
         CompositionLocalProvider(LocalVM provides vm) {
             val p = LocalPal.current
             val top = vm.nav.top
@@ -81,6 +94,7 @@ fun App(vm: AppVM, activity: MainActivity) {
                 when (top) {
                     is Connect -> ConnectScreen(vm)
                     is Player -> key(top.key) { PlayerScreen(vm, top, activity) }
+                    is Reader -> key(top.key) { ReaderScreen(vm, top, activity) }
                     else -> Shell(vm, top)
                 }
                 if (!vm.pip) ToastHost(vm)
@@ -111,6 +125,8 @@ private fun Shell(vm: AppVM, top: Route) {
                     is Anime -> AnimeScreen(vm)
                     is Downloads -> DownloadsScreen(vm)
                     is AnimeShow -> AnimeShowScreen(vm, r.sid)
+                    is Manga -> MangaScreen(vm)
+                    is MangaShow -> MangaShowScreen(vm, r.tid)
                     is Settings -> SettingsScreen(vm)
                     is Info -> InfoScreen(vm, r)
                     else -> {}
@@ -174,6 +190,7 @@ private fun Dock(vm: AppVM) {
                 Icon(Ic.dice, "Випадкове відео", tint = p.on, modifier = Modifier.size(27.dp))
             }
             DockItem("Аніме", Ic.anime, tab == Anime) { vm.nav.go(Anime) }
+            DockItem("Манга", Ic.book, tab == Manga) { vm.nav.go(Manga) }
             DockItem("Плейлисти", Ic.list, tab == Playlists) { vm.nav.go(Playlists) }
         }
     }
@@ -183,7 +200,7 @@ private fun Dock(vm: AppVM) {
 private fun DockItem(label: String, icon: ImageVector, on: Boolean, onClick: () -> Unit) {
     val p = LocalPal.current
     Column(
-        Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 4.dp),
+        Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(horizontal = 3.dp, vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(icon, null, tint = if (on) p.acc else p.mute, modifier = Modifier.size(24.dp))

@@ -62,6 +62,11 @@ class MainActivity : ComponentActivity() {
                 vm.nav.go(Anime)
                 vm.nav.go(AnimeShow(parts[1]))
             } else vm.nav.go(Anime)
+            "manga" -> if (parts.size > 1) {
+                vm.nav.go(Manga)
+                vm.nav.go(MangaShow(parts[1]))
+            } else vm.nav.go(Manga)
+            "r" -> if (parts.size > 1) vm.nav.go(Reader(parts[1], parts.getOrNull(2)?.toIntOrNull()))
             "settings" -> vm.nav.go(Settings)
             "i" -> if (parts.size > 1) vm.nav.go(Info(parts[1]))
             "v" -> if (parts.size > 1) vm.nav.go(Player(parts[1]))
@@ -86,6 +91,10 @@ class MainActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         val k = event.keyCode
         if (vm.nav.top is Player && k in PLAYER_KEYS) {
+            if (event.action == android.view.KeyEvent.ACTION_DOWN) vm.keys.tryEmit(k)
+            return true
+        }
+        if (vm.nav.top is Reader && k in READER_KEYS) {     // гучність, стрілки, пробіл — гортати сторінки
             if (event.action == android.view.KeyEvent.ACTION_DOWN) vm.keys.tryEmit(k)
             return true
         }
@@ -140,4 +149,11 @@ private val PLAYER_KEYS = setOf(
     android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
     android.view.KeyEvent.KEYCODE_BUTTON_L1, android.view.KeyEvent.KEYCODE_BUTTON_R1,
     android.view.KeyEvent.KEYCODE_MEDIA_REWIND, android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+)
+
+private val READER_KEYS = setOf(
+    android.view.KeyEvent.KEYCODE_VOLUME_UP, android.view.KeyEvent.KEYCODE_VOLUME_DOWN,
+    android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+    android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+    android.view.KeyEvent.KEYCODE_PAGE_UP, android.view.KeyEvent.KEYCODE_PAGE_DOWN, android.view.KeyEvent.KEYCODE_SPACE,
 )

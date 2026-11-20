@@ -114,7 +114,8 @@ async function load() {
     const localUi = S.cfg.ui;
     S.cfg = d.cfg;
     if (localUi && Date.now() - uiSavedAt < 5000) S.cfg.ui = localUi;   // щойно змінене сортування не перетираємо
-    if (d.cfg.theme && d.cfg.theme !== document.documentElement.dataset.theme) applyTheme(d.cfg.theme);
+    if (d.cfg.hataTheme) { S.hataTheme = d.cfg.hataTheme; LS.set('hataTheme', d.cfg.hataTheme); }
+    if (d.cfg.theme && (d.cfg.theme !== S.themeSel || realTheme(d.cfg.theme) !== document.documentElement.dataset.theme)) applyTheme(d.cfg.theme);
   }
 }
 let toastT;
@@ -140,11 +141,23 @@ const THEMES = [
   {id: 'sweet', name: 'Sweet', hint: 'Неоновий рожевий і бірюза', bg: '#100e1a', p: '#1a1729', a: '#ff4fd8', a2: '#38d9f5'},
   {id: 'exodia', name: 'Exodia', hint: 'Фіолетовий з кислотно-зеленим', bg: '#09060f', p: '#130e1e', a: '#b56bff', a2: '#46f59a'},
   {id: 'projector', name: 'Проєктор', hint: 'Тепле бурштинове світло', bg: '#0f1420', p: '#161d2b', a: '#f2b544', a2: '#ff7a59'},
+  // схеми панелі Хати
+  {id: 'chai', name: 'Чай', hint: 'Хата: теплий темний з м’ятним', bg: '#161511', p: '#1d1b16', a: '#7cc6b1', a2: '#e3c16f', hata: 1},
+  {id: 'nich', name: 'Ніч', hint: 'Хата: глибокий синій', bg: '#181825', p: '#1e1e2e', a: '#89b4fa', a2: '#cba6f7', hata: 1},
+  {id: 'lain', name: 'lain', hint: 'Хата: холодний сірий, як у Lain', bg: '#16181e', p: '#1c1e25', a: '#b4c3f0', a2: '#e8a0b4', hata: 1},
+  {id: 'yahoda', name: 'Ягода', hint: 'Хата: ягідний з рожевим', bg: '#220c1b', p: '#2a1022', a: '#f4a6d7', a2: '#c9a4f5', hata: 1},
+  {id: 'nothing', name: 'nothing', hint: 'Хата: чорний і білий з червоним', bg: '#000000', p: '#0a0a0a', a: '#f2f2f2', a2: '#e8352f', hata: 1},
+  {id: 'papir', name: 'Папір', hint: 'Хата: світла, як папір', bg: '#e9e1cf', p: '#f3ecdc', a: '#2f7d6d', a2: '#946a0c', hata: 1},
 ];
+// «Як у Хаті»: тема йде за схемою, вибраною в панелі Хати (сервер підказує, яка вона зараз)
+const realTheme = id => id === 'hata' ? (S.hataTheme || LS.get('hataTheme', 'chai')) : id;
 function applyTheme(id) {
-  const t = THEMES.find(x => x.id === id) || THEMES[0];
+  S.themeSel = id;
+  const t = THEMES.find(x => x.id === realTheme(id)) || THEMES[0];
   document.documentElement.dataset.theme = t.id;
   LS.set('theme', t.id);
+  const mc = $('meta[name=color-scheme]');
+  if (mc) mc.content = t.id === 'papir' ? 'light' : 'dark';
   const m = $('meta[name=theme-color]');
   if (m) m.content = t.bg;
   const fav = $('#favicon');   // значок вкладки «▶_» у кольорах теми
@@ -765,8 +778,14 @@ async function renderSettings() {
   <div class="settings">
   <section class="set win">${winBar('~/.config/vidbox/тема')}<div class="win-body"><h2>Тема</h2>
     <p class="note" style="margin-top:0">Кольори всього сайту. Зберігається на ПК, тож тема однакова на всіх пристроях.</p>
-    <div class="themes">${THEMES.map(t => `<button class="theme${st.theme === t.id ? ' on' : ''}" data-theme-pick="${t.id}" aria-pressed="${st.theme === t.id}" ` +
-      `style="--t-bg:${t.bg};--t-p:${t.p};--t-a:${t.a};--t-a2:${t.a2}"><span class="tp"><i></i><i></i><i></i></span><b>${t.name}</b><small>${t.hint}</small></button>`).join('')}</div>
+    ${(() => {
+      const card = (t, id, name, hint) => `<button class="theme${st.theme === id ? ' on' : ''}" data-theme-pick="${id}" aria-pressed="${st.theme === id}" ` +
+        `style="--t-bg:${t.bg};--t-p:${t.p};--t-a:${t.a};--t-a2:${t.a2}"><span class="tp"><i></i><i></i><i></i></span><b>${name}</b><small>${hint}</small></button>`;
+      const now = THEMES.find(t => t.id === (st.hataTheme || 'chai'));
+      return `<div class="themes">${THEMES.filter(t => !t.hata).map(t => card(t, t.id, t.name, t.hint)).join('')}</div>
+        <h3 class="themes-h">Схеми Хати</h3>
+        <div class="themes">${st.hataTheme ? card(now, 'hata', 'Як у Хаті', `Зараз «${esc(now.name)}». Змінюєш схему в панелі — VidBox теж`) : ''}${THEMES.filter(t => t.hata).map(t => card(t, t.id, t.name, t.hint.replace(/^Хата: /, ''))).join('')}</div>`;
+    })()}
     ${row('Оптимізована версія', 'Для слабких чи старих комп’ютерів: без розмиття, світіння й анімацій, без кадрів при наведенні на картку, обкладинки вантажаться заздалегідь. Діє лише на цьому пристрої.', `<label class="sw"><input type="checkbox" id="litesw"${isLite() ? ' checked' : ''}><i></i></label>`)}
   </div></section>
   <section class="set win">${winBar('~/.config/vidbox/папки')}<div class="win-body"><h2>Папки з відео</h2>

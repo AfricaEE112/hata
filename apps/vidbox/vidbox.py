@@ -2314,7 +2314,8 @@ def library_json():
     return {'videos': vids, 'folders': folders, 'ffmpeg': bool(C.ffmpeg), 'pending': pending,
             'spritesPending': sprites if C.cfg.get('sprites', True) else 0, 'spriteN': SPRITE_N,
             'weekSec': round(st['week_sec']),
-            'cfg': {k: C.cfg[k] for k in ('autoplay_next', 'next_delay', 'resume', 'ui', 'theme')}}
+            'cfg': dict({k: C.cfg[k] for k in ('autoplay_next', 'next_delay', 'resume', 'ui', 'theme')},
+                        hataTheme=hata_theme())}
 
 
 def on_ping(d):
@@ -2364,7 +2365,20 @@ DEFAULTS = {
     'hwaccel': 'auto', 'hw_frames': False, 'max_height': 1080, 'prep_all': False,
     'password_hash': '', 'secret': '', 'cfg_version': 5,
 }
-THEMES = {'arch', 'tokyo', 'catppuccin', 'dracula', 'gruvbox', 'nord', 'sweet', 'exodia', 'cinema', 'projector'}
+THEMES = {'arch', 'tokyo', 'catppuccin', 'dracula', 'gruvbox', 'nord', 'sweet', 'exodia', 'cinema', 'projector',
+          'chai', 'nich', 'lain', 'yahoda', 'nothing', 'papir', 'hata'}
+# схеми панелі Хати → теми VidBox; «hata» = брати ту, що зараз вибрана в Хаті
+HATA_SCHEMES = {'чай': 'chai', 'ніч': 'nich', 'lain': 'lain', 'ягода': 'yahoda', 'nothing': 'nothing', 'папір': 'papir'}
+
+
+def hata_theme():
+    """Яка схема зараз у панелі Хати (VidBox під Хатою читає її налаштування). None — Хати немає."""
+    p = os.environ.get('HATA_CONFIG') or os.path.join(os.path.dirname(os.path.abspath(C.data)), 'hata.json')
+    try:
+        with open(p, encoding='utf-8') as f:
+            return HATA_SCHEMES.get(json.load(f).get('scheme') or 'чай', 'chai')
+    except (OSError, ValueError):
+        return None
 HWACCEL_MODES = {'auto', 'amd', 'nvidia', 'intel', 'vaapi', 'off'}
 STARTED = time.time()
 _ffmpeg_ver = []
@@ -2592,7 +2606,7 @@ def settings_json():
     # для блоку «Про програму» у стилі neofetch
     t = DB.one('SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS size, COALESCE(SUM(duration), 0) AS dur '
                'FROM videos WHERE missing=0')
-    out.update(host=socket.gethostname(), uptime=round(time.time() - STARTED),
+    out.update(host=socket.gethostname(), uptime=round(time.time() - STARTED), hataTheme=hata_theme(),
                totals={'videos': t['n'], 'size': t['size'], 'dur': t['dur']},
                python=platform.python_version(), os='%s %s' % (platform.system(), platform.release()),
                ffmpegVersion=ffmpeg_version())
