@@ -489,6 +489,16 @@ def wifi_link(iface):
     return {'ssid': iw_text(ssid.group(1)) if ssid else None, 'signal': int(sig.group(1)) if sig else None}
 
 
+def wifi_keep_awake():
+    """Енергозбереження Wi-Fi на Linux часто ріже швидкість і затримку — серверу воно не потрібне.
+    Вмикається знову після кожного перепідключення, тож перевіряємо раз на хвилину."""
+    while True:
+        iface = wifi_iface()
+        if iface and shutil.which('iw') and 'on' in run(['iw', 'dev', iface, 'get', 'power_save'], 10).stdout:
+            run(['iw', 'dev', iface, 'set', 'power_save', 'off'], 10)
+        time.sleep(60)
+
+
 def do_wifi(a):
     op = a.get('op') or 'status'
     iface = wifi_iface()
@@ -603,6 +613,7 @@ def serve():
     st = load_state()
     if st.get('battery_limit'):
         apply_battery_limit(st['battery_limit'])
+    threading.Thread(target=wifi_keep_awake, daemon=True).start()
     srv = Server(SOCK, Handler)
     gid = USER_IDS()[1]
     os.chown(SOCK, 0, gid)

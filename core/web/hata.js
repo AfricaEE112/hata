@@ -410,7 +410,8 @@ async function netInfo() {
     if (i.kind === 'wifi' && w.ssid) bits.splice(1, 0, `«${esc(w.ssid)}» ${sigPct(w.signal)}%`);
     if (i.speed) bits.push(mbit(i.speed));
     if (i.usb) bits.push(i.usb >= 5000 ? 'USB 3' : i.usb >= 480 ? 'USB 2.0' : 'USB 1.1');
-    const warn = i.speed && i.speed <= 10 ? 'Лінк лише 10 Мбіт/с — заміни кабель або спробуй інший порт роутера/доку.'
+    const warn = i.kind === 'wifi' && w.ssid && w.signal <= -72 ? `Слабкий сигнал (${w.signal} дБм) — Wi-Fi буде повільним. Постав ноутбук ближче до роутера або спробуй мережу 2,4 ГГц: вона пробиває стіни краще.`
+      : i.speed && i.speed <= 10 ? 'Лінк лише 10 Мбіт/с — заміни кабель або спробуй інший порт роутера/доку.'
       : i.usb && i.usb < 480 ? 'Пристрій працює як USB 1.1 (12 Мбіт/с) — переткни в інший порт або заміни кабель.' : '';
     return `<div class="row"><div class="l"><b><span class="okdot ${i.up ? '' : 'off'}"></span>${KIND[i.kind]}</b><small>${bits.join(' · ')}</small>` +
       (warn ? `<small style="display:block;color:var(--yel)">${warn}</small>` : '') + `</div><div class="r">` +
