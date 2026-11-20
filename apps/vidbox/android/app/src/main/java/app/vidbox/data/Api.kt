@@ -83,6 +83,7 @@ class Api(private val prefs: Prefs) {
     suspend fun mangaMode(tid: String, mode: String) = post("/api/manga/mode", JSONObject().put("tid", tid).put("mode", mode))
     suspend fun mangaMark(cids: List<String>, read: Boolean) =
         post("/api/manga/mark", JSONObject().put("cids", org.json.JSONArray(cids)).put("read", read))
+    suspend fun mangaReset(tid: String) = post("/api/manga/reset", JSONObject().put("tid", tid))
     fun pageUrl(cid: String, n: Int) = url("/manga/page/$cid/$n")
     suspend fun prepare(id: String, force: Boolean) = parsePrep(post("/api/prepare/$id" + if (force) "?mode=h264" else ""))
     suspend fun prepareStatus(id: String) = parsePrep(get("/api/prepare/$id"))

@@ -808,6 +808,7 @@ async function renderSettings() {
   <section class="set win">${winBar('~/.config/vidbox/манга')}<div class="win-body"><h2>Манга</h2>
     <p class="note" style="margin-top:0">Читалка з обкладинками: кожна підпапка або архів .zip/.cbz — тайтл, картинки — сторінки, підпапки й архіви всередині — розділи. Обкладинки й описи — з AniList, а якщо там немає — з MangaUpdates.</p>
     ${st.manga_folder ? `<div class="flist"><div class="frow">${I.folder}<div><b>${esc(st.manga_folder)}</b><small>${st.mangaExists ? `${st.mangaTitles} ${plural(st.mangaTitles, 'тайтл', 'тайтли', 'тайтлів')} · ${st.mangaChapters} ${plural(st.mangaChapters, 'розділ', 'розділи', 'розділів')}` : 'Папку не знайдено. Можливо, диск від’єднано.'}</small></div>` +
+      `<button class="btn ghost" id="mangaReset" title="Скинути опис і обкладинки з інтернету для всіх тайтлів">Скинути дані</button>` +
       `<button class="btn ghost icon" id="mangaRe" title="Переглянути папку заново" aria-label="Переглянути папку з мангою заново">${I.refresh}</button><button class="btn ghost icon" id="mangaoff" title="Прибрати папку з мангою" aria-label="Прибрати папку з мангою">${I.trash}</button></div></div>`
     : `${(st.mangaSuggest || []).length ? `<div class="msug"><span>Знайшов:</span>${st.mangaSuggest.map(p => `<button class="btn" data-msug="${esc(p)}">${I.plus}${esc(p)}</button>`).join('')}</div>` : ''}
       <div class="fadd"><input id="mangaf" type="text" placeholder="Шлях до папки з мангою, наприклад /srv/disks/disk/IMG.Manga" aria-label="Шлях до папки з мангою">
@@ -879,6 +880,11 @@ async function renderSettings() {
   if ($('#mangaBrowse')) $('#mangaBrowse').onclick = () => openPicker('', path => { $('#mangaf').value = path; });
   $$('[data-msug]').forEach(b => b.onclick = () => setManga(b.dataset.msug));
   if ($('#mangaoff')) $('#mangaoff').onclick = () => { if (confirm('Прибрати папку з мангою? Розділ «Манга» стане порожнім, файли на диску лишаться, прогрес читання збережеться.')) setManga(''); };
+  if ($('#mangaReset')) $('#mangaReset').onclick = async () => {
+    if (!confirm('Скинути опис, теги й обкладинки з інтернету для ВСІХ тайтлів манги? Обкладинками стануть перші сторінки, автоматично VidBox більше не шукатиме. Для окремого тайтлу пошук можна повернути на його сторінці. Прогрес читання не зміниться.')) return;
+    const r = await api('/api/manga/reset', {method: 'POST', body: JSON.stringify({all: true})});
+    toast(r.ok ? `Скинуто для ${r.n} ${plural(r.n, 'тайтлу', 'тайтлів', 'тайтлів')}` : (r.error || 'Не вдалося'));
+  };
   if ($('#mangaRe')) $('#mangaRe').onclick = async () => { const r = await api('/api/manga/rescan', {method: 'POST', body: '{}'}); toast(`Знайдено ${r.titles} ${plural(r.titles, 'тайтл', 'тайтли', 'тайтлів')}`); renderBase('/settings', true); };
   $$('[data-theme-pick]').forEach(b => b.onclick = () => {
     applyTheme(b.dataset.themePick);
@@ -1214,15 +1220,23 @@ async function renderMangaTitle(tid) {
       <div class="mch-head"><h2>${t.vols ? 'Томи' : 'Розділи'}</h2><span class="count">${t.n}</span><span class="sp"></span>
         <button class="btn ghost" id="mflip">${MG.newest ? I.arrDown + 'нові зверху' : I.arrUp + 'з першої'}</button></div>
       <ol class="mlist" id="mlist"></ol></div></section>`}
-    <section class="msrc"><p>${t.meta ? `Дані з <a href="${esc(t.meta.url)}" target="_blank" rel="noopener">${esc(src)}</a>${t.meta.src === 'hitomi' ? ', обкладинка — своя (cover.jpg або перша сторінка)' : ''}.` : 'AniList і MangaUpdates цей тайтл поки не знайшли, тому обкладинка — перша сторінка.'}
-      ${t.meta ? 'Не той тайтл?' : 'Знаєш, де він є?'} Встав посилання з AniList, MangaUpdates, Hitomi чи іншого сайту або точну назву.</p>
-      <div class="fadd"><input id="mlink" type="text" value="${esc(t.hint)}" placeholder="https://anilist.co/manga/…, https://hitomi.la/…, будь-яке посилання або назва" aria-label="Посилання на сторінку тайтлу або назва"><button class="btn" id="mlinkset">Шукати</button></div></section>`;
+    <section class="msrc"><p>${t.meta ? `Дані з <a href="${esc(t.meta.url)}" target="_blank" rel="noopener">${esc(src)}</a>${t.meta.src === 'hitomi' ? ', обкладинка — своя (cover.jpg або перша сторінка)' : ''}.`
+        : t.reset ? 'Дані скинуто: опису немає, обкладинка — перша сторінка, автоматично VidBox більше не шукає.' : 'AniList і MangaUpdates цей тайтл поки не знайшли, тому обкладинка — перша сторінка.'}
+      ${t.meta ? 'Не той тайтл?' : 'Знаєш, де він є?'} Встав посилання з AniList, MangaUpdates, Hitomi чи іншого сайту або точну назву${t.reset ? ' (порожнє поле — шукати автоматично, як раніше)' : ''}.</p>
+      <div class="fadd"><input id="mlink" type="text" value="${esc(t.hint)}" placeholder="https://anilist.co/manga/…, https://hitomi.la/…, будь-яке посилання або назва" aria-label="Посилання на сторінку тайтлу або назва"><button class="btn" id="mlinkset">Шукати</button></div>
+      ${t.reset ? '' : `<button class="btn ghost" id="mreset" style="margin-top:12px">${I.trash}Скинути дані</button>`}</section>`;
   $$('[data-mm]').forEach(b => b.onclick = () => {
     $$('[data-mm]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
     setMangaMode(tid, b.dataset.mm);
   });
   if ($('#mmore')) $('#mmore').onclick = e => { $('#mdesc').classList.add('open'); e.target.remove(); };
   $('#mlink').onkeydown = e => { if (e.key === 'Enter') $('#mlinkset').click(); };
+  if ($('#mreset')) $('#mreset').onclick = async () => {
+    if (!confirm('Скинути опис, теги й обкладинку з інтернету для цього тайтлу? Обкладинкою стане перша сторінка. Прогрес читання не зміниться.')) return;
+    const r = await api('/api/manga/reset', {method: 'POST', body: JSON.stringify({tid})});
+    toast(r.ok ? 'Дані скинуто' : (r.error || 'Не вдалося'));
+    renderBase(baseHash, true);
+  };
   $('#mlinkset').onclick = async () => {
     await api('/api/manga/link', {method: 'POST', body: JSON.stringify({tid, link: $('#mlink').value.trim()})});
     toast('Шукаю. Опис і обкладинка з’являться за кілька секунд');

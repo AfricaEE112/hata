@@ -886,6 +886,9 @@ def manga_title_json(tid):
                         for c in (idx['chapters'][x] for x in t['chapters'])]
     s = sets.get(tid)
     info['hint'] = (s['hint'] if s else '') or ''
+    info['reset'] = info['hint'] == RESET_HINT
+    if info['reset']:
+        info['hint'] = ''
     info['folder'] = t['top']
     return info
 
@@ -1039,8 +1042,31 @@ def manga_hint(t, s):
     return h
 
 
+RESET_HINT = '-'     # дані скинуто вручну: не шукати, обкладинка — перша сторінка
+
+
+def manga_reset(d):
+    """Скинути опис і обкладинку з інтернету: для одного тайтлу ({tid}) або для всіх ({all: true})."""
+    tids = list(MANGA['titles']) if d.get('all') else [str(d.get('tid', ''))]
+    tids = [t for t in tids if t in MANGA['titles']]
+    if not tids:
+        return {'ok': False, 'error': 'Тайтл не знайдено'}
+    for tid in tids:
+        manga_set(tid, hint=RESET_HINT)
+        for f in (tid + '.json', tid + '.jpg'):
+            try:
+                os.remove(os.path.join(manga_dir(), f))
+            except OSError:
+                pass
+        ANILIST_FAIL.pop('m:' + tid, None)
+    print('Манга: скинуто дані для %d %s' % (len(tids), 'тайтлів' if len(tids) > 1 else 'тайтлу'))
+    return {'ok': True, 'n': len(tids)}
+
+
 def manga_want(t, s, force=False):
     hint = manga_hint(t, s)
+    if hint == RESET_HINT:
+        return
     m = manga_meta(t['tid'])
     if not force and m and m.get('v') == MANGA_META_V and m.get('hint', '') == hint and \
             (m.get('id') or time.time() - m.get('at', 0) < 7 * 86400):
@@ -1239,6 +1265,9 @@ def manga_queries(title):
 
 
 def manga_fetch(tid, title, hint):
+    r = DB.one('SELECT hint FROM manga_titles WHERE tid=?', (tid,))
+    if r and r['hint'] == RESET_HINT:       # поки чекали в черзі, дані скинули
+        return
     d = manga_dir()
     os.makedirs(d, exist_ok=True)
     al = mu = web = None
@@ -3188,6 +3217,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     ANILIST_FAIL.pop(sid, None)
                     meta_queue(sid, anime_title(ser[0]), anilist_fetch, sid, ser[0])
                     return self.send_json({'ok': True})
+                if path == '/api/manga/reset':
+                    return self.send_json(manga_reset(self.json_body()))
                 if path == '/api/manga/link':
                     return self.send_json(manga_link(self.json_body()))
                 if path == '/api/manga/rescan':

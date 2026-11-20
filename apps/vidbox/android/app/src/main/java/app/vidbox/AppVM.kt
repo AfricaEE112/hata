@@ -473,6 +473,13 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { runCatching { api.mangaMode(tid, mode) } }
     }
 
+    /** Скинути опис і обкладинку з інтернету: обкладинкою стає перша сторінка. */
+    fun resetManga(tid: String) = viewModelScope.launch {
+        runCatching { api.mangaReset(tid) }.onSuccess { say("Дані скинуто") }.onFailure { say("Не вдалося: ${it.message}") }
+        loadMangaShow(tid)
+        loadManga()
+    }
+
     fun markManga(tid: String, cids: List<String>, read: Boolean) = viewModelScope.launch {
         runCatching { api.mangaMark(cids, read) }
         loadMangaShow(tid)

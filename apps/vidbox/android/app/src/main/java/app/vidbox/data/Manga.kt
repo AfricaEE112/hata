@@ -19,6 +19,8 @@ data class MangaTitle(
     val tid: String, val title: String, val n: Int, val pages: Int, val single: Boolean, val vols: Boolean,
     val read: Int, val lastAt: Double, val new: Int, val added: Double, val mode: String, val cover: String,
     val meta: MangaMeta?, val cont: MangaCont?, val chapters: List<MangaChapter> = emptyList(),
+    /** Дані скинуто вручну: обкладинка — перша сторінка, автоматично не шукаємо. */
+    val reset: Boolean = false,
 ) {
     val done get() = n > 0 && read >= n
     /** Прогрес 0…1: для книжки — сторінки, для тайтлу з розділами — розділи. */
@@ -60,6 +62,7 @@ fun parseMangaTitle(o: JSONObject): MangaTitle {
         added = o.optDouble("added", 0.0), mode = o.optString("mode", "rtl"), cover = o.optString("cover"),
         meta = parseMangaMeta(o.optJSONObject("meta"), title),
         cont = c?.let { MangaCont(it.optString("cid"), it.s("label"), it.optInt("page", 1), it.optInt("pages", 1)) },
+        reset = o.optBoolean("reset"),
         chapters = if (chs == null) emptyList() else (0 until chs.length()).map {
             val x = chs.getJSONObject(it)
             MangaChapter(x.optString("cid"), x.optString("label"), x.s("sub"), x.optInt("pages"), x.optInt("page"), x.optBoolean("done"), x.optBoolean("new"))

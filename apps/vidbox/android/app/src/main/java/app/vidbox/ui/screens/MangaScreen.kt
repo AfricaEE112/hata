@@ -183,6 +183,7 @@ fun MangaShowScreen(vm: AppVM, tid: String) {
     val p = LocalPal.current
     val t = vm.mangaShows[tid]
     var ask by remember { mutableStateOf<Pair<MangaChapter, List<String>>?>(null) }
+    var askReset by remember { mutableStateOf(false) }
     LazyColumn(state = vm.nav.list("manga/$tid"), contentPadding = PaddingValues(top = 14.dp, bottom = 28.dp), modifier = Modifier.fillMaxSize()) {
         if (t == null) {
             item { Lead("Завантажую…", Modifier.padding(horizontal = PAD)) }
@@ -225,6 +226,13 @@ fun MangaShowScreen(vm: AppVM, tid: String) {
             }
         }
         t.meta?.let { m -> item { MangaMetaBlock(m) } }
+        item {
+            Row(Modifier.padding(horizontal = PAD).padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (t.reset) "Дані скинуто: обкладинка — перша сторінка. Повернути пошук можна на сайті." else if (t.meta == null) "Опису немає, обкладинка — перша сторінка." else "",
+                    style = body(12.sp), color = p.mute, modifier = Modifier.weight(1f))
+                if (!t.reset) Chip("скинути дані") { askReset = true }
+            }
+        }
         if (!t.single) {
             item {
                 Row(Modifier.padding(horizontal = PAD).padding(top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -247,6 +255,15 @@ fun MangaShowScreen(vm: AppVM, tid: String) {
                 }
             }
         }
+    }
+    if (askReset) {
+        AlertDialog(
+            onDismissRequest = { askReset = false },
+            title = { Text("Скинути дані?") },
+            text = { Text("Опис, теги й обкладинка з інтернету зникнуть, обкладинкою стане перша сторінка. Прогрес читання не зміниться.") },
+            confirmButton = { TextButton({ vm.resetManga(tid); askReset = false }) { Text("Скинути") } },
+            dismissButton = { TextButton({ askReset = false }) { Text("Скасувати") } },
+        )
     }
     ask?.let { (ch, before) ->
         AlertDialog(
