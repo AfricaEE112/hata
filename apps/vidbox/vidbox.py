@@ -665,13 +665,21 @@ def detect_hw(verbose=True):
         if not re.search(r'\b%s\b' % enc, enc_list):
             encs[kind] = {'enc': enc, 'label': label, 'ok': False, 'err': 'немає в цій збірці ffmpeg'}
             continue
+        lp, vbr = False, True
         if kind == 'vaapi':
             cmd = [C.ffmpeg, '-hide_banner', '-v', 'error', '-vaapi_device', VAAPI_DEV, *src,
                    '-vf', 'format=nv12,hwupload', '-c:v', enc, '-f', 'null', '-']
+            ok, err = _ok(cmd)
+            if not ok:
+                # Intel з 11-го покоління (Tiger Lake і новіші) кодує H.264 лише «енергоощадним» блоком VDEnc
+                ok2, err2 = _ok(cmd[:-3] + ['-low_power', '1'] + cmd[-3:])
+                ok, lp, err = (True, True, '') if ok2 else (False, False, err)
+            if ok:   # керування бітрейтом (для перегляду на льоту); без прошивки HuC VDEnc уміє лише сталу якість
+                vbr, _ = _ok(cmd[:-3] + (['-low_power', '1'] if lp else []) + ['-b:v', '2000k', '-maxrate', '3000k'] + cmd[-3:])
         else:
             cmd = [C.ffmpeg, '-hide_banner', '-v', 'error', *src, '-pix_fmt', 'nv12', '-c:v', enc, '-f', 'null', '-']
-        ok, err = _ok(cmd)
-        encs[kind] = {'enc': enc, 'label': label, 'ok': ok, 'err': '' if ok else err}
+            ok, err = _ok(cmd)
+        encs[kind] = {'enc': enc, 'label': label, 'ok': ok, 'err': '' if ok else err, 'lp': lp, 'vbr': vbr}
     decode, zero = None, False
     if os.name == 'nt' and re.search(r'\bd3d11va\b', accels):
         sample = os.path.join(C.data, 'hwtest.mp4')
@@ -690,6 +698,20 @@ def detect_hw(verbose=True):
                 pass
     elif os.name != 'nt' and re.search(r'\bvaapi\b', accels) and os.path.exists(VAAPI_DEV):
         decode = 'vaapi'
+        if encs.get('vaapi', {}).get('ok'):
+            # Повний шлях на відеоядрі: декодування → масштабування → кодування, кадри не йдуть у процесор
+            sample = os.path.join(C.data, 'hwtest.mp4')
+            maker = 'libx264' if re.search(r'\blibx264\b', enc_list) else 'mpeg4'
+            _ok([C.ffmpeg, '-hide_banner', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=640x360:r=25:d=1',
+                 '-c:v', maker, '-pix_fmt', 'yuv420p', sample])
+            if os.path.exists(sample) and maker == 'libx264':
+                zero, _ = _ok([C.ffmpeg, '-hide_banner', '-v', 'error', '-hwaccel', 'vaapi', '-hwaccel_output_format', 'vaapi',
+                               '-vaapi_device', VAAPI_DEV, '-i', sample, '-vf', 'scale_vaapi=w=-2:h=240:format=nv12',
+                               '-c:v', 'h264_vaapi', *(['-low_power', '1'] if encs['vaapi'].get('lp') else []), '-f', 'null', '-'])
+            try:
+                os.remove(sample)
+            except OSError:
+                pass
     gpu = gpu_name()
     with HW_LOCK:
         HW.update(checked=True, gpu=gpu, encoders=encs, decode=decode, zero_copy=zero)
@@ -998,7 +1020,10 @@ def prep_worker():
             MEDIA_EVENT.set()
 
 
-def encode_args(enc, src_h, odd, target_h=None, kbps=None, gop_n=120):
+VAAPI_DECODES = {'h264', 'hevc', 'vp9', 'av1', 'mpeg2video', 'vc1', 'vp8'}   # що відеоядро Intel розпаковує саме
+
+
+def encode_args(enc, src_h, odd, target_h=None, kbps=None, gop_n=120, vcodec=None, zero=True):
     """(параметри входу, параметри відео) для кодувальника. Підібрано під RDNA2 (RX 6000) для AMF.
     target_h і kbps — для перекодування на льоту: висота кадру й межа бітрейту."""
     mh = int(target_h or C.cfg.get('max_height') or 0)
@@ -1026,9 +1051,19 @@ def encode_args(enc, src_h, odd, target_h=None, kbps=None, gop_n=120):
         vf.append('format=nv12')
         v = ['-c:v', 'h264_qsv', '-preset', 'faster', *(rate or ['-global_quality', '22']), *gop]
     elif enc == 'h264_vaapi':
-        pre = ['-vaapi_device', VAAPI_DEV]
-        vf += ['format=nv12', 'hwupload']
-        v = ['-c:v', 'h264_vaapi', *(rate or ['-qp', '22']), *gop]
+        va = (HW.get('encoders') or {}).get('vaapi', {})
+        lp = ['-low_power', '1'] if va.get('lp') else []
+        if rate and va.get('vbr') is False:
+            rate = ['-qp', '25' if (target_h or 0) <= 720 else '23']    # бітрейт не підтримується — тримаємо якість
+        gpu_dec = HW.get('decode') == 'vaapi' and vcodec in VAAPI_DECODES
+        if zero and gpu_dec and HW.get('zero_copy'):
+            # усе на відеоядрі: HEVC/AV1/10-біт розпаковує GPU, scale_vaapi зменшує й переводить у 8 біт
+            pre = ['-hwaccel', 'vaapi', '-hwaccel_output_format', 'vaapi', '-vaapi_device', VAAPI_DEV]
+            vf = ['scale_vaapi=w=-2:h=%d:format=nv12' % mh if scale else 'scale_vaapi=format=nv12']
+        else:
+            pre = (['-hwaccel', 'vaapi'] if gpu_dec else []) + ['-vaapi_device', VAAPI_DEV]
+            vf += ['format=nv12', 'hwupload']
+        v = ['-c:v', 'h264_vaapi', *lp, *(rate or ['-qp', '22']), *gop]
     else:
         vf.append('format=yuv420p')
         v = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23' if kbps else '22', *rate[2:], '-profile:v', 'high', *gop]
@@ -1079,7 +1114,9 @@ def convert(vid, st):
         plans = [('copy', [], ['-c:v', 'copy'] + (['-tag:v', 'hvc1'] if vc == 'hevc' else []))]
     else:
         enc = pick_encoder()
-        plans = [(e, *encode_args(e, info.get('height'), odd)) for e in ([enc, 'libx264'] if enc != 'libx264' else ['libx264'])]
+        plans = [(e, *encode_args(e, info.get('height'), odd, vcodec=vc)) for e in ([enc, 'libx264'] if enc != 'libx264' else ['libx264'])]
+        if enc == 'h264_vaapi' and HW.get('zero_copy'):     # якщо повний GPU-шлях не вийде — GPU лише кодує
+            plans.insert(1, (enc, *encode_args(enc, info.get('height'), odd, vcodec=vc, zero=False)))
     last_err = ''
     for enc, pre, v in plans:
         with PREP_LOCK:
@@ -1113,7 +1150,7 @@ LIVE_LOCK = threading.Lock()
 
 
 def live_cmd(r, h, t, enc):
-    pre, v = encode_args(enc, r['height'], odd_pixfmt(r['pixfmt']), target_h=h, kbps=LIVE_KBPS[h], gop_n=48)
+    pre, v = encode_args(enc, r['height'], odd_pixfmt(r['pixfmt']), target_h=h, kbps=LIVE_KBPS[h], gop_n=48, vcodec=r['vcodec'])
     ss = ['-ss', '%.3f' % t] if t > 0 else []
     return [C.ffmpeg, '-hide_banner', '-v', 'error', '-fflags', '+genpts', *pre, *ss, '-i', r['path'],
             '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-dn', *v, '-c:a', 'aac', '-b:a', '128k', '-ac', '2',

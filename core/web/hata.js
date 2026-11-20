@@ -259,7 +259,9 @@ async function stepTailscale() {
   const st = await api('/api/tailscale');
   const running = st.state === 'Running';
   const body = running
-    ? `<p><span class="okdot"></span>Підключено як <b class="link">${esc(st.name)}</b></p><p class="note">Тепер VidBox і панель доступні звідусіль, де на пристрої ввімкнено Tailscale.</p>`
+    ? `<p><span class="okdot"></span>Підключено як <b class="link">${esc(st.name)}</b></p>
+       <dl class="kv" style="margin-top:12px"><dt>панель</dt><dd class="link">http://${esc(st.name)}/</dd><dt>vidbox</dt><dd class="link">http://${esc(st.name)}:8800/</dd></dl>
+       <p class="note">Працює звідусіль, де на телефоні чи ноутбуці ввімкнено Tailscale з тим самим акаунтом. В Android-апці VidBox введи адресу <b>${esc(st.name)}</b> у «Адреса ПК» — вона працює і вдома, і поза домом.</p>`
     : st.url
       ? `<p>Відкрий посилання й увійди у свій акаунт Tailscale — і сервер з'явиться у твоїй мережі:</p><p><a class="btn primary" href="${esc(st.url)}" target="_blank" rel="noopener">Увійти в Tailscale</a></p><p class="note link">${esc(st.url)}</p><p class="note"><span class="spin"></span> Чекаю на вхід…</p>`
       : `<p>Tailscale — приватна мережа між твоїми пристроями. З ним VidBox працює не лише вдома, а й з мобільного інтернету, без відкритих портів на роутері.</p><div class="acts"><button class="btn" id="tsUp">Підключити Tailscale</button></div><div class="err" id="te" role="alert"></div>`;
@@ -373,7 +375,8 @@ async function panel(soft) {
 
   const net = `<div id="ifaces"><p class="note" style="margin:0"><span class="spin"></span></p></div>
     <dl class="kv" style="margin-top:12px"><dt>ім'я</dt><dd>${esc(s.host)}.local</dd>
-      <dt>tailscale</dt><dd>${ts.state === 'Running' ? `<span class="okdot"></span>${esc(ts.name)}` : ts.installed ? 'не підключено' : 'не встановлено'}</dd></dl>
+      <dt>tailscale</dt><dd>${ts.state === 'Running' ? `<span class="okdot"></span>${esc(ts.name)}` : ts.installed ? 'не підключено' : 'не встановлено'}</dd>
+      ${ts.state === 'Running' ? `<dt>ззовні</dt><dd class="link"><a href="http://${esc(ts.name)}:8800/">vidbox</a> · <a href="http://${esc(ts.name)}/">панель</a></dd>` : ''}</dl>
     <div class="gh"><span>трафік</span><b id="netNow">—</b></div><div class="graph net" id="netG" aria-hidden="true"></div>
     <p class="note" id="speedRes" aria-live="polite"></p>
     <div class="acts"><button class="btn" id="speed">Перевірити швидкість</button><button class="btn" id="wifiBtn">Wi-Fi</button>${ts.state === 'Running' ? '' : '<button class="btn" id="tsOn">Tailscale</button>'}</div>`;
