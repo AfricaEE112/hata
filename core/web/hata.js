@@ -344,7 +344,7 @@ async function goSection(k) {
   $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === k));
   $('#' + s[2]).scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
 }
-const vidboxUrl = s => `${location.protocol}//${location.hostname}:${s.vidbox.port}`;
+const vidboxUrl = s => location.protocol === 'https:' ? `https://${location.hostname}:8443` : `http://${location.hostname}:${s.vidbox.port}`;
 
 // Панель. soft = тихе оновлення раз на 30 с: міняємо лише блоки, де щось змінилось, без перемальовування сторінки.
 async function panel(soft) {
@@ -391,10 +391,13 @@ async function panel(soft) {
   const net = `<div id="ifaces"><p class="note" style="margin:0"><span class="spin"></span></p></div><div id="pinBox"></div>
     <dl class="kv" style="margin-top:12px"><dt>ім'я</dt><dd>${esc(s.host)}.local</dd>
       <dt>tailscale</dt><dd>${ts.state === 'Running' ? `<span class="okdot"></span>${esc(ts.name)}` : ts.installed ? 'не підключено' : 'не встановлено'}</dd>
-      ${ts.state === 'Running' ? `<dt>ззовні</dt><dd class="link"><a href="http://${esc(ts.name)}:8800/">vidbox</a> · <a href="http://${esc(ts.name)}/">панель</a></dd>` : ''}</dl>
+      ${ts.state === 'Running' ? `<dt>ззовні</dt><dd class="link">${ts.https ? `<a href="https://${esc(ts.name)}:8443/">vidbox</a> · <a href="https://${esc(ts.name)}/">панель</a>`
+        : `<a href="http://${esc(ts.name)}:8800/">vidbox</a> · <a href="http://${esc(ts.name)}/">панель</a>`}</dd>` : ''}</dl>
+      ${ts.state === 'Running' && !ts.https ? `<p class="note" id="tsHttpsNote">Щоб поставити Хату й VidBox на головний екран як апки (телефон, Mac, Windows), потрібні HTTPS-адреси.</p>` : ''}
+      ${ts.https ? `<p class="note">Апка: відкрий https-адресу → «Поділитися → На початковий екран» (iPhone), «Встановити» в меню (Android, Chrome, Edge) або «Файл → Додати в Dock» (Safari на Mac).</p>` : ''}
     <div class="gh"><span>трафік</span><b id="netNow">—</b></div><div class="graph net" id="netG" aria-hidden="true"></div>
     <p class="note" id="speedRes" aria-live="polite"></p>
-    <div class="acts"><button class="btn" id="speed">Перевірити швидкість</button><button class="btn" id="wifiBtn">Wi-Fi</button>${ts.state === 'Running' ? '' : '<button class="btn" id="tsOn">Tailscale</button>'}</div>`;
+    <div class="acts"><button class="btn" id="speed">Перевірити швидкість</button><button class="btn" id="wifiBtn">Wi-Fi</button>${ts.state === 'Running' ? (ts.https ? '' : '<button class="btn" id="tsHttps">Увімкнути HTTPS</button>') : '<button class="btn" id="tsOn">Tailscale</button>'}</div>`;
 
   const b = s.battery;
   const pwr = (b ? `<div class="gh" style="margin-top:0"><span>батарея · ${b.ac ? 'від мережі' : 'від батареї'}</span><b>${b.pct}%</b></div>${segs(b.pct, 20, 'tall')}` +
@@ -425,6 +428,14 @@ async function panel(soft) {
   };
   $('#speed').onclick = speedTest;
   if ($('#tsOn')) $('#tsOn').onclick = () => openFromPanel(4);
+  if ($('#tsHttps')) $('#tsHttps').onclick = async e => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Вмикаю…';
+    const r = await api('/api/tailscale', {op: 'https'});
+    if (r.https) { toast('Готово: адреси тепер https://'); return setTimeout(() => location.reload(), 800); }
+    b.disabled = false; b.textContent = 'Увімкнути HTTPS';
+    const n = $('#tsHttpsNote'), m = (r.error || '').match(/https:\/\/\S+/);
+    if (n) n.innerHTML = m ? `${esc(r.error.split(m[0])[0])}<a href="${esc(m[0])}" target="_blank" rel="noopener">${esc(m[0])}</a>${esc(r.error.split(m[0])[1] || '')}` : esc(r.error || 'Не вдалося');
+  };
   if (SPEED) $('#speedRes').innerHTML = SPEED;
   netInfo();
   bindUpd();

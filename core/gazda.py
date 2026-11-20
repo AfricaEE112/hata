@@ -300,8 +300,30 @@ def ts_status():
     except ValueError:
         return {'installed': True, 'state': 'NoState'}
     me = j.get('Self') or {}
+    https = False
+    if j.get('BackendState') == 'Running':
+        try:
+            sv = json.loads(run(['tailscale', 'serve', 'status', '--json'], 15).stdout or '{}')
+            https = '443' in (sv.get('TCP') or {})
+        except (ValueError, OSError, subprocess.TimeoutExpired):
+            pass
     return {'installed': True, 'state': j.get('BackendState'), 'name': (me.get('DNSName') or '').rstrip('.'),
-            'ips': me.get('TailscaleIPs') or [], 'url': TS['url'] if j.get('BackendState') != 'Running' else ''}
+            'ips': me.get('TailscaleIPs') or [], 'url': TS['url'] if j.get('BackendState') != 'Running' else '', 'https': https}
+
+
+def ts_serve(port, target):
+    """tailscale serve у фоні. Якщо в мережі Tailscale не ввімкнено HTTPS — команда чекає й друкує посилання."""
+    try:
+        r = subprocess.run(['tailscale', 'serve', '--bg', '--https=%d' % port, target], timeout=25,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        out, code = r.stdout or '', r.returncode
+    except subprocess.TimeoutExpired as e:
+        out, code = (e.stdout or b'').decode() if isinstance(e.stdout, bytes) else (e.stdout or ''), -1
+    if code:
+        m = re.search(r'https://login\.tailscale\.com/\S+', out)
+        if m:
+            raise Fail('У Tailscale треба один раз дозволити HTTPS-адреси: відкрий ' + m.group(0) + ' , натисни «Enable» і повтори.')
+        raise Fail('tailscale serve: ' + out.strip()[-300:])
 
 
 def do_tailscale(a):
@@ -332,6 +354,12 @@ def do_tailscale(a):
             if TS['url'] or ts_status().get('state') == 'Running':
                 break
             time.sleep(0.25)
+        return ts_status()
+    if op == 'https':                   # https://<ім'я>.ts.net — панель, :8443 — VidBox (для встановлення як апки)
+        if ts_status().get('state') != 'Running':
+            raise Fail('Спершу підключи Tailscale')
+        ts_serve(443, 'http://127.0.0.1:80')
+        ts_serve(8443, 'http://127.0.0.1:8800')
         return ts_status()
     if op == 'down':
         run(['tailscale', 'down'], 30)

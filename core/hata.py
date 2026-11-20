@@ -148,12 +148,14 @@ def demo_gazda(req):
     if d == 'tailscale':   # off → (up) чекає входу → (up ще раз) працює
         if req.get('op') == 'up':
             DEMO_STATE['ts'] = 'Running' if DEMO_STATE['ts'] == 'NeedsLogin' else 'NeedsLogin'
+        if req.get('op') == 'https':
+            DEMO_STATE['https'] = True
         st = DEMO_STATE['ts']
         if st == 'off':
             return {'ok': True, 'installed': False}
         run = st == 'Running'
         return {'ok': True, 'installed': True, 'state': st, 'name': 'hata.tail1234.ts.net' if run else '',
-                'ips': ['100.64.0.7'] if run else [], 'url': '' if run else 'https://login.tailscale.com/a/demo123'}
+                'ips': ['100.64.0.7'] if run else [], 'url': '' if run else 'https://login.tailscale.com/a/demo123', 'https': bool(run and DEMO_STATE.get('https'))}
     if d == 'battery_limit':
         DEMO_STATE['limit'] = req['value']
         return {'ok': True, 'limit': req['value']}
