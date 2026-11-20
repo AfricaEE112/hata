@@ -141,8 +141,8 @@ def do_disks(_):
             ours[parts[0].replace('UUID=', '')] = os.path.basename(parts[1])
     out = []
     for d in lsblk():
-        if d.get('type') in ('loop', 'rom', 'zram') or (d.get('name') or '').startswith(('loop', 'zram')):
-            continue                 # snap-пакети, CD, стиснена пам'ять — це не диски з даними
+        if d.get('type') in ('rom',) or (d.get('name') or '').startswith('zram'):
+            continue                 # CD і стиснена пам'ять — не диски з даними (snap-пакети відсіє squashfs нижче)
         model = (d.get('model') or '').strip()
         for p in (d.get('children') or [d]):
             if not p.get('fstype') or p.get('fstype') in ('swap', 'LVM2_member', 'crypto_LUKS', 'squashfs'):
