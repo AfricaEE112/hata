@@ -2377,10 +2377,20 @@ def main():
     if args.pick or not folders:
         picked = pick_folder()
         folders = [os.path.abspath(picked)] if picked else []
-    for f in folders:
-        if not os.path.isdir(f):
-            print('⚠ Папку не знайдено (пропускаю):', f)
+    managed = os.environ.get('VIDBOX_MANAGED') == 'hata'
+    wanted = list(folders)
+    missing = [f for f in folders if not os.path.isdir(f)]
+    for f in missing:
+        print('⚠ Папку не знайдено (пропускаю):', f)
     folders = [f for f in folders if os.path.isdir(f)]
+    if managed and wanted and not folders:
+        # Під Hata диск з відео міг ще не підключитись (USB, док без живлення). Не падаємо по колу,
+        # а чекаємо: Hata сама підмонтує диск, щойно він з'явиться.
+        print('Чекаю на диск з відео:', ', '.join(wanted), flush=True)
+        while not any(os.path.isdir(f) for f in wanted):
+            time.sleep(10)
+        folders = [f for f in wanted if os.path.isdir(f)]
+        missing = [f for f in wanted if f not in folders]
     if not folders:
         print('Не вибрано жодної папки з відео. Запусти так: python vidbox.py "D:\\Videos"')
         sys.exit(1)
@@ -2388,7 +2398,14 @@ def main():
     if err:
         print('⚠', err)
         sys.exit(1)
-    C.cfg['folders'] = folders
+    if managed and missing:
+        def wait_missing():   # з'явилась пропущена папка — перезапуск (systemd підніме нас уже з нею)
+            while not any(os.path.isdir(f) for f in missing):
+                time.sleep(15)
+            print('Папка з\'явилась — перезапускаюсь, щоб її підхопити', flush=True)
+            os._exit(0)
+        threading.Thread(target=wait_missing, daemon=True).start()
+    C.cfg['folders'] = wanted if managed else folders   # під Hata не забуваємо диск, якого зараз немає
     if args.port:
         C.cfg['port'] = args.port
     if args.password:

@@ -497,14 +497,32 @@ def wifi_link(iface):
     return {'ssid': iw_text(ssid.group(1)) if ssid else None, 'signal': int(sig.group(1)) if sig else None}
 
 
-def wifi_keep_awake():
-    """Енергозбереження Wi-Fi на Linux часто ріже швидкість і затримку — серверу воно не потрібне.
-    Вмикається знову після кожного перепідключення, тож перевіряємо раз на хвилину."""
+KEEPER_SAID = {}
+
+
+def keeper():
+    """Фонова турбота, раз на 20 с:
+    - диск з fstab з'явився пізніше за завантаження (USB, док без живлення) — підмонтувати;
+    - енергозбереження Wi-Fi знову ввімкнулось (після перепідключення) — вимкнути: серверу воно лише ріже швидкість."""
     while True:
-        iface = wifi_iface()
-        if iface and shutil.which('iw') and 'on' in run(['iw', 'dev', iface, 'get', 'power_save'], 10).stdout:
-            run(['iw', 'dev', iface, 'set', 'power_save', 'off'], 10)
-        time.sleep(60)
+        try:
+            for line in read(FSTAB).splitlines():
+                if not line.endswith(FSTAB_MARK) or not line.startswith('UUID='):
+                    continue
+                uuid, point = line.split()[0][5:], line.split()[1]
+                if os.path.exists('/dev/disk/by-uuid/' + uuid) and not os.path.ismount(point):
+                    with LOCK:
+                        r = run(['mount', point], 60)
+                    msg = 'з запізненням' if r.returncode == 0 else '— не вдалося: ' + r.stderr.strip()[-200:]
+                    if KEEPER_SAID.get(point) != msg:      # не засмічуємо журнал однаковою помилкою щоразу
+                        print('gazda: підмонтував' if r.returncode == 0 else 'gazda: не підмонтував', point, msg, flush=True)
+                        KEEPER_SAID[point] = msg
+            iface = wifi_iface()
+            if iface and shutil.which('iw') and 'on' in run(['iw', 'dev', iface, 'get', 'power_save'], 10).stdout:
+                run(['iw', 'dev', iface, 'set', 'power_save', 'off'], 10)
+        except Exception as e:      # турбота не має валити gazda
+            print('gazda keeper:', repr(e), flush=True)
+        time.sleep(20)
 
 
 def do_wifi(a):
@@ -623,7 +641,7 @@ def serve():
     st = load_state()
     if st.get('battery_limit'):
         apply_battery_limit(st['battery_limit'])
-    threading.Thread(target=wifi_keep_awake, daemon=True).start()
+    threading.Thread(target=keeper, daemon=True).start()
     srv = Server(SOCK, Handler)
     gid = USER_IDS()[1]
     os.chown(SOCK, 0, gid)

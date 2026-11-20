@@ -456,7 +456,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
-        p, qs = u.path, urllib.parse.parse_qs(u.query)
+        p, qs = u.path, urllib.parse.parse_qs(u.query, keep_blank_values=True)
         if p == '/api/ping':
             return self.json({'ok': True})
         if p == '/api/state':
