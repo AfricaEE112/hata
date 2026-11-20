@@ -175,7 +175,7 @@ def net_rows():
     except (OSError, ValueError, subprocess.SubprocessError):
         return out
     for n, ips in sorted(addrs.items()):
-        if n == 'lo' or not ips:
+        if n == 'lo' or not ips or n.startswith(('docker', 'veth', 'br-', 'virbr')):
             continue
         kind = 'wi-fi' if os.path.isdir('/sys/class/net/%s/wireless' % n) else 'tailscale' if n.startswith('tailscale') else 'кабель'
         out.append('%s %s %s%s' % (col('ok', '●'), pad(kind, 9), ips[0], '  ' + col('acc', 'інтернет') if n == route else ''))
