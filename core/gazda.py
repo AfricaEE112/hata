@@ -632,7 +632,10 @@ class Handler(socketserver.StreamRequestHandler):
         except Exception as e:   # не падаємо через одну погану дію
             print('gazda: помилка в дії', (req.get('do') if isinstance(req, dict) else '?'), repr(e), flush=True)   # без аргументів: там бувають паролі
             res = {'ok': False, 'error': 'Внутрішня помилка gazda: %s' % e}
-        self.wfile.write((json.dumps(res, ensure_ascii=False) + '\n').encode())
+        try:
+            self.wfile.write((json.dumps(res, ensure_ascii=False) + '\n').encode())
+        except (BrokenPipeError, ConnectionResetError):
+            pass    # панель не дочекалась (довга дія) — результат уже застосовано, просто нема кому сказати
 
 
 class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):

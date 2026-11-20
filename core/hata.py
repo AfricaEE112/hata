@@ -357,11 +357,12 @@ def speedtest():
         base = 'https://speed.cloudflare.com/__down?bytes='
         ms = []
         for _ in range(3):
-            code, conn = curl(base + '0', '%{http_code} %{time_connect}', 8)
+            code, conn = curl(base + '1000', '%{http_code} %{time_connect}', 8)
             if code == '000':
                 return {'ok': False, 'error': 'Немає зв\'язку з інтернетом'}
             ms.append(float(conn) * 1000)
-        code, speed = curl(base + '100000000', '%{http_code} %{speed_download}', 10)
+        # 25 МБ: більші шматки Cloudflare відкидає (403); на 100 Мбіт це ~2 с, на повільному — обріже --max-time
+        code, speed = curl(base + '25000000', '%{http_code} %{speed_download}', 12)
         if code not in ('200', '000'):
             return {'ok': False, 'error': 'Сервер перевірки (Cloudflare) відповів %s — спробуй пізніше' % code}
         return {'ok': True, 'mbit': round(float(speed) * 8 / 1e6, 1), 'ms': round(min(ms)), 'dev': net_ifaces()['route']}
