@@ -1691,7 +1691,7 @@ let wantFs = false;   // наступне відео відкрити теж н�
 // Субтитри ШІ: стан однієї позиції черги звичайними словами
 function aiStateText(a) {
   const pct = Math.round((a.p || 0) * 100) + ' %';
-  return {queued: 'у черзі', audio: 'готую звук', model: 'завантажую модель (перший раз ~1 ГБ)', recog: `розпізнаю мову · ${pct}`,
+  return {queued: 'у черзі', audio: 'готую звук', model: 'завантажую модель (перший раз ~1,5 ГБ)', recog: `розпізнаю мову · ${pct}`,
     translate: `перекладаю українською · ${pct}`, done: 'готово', error: 'не вдалося'}[a.state] || a.state;
 }
 let aiSetT = 0;
@@ -1705,7 +1705,7 @@ async function drawAiSet(st) {
   box.innerHTML = `<p class="note" style="margin-top:0">VidBox сам слухає відео (Whisper — прямо на цьому комп’ютері) і робить субтитри, а українською їх перекладає DeepL. Серія на 24 хв — орієнтовно 15–40 хв, усе у фоні з низьким пріоритетом. Запустити — у плеєрі (кнопка CC → «Українські (ШІ)») або на сторінці аніме для всіх серій.</p>` +
     (!st.linux ? `<p class="warn">Поки працює лише на Linux (на Хаті).</p>`
     : !st.ready ? (st.install === 'run' ? `<p class="note">⏳ ${esc(st.log || 'Встановлюю…')} Це кілька хвилин.</p>`
-      : `${st.install === 'error' ? `<p class="warn">${esc(st.log)}</p>` : ''}<button class="btn primary" id="aiInstall">${I.plus}Встановити розпізнавання</button><p class="note">Завантажиться ≈ 400 МБ, а з першим відео — модель ще ≈ 1 ГБ.</p>`)
+      : `${st.install === 'error' ? `<p class="warn">${esc(st.log)}</p>` : ''}<button class="btn primary" id="aiInstall">${I.plus}Встановити розпізнавання</button><p class="note">Завантажиться ≈ 400 МБ, а з першим відео — модель ще ≈ 1,5 ГБ (швидша — ≈ 0,5 ГБ).</p>`)
     : `<div class="srow"><div class="sl"><b>Модель</b><small>Точніша — краще чує японську й шумні сцени; швидша — помітно швидше, але більше помилок.</small></div>
         <div class="sc"><div class="seg" id="aiModel"><button data-m="large-v3-turbo" class="${st.model === 'large-v3-turbo' ? 'on' : ''}">точніша</button><button data-m="small" class="${st.model === 'small' ? 'on' : ''}">швидша</button></div></div></div>
       <div class="srow"><div class="sl"><b>Ключ DeepL</b><small>${st.deepl ? 'Ключ збережено. ' : 'Без ключа будуть лише субтитри мовою оригіналу. '}Безкоштовний ключ — на <a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener">deepl.com/pro-api</a> (DeepL API Free, 500 тис. символів на місяць ≈ 40–50 серій).</small><small id="aiUsage"></small></div></div>
