@@ -1042,6 +1042,7 @@ async function renderAnime() {
     (cont.length ? `<section class="ashelf"><h2>Продовжити</h2><div class="agrid">${cont.map(animeCard).join('')}</div></section>` : '') +
     `<section class="ashelf">${cont.length ? '<h2>Усі тайтли</h2>' : ''}<div class="agrid">${d.titles.map(animeCard).join('')}</div></section>`;
 }
+const animeSrc = m => m.src === 'web' ? (m.site || 'сайту') : 'AniList';
 const ANIME_FMT = {TV:'серіал',TV_SHORT:'короткий серіал',MOVIE:'фільм',OVA:'OVA',ONA:'ONA',SPECIAL:'спешл',MUSIC:'кліп'};
 function animeMeta(t) {
   const m = t.meta;
@@ -1063,13 +1064,23 @@ async function renderAnimeTitle(sid) {
     <div class="ahead"><div class="poster big"><img src="${t.cover}" alt="" onerror="this.remove()"><span class="ph">${esc((t.title.trim()[0] || '?').toUpperCase())}</span></div>
     <div class="ainfo"><h1 class="title">${esc(t.title)}</h1>${animeMeta(t)}<p class="lead">${t.n} ${plural(t.n, 'серія', 'серії', 'серій')}${t.watched ? ` · переглянуто ${t.watched} з ${t.n}` : ''}</p>
     <div class="acts"><button class="btn primary" id="aplay">${I.play}${label}</button><a class="btn ghost" href="#/anime">Усі тайтли</a></div></div></div>
-    ${t.meta && t.meta.desc ? `<details class="adesc"><summary>Опис з AniList</summary><p>${esc(t.meta.desc).replace(/\n/g, '<br>')}</p><a href="${esc(t.meta.url)}" target="_blank" rel="noopener">Відкрити на AniList</a></details>` : ''}
+    ${t.meta && t.meta.desc ? `<details class="adesc"><summary>Опис з ${esc(animeSrc(t.meta))}</summary><p>${esc(t.meta.desc).replace(/\n/g, '<br>')}</p><a href="${esc(t.meta.url)}" target="_blank" rel="noopener">Відкрити на ${esc(animeSrc(t.meta))}</a></details>` : ''}
     <ol class="eps">${t.eps.map(e => {
       const pct = e.dur && e.pos > 5 && !e.done ? Math.min(100, e.pos / e.dur * 100) : 0;
       return `<li><button class="ep${e.id === startId ? ' cur' : ''}${e.done ? ' done' : ''}" data-ep="${e.id}">
         <span class="thumb">${e.thumb ? `<img decoding="async" src="/thumb/${e.id}?v=${e.thumb}" alt="">` : ''}${pct ? `<span class="pbar"><i style="width:${pct}%"></i></span>` : ''}</span>
         <span class="n">${e.ep}</span><span class="et"><b>Серія ${e.ep}${e.etitle ? ' · ' + esc(e.etitle) : ''}</b><small>${e.dur ? fmtLen(e.dur) : ''}${e.done ? ' · переглянуто' : pct ? ` · залишилось ${fmtLen(e.dur - e.pos)}` : ''}</small></span></button></li>`;
     }).join('')}</ol>`;
+  app.insertAdjacentHTML('beforeend', `<section class="msrc"><p>${t.meta ? `Постер і опис з <a href="${esc(t.meta.url)}" target="_blank" rel="noopener">${esc(animeSrc(t.meta))}</a>.` : 'AniList цей тайтл поки не знайшов.'}
+      ${t.meta ? 'Не той тайтл?' : 'Знаєш, де він є?'} Встав посилання з AniList, MyAnimeList, Shikimori чи іншого сайту або точну назву.</p>
+      <div class="fadd"><input id="alink" type="text" value="${esc(t.hint || '')}" placeholder="https://anilist.co/anime/…, https://myanimelist.net/anime/…, будь-яке посилання або назва" aria-label="Посилання на сторінку тайтлу або назва"><button class="btn" id="alinkset">Шукати</button></div></section>`);
+  $('#alinkset').onclick = async () => {
+    const r = await api('/api/anime/link', {method: 'POST', body: JSON.stringify({sid, link: $('#alink').value.trim()})});
+    if (!r.ok) return toast(r.error || 'Не вдалося');
+    toast('Шукаю. Постер і опис з’являться за кілька секунд');
+    setTimeout(() => { if (baseHash === '/anime/' + sid) renderBase(baseHash, true); }, 6000);
+  };
+  $('#alink').onkeydown = e => { if (e.key === 'Enter') $('#alinkset').click(); };
   $('#aplay').onclick = () => playAnime(t, startId);
   $$('[data-ep]').forEach(b => b.onclick = () => playAnime(t, b.dataset.ep));
 }
@@ -1192,6 +1203,7 @@ async function renderMangaTitle(tid) {
     setMangaMode(tid, b.dataset.mm);
   });
   if ($('#mmore')) $('#mmore').onclick = e => { $('#mdesc').classList.add('open'); e.target.remove(); };
+  $('#mlink').onkeydown = e => { if (e.key === 'Enter') $('#mlinkset').click(); };
   $('#mlinkset').onclick = async () => {
     await api('/api/manga/link', {method: 'POST', body: JSON.stringify({tid, link: $('#mlink').value.trim()})});
     toast('Шукаю. Опис і обкладинка з’являться за кілька секунд');

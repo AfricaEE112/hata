@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS manga_progress(cid TEXT PRIMARY KEY, tid TEXT, page I
   at REAL, done INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS manga_seen(cid TEXT PRIMARY KEY, tid TEXT, first REAL);
 CREATE TABLE IF NOT EXISTS manga_titles(tid TEXT PRIMARY KEY, mode TEXT, hint TEXT);
+CREATE TABLE IF NOT EXISTS anime_titles(sid TEXT PRIMARY KEY, hint TEXT);
 '''
 
 
@@ -343,6 +344,7 @@ def anime_title_json(key, by_ep=False):
         return None
     info, eps = anime_info(key, *series[key], stats()['data'])
     info['eps'] = eps
+    info['hint'] = anilist_hint(series[key][0], key) if series[key][0] else ''
     return info
 
 
@@ -371,7 +373,12 @@ def anilist_meta(sid):
         return None
 
 
-def anilist_hint(top):
+def anilist_hint(top, sid=None):
+    """Посилання чи назва, яку вставили на сторінці тайтлу; інакше — anilist.txt у теці."""
+    sid = sid or hashlib.sha1(('anime:' + top).encode('utf-8', 'surrogateescape')).hexdigest()[:12]
+    r = DB.one('SELECT hint FROM anime_titles WHERE sid=?', (sid,)) if DB else None
+    if r and r['hint']:
+        return r['hint']
     try:
         with open(os.path.join(C.anime, top, 'anilist.txt'), encoding='utf-8-sig') as f:
             return f.read().strip()
@@ -384,7 +391,7 @@ def anilist_want(sid, top):
     if not top:
         return
     m = anilist_meta(sid)
-    hint = anilist_hint(top)
+    hint = anilist_hint(top, sid)
     if m and m.get('v') == ANILIST_V and m.get('hint', '') == hint and (m.get('id') or time.time() - m.get('at', 0) < 7 * 86400):
         return
     meta_queue(sid, anime_title(top), anilist_fetch, sid, top)
@@ -440,13 +447,36 @@ def anilist_post(query, variables):
     raise RuntimeError('AniList не відповідає (ліміт запитів)')
 
 
+def anime_link(hint):
+    """Посилання → як шукати: ('id'|'mal', номер) для AniList, ('web', url) для інших сайтів, None — це назва."""
+    h = (hint or '').strip()
+    m = re.search(r'anilist\.co/anime/(\d+)', h)
+    if m:
+        return 'id', int(m.group(1))
+    m = re.search(r'myanimelist\.net/anime/(\d+)', h) or re.search(r'shikimori\.[a-z]+/animes/[a-z]*(\d+)', h)
+    if m:                                  # у Shikimori ті самі номери, що в MyAnimeList
+        return 'mal', int(m.group(1))
+    if re.match(r'https?://', h, re.I):
+        return 'web', h
+    if h.isdigit():
+        return 'id', int(h)
+    return None
+
+
 def anilist_fetch(sid, top):
     d = anilist_dir()
     os.makedirs(d, exist_ok=True)
-    media, used = None, ''
-    for q in anilist_queries(top):
-        used = q
-        if q.isdigit():
+    media, used, web = None, '', None
+    hint = anilist_hint(top, sid)
+    link = anime_link(hint)
+    if link and link[0] == 'web':
+        web, used = web_meta(link[1]), link[1]
+    for q in ([] if link and link[0] == 'web' else [link] if link else anilist_queries(top)):
+        used = q if isinstance(q, str) else '%s:%s' % q
+        if isinstance(q, tuple):
+            res = anilist_post('query($i:Int){Media(%s:$i,type:ANIME){%s}}' % ('idMal' if q[0] == 'mal' else 'id', ANILIST_FIELDS),
+                               {'i': q[1]})
+        elif q.isdigit():
             res = anilist_post('query($i:Int){Media(id:$i,type:ANIME){%s}}' % ANILIST_FIELDS, {'i': int(q)})
         else:
             res = anilist_post('query($s:String){Media(search:$s,type:ANIME,sort:SEARCH_MATCH){%s}}' % ANILIST_FIELDS, {'s': q})
@@ -454,8 +484,27 @@ def anilist_fetch(sid, top):
         time.sleep(2.2)
         if media:
             break
-    meta = {'v': ANILIST_V, 'at': time.time(), 'q': used, 'hint': anilist_hint(top)}
-    if media:
+    meta = {'v': ANILIST_V, 'at': time.time(), 'q': used, 'hint': hint}
+    cover = os.path.join(d, sid + '.jpg')
+    if web:
+        img = None
+        if web.get('image'):
+            try:
+                req = urllib.request.Request(web['image'], headers={'User-Agent': 'Mozilla/5.0 (VidBox/%s)' % VERSION,
+                                                                    'Referer': web['url']})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    img = r.read(20 << 20)
+            except (OSError, ValueError) as e:
+                print('AniList: постер з %s не завантажив (%s)' % (web['image'], e))
+        if img and (img[:3] in (b'\xff\xd8\xff', b'\x89PN', b'RIF', b'GIF') or img[4:12] in (b'ftypavif', b'ftypavis')):
+            with open(cover + '.part', 'wb') as f:
+                f.write(img)
+            os.replace(cover + '.part', cover)
+        elif os.path.isfile(cover):
+            os.remove(cover)
+        meta.update({k: web.get(k) for k in ('src', 'site', 'id', 'url', 'romaji', 'year', 'genres', 'desc')})
+        print('Аніме: «%s» → %s (%s)' % (anime_title(top), web.get('romaji'), web.get('site')))
+    elif media:
         url = (media.get('coverImage') or {}).get('extraLarge') or (media.get('coverImage') or {}).get('large')
         if url:
             req = urllib.request.Request(url, headers={'User-Agent': 'VidBox/%s' % VERSION})
@@ -475,7 +524,7 @@ def anilist_fetch(sid, top):
         print('AniList: «%s» → %s' % (anime_title(top), t.get('romaji') or t.get('english')))
     else:
         meta['none'] = True
-        print('AniList: «%s» не знайдено (шукав: %s). Підказка: anilist.txt з ID у теці тайтлу' % (anime_title(top), used))
+        print('AniList: «%s» не знайдено (шукав: %s). Встав посилання на сторінці тайтлу' % (anime_title(top), used))
     with open(os.path.join(d, sid + '.json'), 'w', encoding='utf-8') as f:
         json.dump(meta, f, ensure_ascii=False)
 
@@ -511,7 +560,7 @@ def anime_meta_public(sid):
     if not m or not m.get('id'):
         return None
     return {k: m.get(k) for k in ('id', 'url', 'romaji', 'english', 'native', 'year', 'episodes', 'score',
-                                  'format', 'genres', 'desc', 'color')}
+                                  'format', 'genres', 'desc', 'color', 'src', 'site')}
 
 
 # ───────────────────────────── манга ─────────────────────────────
@@ -3113,6 +3162,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if d.get('mode') not in MANGA_MODES or d.get('tid') not in MANGA['titles']:
                         return self.send_json({'ok': False}, 400)
                     manga_set(d['tid'], mode=d['mode'])
+                    return self.send_json({'ok': True})
+                if path == '/api/anime/link':
+                    d = self.json_body()
+                    ser = anime_series().get(str(d.get('sid', '')))
+                    if not ser or not ser[0]:
+                        return self.send_json({'ok': False, 'error': 'Тайтл не знайдено'}, 404)
+                    sid = str(d['sid'])
+                    DB.x('INSERT INTO anime_titles(sid, hint) VALUES(?,?) ON CONFLICT(sid) DO UPDATE SET hint=excluded.hint',
+                         (sid, str(d.get('link') or '').strip()[:300]))
+                    ANILIST_FAIL.pop(sid, None)
+                    meta_queue(sid, anime_title(ser[0]), anilist_fetch, sid, ser[0])
                     return self.send_json({'ok': True})
                 if path == '/api/manga/link':
                     return self.send_json(manga_link(self.json_body()))
