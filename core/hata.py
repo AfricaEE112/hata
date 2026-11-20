@@ -21,7 +21,9 @@ import socket
 import sys
 import threading
 import time
+import subprocess
 import urllib.parse
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, 'web')
@@ -126,6 +128,23 @@ def demo_gazda(req):
     if d == 'battery_limit':
         DEMO_STATE['limit'] = req['value']
         return {'ok': True, 'limit': req['value']}
+    if d == 'wifi':
+        op = req.get('op')
+        if op == 'scan':
+            time.sleep(1)
+            return {'ok': True, 'iface': 'wlo1', 'networks': [
+                {'ssid': 'Дім', 'signal': -45, 'secure': True, 'band': '5 ГГц'},
+                {'ssid': 'TP-Link_4F2A', 'signal': -68, 'secure': True, 'band': '2,4 ГГц'},
+                {'ssid': 'Кав\'ярня', 'signal': -81, 'secure': False, 'band': '2,4 ГГц'}]}
+        if op == 'connect':
+            time.sleep(2)
+            if len(req.get('password') or '') < 8:
+                return {'ok': False, 'error': 'Не вдалося підключитися до «%s». Перевір пароль.' % req.get('ssid')}
+            DEMO_STATE['wifi'] = req['ssid']
+        if op == 'forget':
+            DEMO_STATE['wifi'] = None
+        w = DEMO_STATE.get('wifi')
+        return {'ok': True, 'iface': 'wlo1', 'ssid': w, 'signal': -45 if w else None, 'saved': w}
     if d == 'journal':
         now = int(time.time())
         return {'ok': True, 'lines': [
@@ -258,6 +277,96 @@ def live():
             'swap': {'total': mem.get('SwapTotal', 0), 'free': mem.get('SwapFree', 0)}}
 
 
+# ───────────────────────── мережа: інтерфейси й швидкість ─────────────────────────
+
+def sysread(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+
+def net_ifaces():
+    """Що є в мережі: кабель, Wi-Fi, телефон, Tailscale — з швидкістю лінку й USB (для діагностики)."""
+    if DEMO:
+        return {'route': 'enx00e04c680001', 'ifaces': [
+            {'name': 'enx00e04c680001', 'kind': 'cable', 'up': True, 'ips': ['192.168.1.20'], 'speed': 1000, 'usb': 5000, 'driver': 'r8152'},
+            {'name': 'wlo1', 'kind': 'wifi', 'up': DEMO_STATE.get('wifi') is not None, 'ips': ['192.168.1.21'] if DEMO_STATE.get('wifi') else []}]}
+    addrs = {}
+    try:
+        out = subprocess.run(['ip', '-j', '-4', 'addr'], stdout=subprocess.PIPE, text=True, timeout=5).stdout
+        for i in json.loads(out or '[]'):
+            addrs[i['ifname']] = [a['local'] for a in i.get('addr_info', [])]
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    route = ''
+    try:
+        out = subprocess.run(['ip', '-j', 'route', 'get', '1.1.1.1'], stdout=subprocess.PIPE, text=True, timeout=5).stdout
+        route = (json.loads(out or '[{}]') or [{}])[0].get('dev', '')
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    res = []
+    for n in sorted(os.listdir('/sys/class/net')):
+        if n == 'lo' or n.startswith(('docker', 'veth', 'br-', 'virbr')):
+            continue
+        base = '/sys/class/net/' + n
+        dev = os.path.realpath(base + '/device') if os.path.exists(base + '/device') else ''
+        drv = os.path.basename(os.path.realpath(base + '/device/driver')) if dev else ''
+        if os.path.isdir(base + '/wireless') or os.path.exists(base + '/phy80211'):
+            kind = 'wifi'
+        elif n.startswith('tailscale'):
+            kind = 'tailscale'
+        elif drv in ('rndis_host', 'cdc_ether', 'ipheth') or n.startswith('usb'):
+            kind = 'phone'
+        elif dev:
+            kind = 'cable'
+        else:
+            continue
+        up = sysread(base + '/operstate') in ('up', 'unknown') and bool(addrs.get(n))
+        i = {'name': n, 'kind': kind, 'up': up, 'ips': addrs.get(n, []), 'driver': drv}
+        if kind == 'cable' and up:
+            sp = sysread(base + '/speed')
+            i['speed'] = int(sp) if sp.lstrip('-').isdigit() and int(sp) > 0 else None
+        if '/usb' in dev:                # швидкість USB-шини: 480 = USB 2.0, 5000+ = USB 3
+            sp = sysread(os.path.dirname(dev) + '/speed')
+            i['usb'] = int(float(sp)) if sp.replace('.', '', 1).isdigit() else None
+        res.append(i)
+    return {'route': route, 'ifaces': res}
+
+
+SPEED_LOCK = threading.Lock()
+
+
+def speedtest():
+    """Швидкість інтернету: затримка (найкраща з 3) і завантаження до ~10 с з Cloudflare."""
+    if DEMO:
+        time.sleep(3)
+        return {'ok': True, 'mbit': 94.2, 'ms': 18, 'dev': 'enx00e04c680001'}
+    if not SPEED_LOCK.acquire(blocking=False):
+        return {'ok': False, 'error': 'Перевірка вже йде'}
+    try:
+        hdr = {'User-Agent': 'Hata'}
+        ms = []
+        for _ in range(3):
+            t = time.monotonic()
+            urllib.request.urlopen(urllib.request.Request('https://speed.cloudflare.com/__down?bytes=0', headers=hdr), timeout=8).read()
+            ms.append((time.monotonic() - t) * 1000)
+        got, t = 0, time.monotonic()
+        with urllib.request.urlopen(urllib.request.Request('https://speed.cloudflare.com/__down?bytes=100000000', headers=hdr), timeout=15) as r:
+            while time.monotonic() - t < 10:
+                chunk = r.read(256 * 1024)
+                if not chunk:
+                    break
+                got += len(chunk)
+        sec = max(time.monotonic() - t, 0.001)
+        return {'ok': True, 'mbit': round(got * 8 / sec / 1e6, 1), 'ms': round(min(ms)), 'dev': net_ifaces()['route']}
+    except OSError as e:
+        return {'ok': False, 'error': 'Не вдалося перевірити: немає зв\'язку з інтернетом (%s)' % getattr(e, 'reason', e)}
+    finally:
+        SPEED_LOCK.release()
+
+
 UPDATES = {'at': 0, 'data': None}
 DEMO_NET = [0]
 
@@ -369,6 +478,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json(list_dirs(qs.get('path', [''])[0]))
         if p == '/api/tailscale':
             return self.json(gazda({'do': 'tailscale', 'op': 'status'}, 30))
+        if p == '/api/net':
+            r = net_ifaces()
+            r['wifi'] = gazda({'do': 'wifi', 'op': 'status'}, 20)
+            return self.json(r)
         if p == '/api/live':
             return self.json(live())
         if p == '/api/journal':
@@ -416,6 +529,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             r = gazda({'do': 'update'}, 300)
             UPDATES['data'] = None
             return self.json(r)
+        if p == '/api/wifi':
+            if d.get('op') not in ('scan', 'connect', 'forget', 'status'):
+                return self.json({'ok': False, 'error': 'Невідома дія'})
+            return self.json(gazda({'do': 'wifi', 'op': d['op'], 'ssid': d.get('ssid'), 'password': d.get('password')}, 700))
+        if p == '/api/speedtest':
+            return self.json(speedtest())
         if p == '/api/scheme':
             if d.get('scheme') not in SCHEMES:
                 return self.json({'ok': False, 'error': 'Невідома схема'})

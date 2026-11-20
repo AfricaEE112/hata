@@ -441,6 +441,119 @@ def reset_password():
     return 0
 
 
+# ───────────────────────── Wi-Fi ─────────────────────────
+# Через netplan (як і решта мережі в Ubuntu Server): наш файл — 60-hata-wifi.yaml, решту не чіпаємо.
+
+WIFI_NETPLAN = '/etc/netplan/60-hata-wifi.yaml'
+
+
+def wifi_iface():
+    for n in sorted(os.listdir('/sys/class/net')):
+        if os.path.isdir(f'/sys/class/net/{n}/wireless') or os.path.exists(f'/sys/class/net/{n}/phy80211'):
+            return n
+    return None
+
+
+def ensure_pkgs(*names):
+    """Доставити пакети, яких бракує (оновлення Hata не запускає інсталятор заново)."""
+    missing = [n for n in names if run(['dpkg-query', '-W', '-f=${Status}', n], 10).stdout.find('install ok installed') < 0]
+    if missing:
+        r = run(['apt-get', 'install', '-y', '-q', '--no-install-recommends'] + missing, 600)
+        if r.returncode:
+            raise Fail('Не вдалося встановити ' + ', '.join(missing) + ' — потрібен інтернет')
+
+
+def iw_text(s):
+    """iw показує не-ASCII байти як \\xNN — повертаємо нормальний UTF-8 (кириличні назви мереж)."""
+    try:
+        return re.sub(rb'\\x([0-9a-fA-F]{2})', lambda m: bytes([int(m.group(1), 16)]), s.encode('latin-1', 'replace')).decode('utf-8', 'replace')
+    except Exception:
+        return s
+
+
+def wifi_saved():
+    try:
+        m = re.search(r'access-points:\s*\n\s*("(?:[^"\\]|\\.)*")', read(WIFI_NETPLAN))
+        return json.loads(m.group(1)) if m else None
+    except ValueError:
+        return None
+
+
+def wifi_link(iface):
+    out = run(['iw', 'dev', iface, 'link'], 10).stdout if shutil.which('iw') else ''
+    ssid = re.search(r'^\s*SSID: (.*)$', out, re.M)
+    sig = re.search(r'signal: (-?\d+)', out)
+    return {'ssid': iw_text(ssid.group(1)) if ssid else None, 'signal': int(sig.group(1)) if sig else None}
+
+
+def do_wifi(a):
+    op = a.get('op') or 'status'
+    iface = wifi_iface()
+    if not iface:
+        return {'iface': None}
+    if op == 'status':
+        return dict(wifi_link(iface), iface=iface, saved=wifi_saved())
+    ensure_pkgs('iw', 'wpasupplicant')
+    if op == 'scan':
+        run(['ip', 'link', 'set', iface, 'up'], 10)
+        for _ in range(3):
+            r = run(['iw', 'dev', iface, 'scan'], 40)
+            if r.returncode == 0:
+                break
+            time.sleep(1.5)          # «Device or resource busy» — адаптер ще шукає сам
+        nets = {}
+        for block in re.split(r'^BSS ', r.stdout, flags=re.M)[1:]:
+            m = re.search(r'^\s*SSID: (.+)$', block, re.M)
+            if not m or not m.group(1).strip():
+                continue
+            ssid = iw_text(m.group(1).strip())
+            sig = re.search(r'signal: (-?[\d.]+)', block)
+            freq = re.search(r'freq: (\d+)', block)
+            n = {'ssid': ssid, 'signal': int(float(sig.group(1))) if sig else -100,
+                 'secure': bool(re.search(r'^\s*(RSN|WPA):', block, re.M)),
+                 'band': '5 ГГц' if freq and int(freq.group(1)) > 4000 else '2,4 ГГц'}
+            if ssid not in nets or n['signal'] > nets[ssid]['signal']:
+                nets[ssid] = n
+        return {'iface': iface, 'networks': sorted(nets.values(), key=lambda n: -n['signal'])}
+    if op == 'connect':
+        ssid, pw = str(a.get('ssid') or ''), str(a.get('password') or '')
+        if not 0 < len(ssid.encode()) <= 32:
+            raise Fail('Назва мережі — від 1 до 32 символів')
+        if pw and not 8 <= len(pw) <= 63:
+            raise Fail('Пароль Wi-Fi — від 8 до 63 символів')
+        ap = ('\n          password: ' + json.dumps(pw, ensure_ascii=False)) if pw else ' {}'
+        text = ('# Записано Hata (панель → мережа → Wi-Fi). Змінюй через панель.\nnetwork:\n  version: 2\n  wifis:\n'
+                f'    {iface}:\n      dhcp4: true\n      optional: true\n      access-points:\n'
+                f'        {json.dumps(ssid, ensure_ascii=False)}:{ap}\n')
+        old = read(WIFI_NETPLAN, None)
+        with LOCK:
+            fd = os.open(WIFI_NETPLAN + '.tmp', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(text)
+            os.replace(WIFI_NETPLAN + '.tmp', WIFI_NETPLAN)
+            r = run(['netplan', 'apply'], 90)
+        if r.returncode:
+            raise Fail('netplan: ' + (r.stderr or r.stdout).strip()[-300:])
+        for _ in range(30):              # до ~30 с на підключення й адресу
+            time.sleep(1)
+            if wifi_link(iface)['ssid'] == ssid and 'inet ' in run(['ip', '-4', 'addr', 'show', 'dev', iface], 10).stdout:
+                return dict(wifi_link(iface), iface=iface, saved=ssid)
+        if old is None:                  # не вийшло — прибираємо, щоб не лишати зламану мережу
+            os.remove(WIFI_NETPLAN)
+        else:
+            with open(WIFI_NETPLAN, 'w', encoding='utf-8') as f:
+                f.write(old)
+        run(['netplan', 'apply'], 90)
+        raise Fail('Не вдалося підключитися до «%s». Перевір пароль і чи ловить мережа біля ноутбука.' % ssid)
+    if op == 'forget':
+        with LOCK:
+            if os.path.exists(WIFI_NETPLAN):
+                os.remove(WIFI_NETPLAN)
+            run(['netplan', 'apply'], 90)
+        return {'iface': iface, 'saved': None}
+    raise Fail('Невідома дія з Wi-Fi')
+
+
 ACTIONS = {
     'ping': lambda a: {'pong': True},
     'status': do_status,
@@ -454,12 +567,14 @@ ACTIONS = {
     'update': do_update,
     'update_check': do_update_check,
     'journal': do_journal,
+    'wifi': do_wifi,
 }
 
 
 class Handler(socketserver.StreamRequestHandler):
     def handle(self):
         line = self.rfile.readline(64 * 1024)
+        req = {}
         try:
             req = json.loads(line or b'{}')
             act = ACTIONS.get(req.get('do'))
@@ -469,7 +584,7 @@ class Handler(socketserver.StreamRequestHandler):
         except Fail as e:
             res = {'ok': False, 'error': str(e)}
         except Exception as e:   # не падаємо через одну погану дію
-            print('gazda: помилка в', line[:200], repr(e), flush=True)
+            print('gazda: помилка в дії', (req.get('do') if isinstance(req, dict) else '?'), repr(e), flush=True)   # без аргументів: там бувають паролі
             res = {'ok': False, 'error': 'Внутрішня помилка gazda: %s' % e}
         self.wfile.write((json.dumps(res, ensure_ascii=False) + '\n').encode())
 

@@ -344,10 +344,12 @@ async function panel() {
     svcRow('tailscale', ts.state === 'Running' ? 'доступ звідусіль' : ts.installed ? 'не підключено' : 'не встановлено', ts.state === 'Running' ? 'active' : 'вимкнено', '') +
     `<div class="row svc"><div class="l"><b><span class="okdot always"></span>gazda</b><small>керує системою, не зупиняється</small></div><div class="r"><span class="st" style="color:var(--yel)">завжди</span></div></div>`;
 
-  const net = `<dl class="kv"><dt>вдома</dt><dd>${(s.ips || []).map(esc).join(', ') || '—'}</dd><dt>ім'я</dt><dd>${esc(s.host)}.local</dd>
+  const net = `<div id="ifaces"><p class="note" style="margin:0"><span class="spin"></span></p></div>
+    <dl class="kv" style="margin-top:12px"><dt>ім'я</dt><dd>${esc(s.host)}.local</dd>
       <dt>tailscale</dt><dd>${ts.state === 'Running' ? `<span class="okdot"></span>${esc(ts.name)}` : ts.installed ? 'не підключено' : 'не встановлено'}</dd></dl>
     <div class="gh"><span>трафік</span><b id="netNow">—</b></div><div class="graph net" id="netG" aria-hidden="true"></div>
-    ${ts.state === 'Running' ? '' : '<div class="acts"><button class="btn" id="tsOn">Підключити Tailscale</button></div>'}`;
+    <p class="note" id="speedRes" aria-live="polite"></p>
+    <div class="acts"><button class="btn" id="speed">Перевірити швидкість</button><button class="btn" id="wifiBtn">Wi-Fi</button>${ts.state === 'Running' ? '' : '<button class="btn" id="tsOn">Tailscale</button>'}</div>`;
 
   const b = s.battery;
   const pwr = (b ? `<div class="gh" style="margin-top:0"><span>батарея · ${b.ac ? 'від мережі' : 'від батареї'}</span><b>${b.pct}%</b></div>${segs(b.pct, 20, 'tall')}` +
@@ -372,6 +374,10 @@ async function panel() {
   });
   $('#findDisks').onclick = () => openFromPanel(2);
   if ($('#tsOn')) $('#tsOn').onclick = () => openFromPanel(4);
+  $('#wifiBtn').onclick = () => wifiPage();
+  $('#speed').onclick = speedTest;
+  if (SPEED) $('#speedRes').innerHTML = SPEED;
+  netInfo();
   bindLimit();
   bindUpd();
   live();
@@ -385,6 +391,92 @@ async function service(btn, name, op) {
   const r = await api('/api/service', {name, op});
   toast(r.ok ? ({restart: 'Перезапущено', stop: 'Зупинено', start: 'Запущено'})[op] + ': ' + name : r.error);
   panel();
+}
+
+// ───────────────────────── мережа ─────────────────────────
+const KIND = {cable: 'кабель', wifi: 'wi-fi', phone: 'телефон', tailscale: 'tailscale'};
+const mbit = v => v >= 1000 ? (v / 1000).toString().replace('.', ',') + ' Гбіт/с' : v + ' Мбіт/с';
+const sigPct = dbm => Math.max(0, Math.min(100, 2 * (dbm + 100)));
+let SPEED = '';
+
+async function netInfo() {
+  const r = await api('/api/net');
+  if (!$('#ifaces')) return;
+  const w = r.wifi || {};
+  const rows = (r.ifaces || []).filter(i => i.kind !== 'tailscale').map(i => {
+    const bits = [esc(i.name), ...(i.ips || []).map(esc)];
+    if (i.kind === 'wifi' && w.ssid) bits.splice(1, 0, `«${esc(w.ssid)}» ${sigPct(w.signal)}%`);
+    if (i.speed) bits.push(mbit(i.speed));
+    if (i.usb) bits.push(i.usb >= 5000 ? 'USB 3' : i.usb >= 480 ? 'USB 2.0' : 'USB 1.1');
+    const warn = i.speed && i.speed <= 10 ? 'Лінк лише 10 Мбіт/с — заміни кабель або спробуй інший порт роутера/доку.'
+      : i.usb && i.usb < 480 ? 'Пристрій працює як USB 1.1 (12 Мбіт/с) — переткни в інший порт або заміни кабель.' : '';
+    return `<div class="row"><div class="l"><b><span class="okdot ${i.up ? '' : 'off'}"></span>${KIND[i.kind]}</b><small>${bits.join(' · ')}</small>` +
+      (warn ? `<small style="display:block;color:var(--yel)">${warn}</small>` : '') + `</div><div class="r">` +
+      (i.name === r.route ? '<span class="tag ok">інтернет</span>' : i.up ? '' : '<span class="tag">вимкнено</span>') + '</div></div>';
+  }).join('');
+  $('#ifaces').innerHTML = rows || '<p class="note" style="margin:0">Мережевих адаптерів не знайдено.</p>';
+}
+
+async function speedTest() {
+  const b = $('#speed');
+  b.disabled = true; b.innerHTML = '<span class="spin"></span> Міряю ~15 с…';
+  const r = await api('/api/speedtest', {});
+  SPEED = r.ok
+    ? `↓ <b style="color:var(--fg)">${String(r.mbit).replace('.', ',')} Мбіт/с</b> · затримка ${r.ms} мс · через ${esc(r.dev || '?')}` +
+      (r.mbit < 20 ? '<br><span style="color:var(--yel)">Повільно. Глянь, яке підключення позначене «інтернет», і його швидкість лінку вище.</span>' : '')
+    : `<span style="color:var(--red)">${esc(r.error)}</span>`;
+  if ($('#speedRes')) $('#speedRes').innerHTML = SPEED;
+  if ($('#speed')) { $('#speed').disabled = false; $('#speed').textContent = 'Перевірити швидкість'; }
+}
+
+// Сторінка Wi-Fi: поточне підключення, мережі поруч, пароль.
+const WF = {nets: null, sel: null, status: null, err: ''};
+async function wifiPage(rescan = true) {
+  stopPanel(); fromPanel = true; wizTop();
+  if (rescan) { WF.nets = null; WF.err = ''; }
+  render();
+  if (!WF.status || rescan) WF.status = await api('/api/wifi', {op: 'status'});
+  render();
+  if (rescan && WF.status.iface) {
+    const r = await api('/api/wifi', {op: 'scan'});
+    WF.nets = r.networks || [];
+    if (r.ok === false) WF.err = r.error;
+    render();
+  }
+  function render() {
+    const st = WF.status;
+    const cur = !st ? '<p class="note" style="margin:0"><span class="spin"></span></p>'
+      : !st.iface ? '<p class="note" style="margin:0">Wi-Fi адаптера не знайдено.</p>'
+      : st.ssid ? `<div class="row"><div class="l"><b><span class="okdot"></span>${esc(st.ssid)}</b><small>${esc(st.iface)} · сигнал ${sigPct(st.signal)}%</small></div>` +
+          `<div class="r">${segs(sigPct(st.signal), 5, 'mono').replace('class="segs mono', 'style="width:60px;flex:none" class="segs mono')}${st.saved ? '<button class="btn ghost" id="wfForget">Забути</button>' : ''}</div></div>`
+      : `<p class="note" style="margin:0">Не підключено${st.saved ? ` — збережена мережа «${esc(st.saved)}» не ловиться` : ''}.</p>` +
+          (st.saved ? '<div class="acts"><button class="btn ghost" id="wfForget">Забути</button></div>' : '');
+    const list = WF.nets === null ? '<p class="note" style="margin:0"><span class="spin"></span> Шукаю мережі…</p>'
+      : !WF.nets.length ? `<p class="note" style="margin:0">${esc(WF.err || 'Мереж не знайдено.')}</p>`
+      : WF.nets.map((n, k) => `<div class="row"><div class="l"><b>${esc(n.ssid)}</b><small>${esc(n.band)} · ${sigPct(n.signal)}% · ${n.secure ? 'з паролем' : 'відкрита'}</small></div>` +
+          `<div class="r">${segs(sigPct(n.signal), 5, 'mono').replace('class="segs mono', 'style="width:60px;flex:none" class="segs mono')}<button class="btn" data-pick="${k}">${st && st.ssid === n.ssid ? 'Підключено' : 'Обрати'}</button></div></div>` +
+          (WF.sel === k ? `<form class="row" id="wfForm" style="flex-wrap:wrap">${n.secure ? `<label class="field"><span aria-hidden="true">❯</span><input id="wfPw" type="password" autocomplete="off" placeholder="пароль від «${esc(n.ssid)}»" aria-label="Пароль Wi-Fi" autofocus></label>` : '<span class="note" style="margin:0;flex:1">Відкрита мережа, без пароля.</span>'}` +
+            `<button class="btn primary" id="wfGo">Підключити</button></form>` : '')).join('');
+    app.innerHTML = `<div class="wrap">${prompt('~/net', 'hata wifi')}<h1 class="title">Wi-Fi</h1>
+      <p class="lead">Обери мережу й введи пароль. Якщо підключений і кабель, інтернет іде кабелем — Wi-Fi лишається запасним.</p>
+      ${win('підключення', cur, {c: 'vio'})}${win('мережі поруч', list + `<div class="err" id="wfErr" role="alert">${esc(WF.formErr || '')}</div>`, {c: 'yel'})}
+      <div class="acts"><button class="btn ghost" id="wfScan">Оновити список</button><span class="sp"></span><button class="btn primary" id="next">До панелі</button></div></div>`;
+    $('#next').onclick = () => { fromPanel = false; panel(); };
+    $('#wfScan').onclick = () => wifiPage(true);
+    $$('[data-pick]').forEach(b => b.onclick = () => { WF.sel = +b.dataset.pick; WF.formErr = ''; render(); if ($('#wfPw')) $('#wfPw').focus(); });
+    if ($('#wfForget')) $('#wfForget').onclick = async () => {
+      if (!confirm('Забути цю мережу? Хата перестане до неї підключатися.')) return;
+      WF.status = await api('/api/wifi', {op: 'forget'}); toast('Мережу забуто'); render();
+    };
+    if ($('#wfForm')) $('#wfForm').onsubmit = async e => {
+      e.preventDefault();
+      const n = WF.nets[WF.sel], b = $('#wfGo');
+      b.disabled = true; b.innerHTML = '<span class="spin"></span> Підключаю (до 30 с)…';
+      const r = await api('/api/wifi', {op: 'connect', ssid: n.ssid, password: $('#wfPw') ? $('#wfPw').value : ''});
+      if (r.ok === false) { WF.formErr = r.error; render(); return; }
+      WF.status = r; WF.sel = null; WF.formErr = ''; toast(`Підключено до «${n.ssid}»`); render();
+    };
+  }
 }
 
 // Живі цифри: процесор, пам'ять, температура, трафік — раз на 2 секунди, поки сторінку видно.
