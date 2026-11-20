@@ -618,7 +618,24 @@ HW_KINDS = (('amd', 'h264_amf', 'AMF'), ('nvidia', 'h264_nvenc', 'NVENC'),
             ('intel', 'h264_qsv', 'QSV'), ('vaapi', 'h264_vaapi', 'VA-API'))
 ENC_LABEL = {enc: label for _, enc, label in HW_KINDS}
 ENC_LABEL['libx264'] = 'CPU'
-VAAPI_DEV = '/dev/dri/renderD128'
+def vaapi_dev():
+    """Вузол відеоядра для VA-API. У ноутбуках з двома відеокартами (Intel + NVIDIA) renderD128 може бути NVIDIA,
+    у якої немає VA-API-кодування, — тож беремо Intel, потім AMD, а NVIDIA лише якщо іншого немає."""
+    nodes = sorted(glob.glob('/sys/class/drm/renderD*'))
+    rank = {'0x8086': 0, '0x1002': 1}
+    best = None
+    for n in nodes:
+        try:
+            vendor = open(os.path.join(n, 'device', 'vendor')).read().strip()
+        except OSError:
+            continue
+        r = rank.get(vendor, 9)
+        if best is None or r < best[0]:
+            best = (r, '/dev/dri/' + os.path.basename(n))
+    return best[1] if best else '/dev/dri/renderD128'
+
+
+VAAPI_DEV = vaapi_dev() if os.name != 'nt' else '/dev/dri/renderD128'
 HW = {'checked': False, 'gpu': '', 'encoders': {}, 'decode': None, 'zero_copy': False, 'last': None}
 HW_LOCK = threading.Lock()
 

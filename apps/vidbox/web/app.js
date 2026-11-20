@@ -889,7 +889,10 @@ function gpuSection(st, h) {
   const hw = st.hw || {}, encs = hw.encoders || {};
   const names = {amd: 'AMD AMF', nvidia: 'NVIDIA NVENC', intel: 'Intel QSV', vaapi: 'VA-API'};
   const why = e => /немає в цій збірці/.test(e.err || '') ? 'немає в цій збірці ffmpeg' : 'немає такої відеокарти або драйвера';
-  const list = Object.keys(encs).map(k => `<dt>${names[k] || k}</dt><dd class="${encs[k].ok ? 'ok' : 'no'}" title="${esc(encs[k].err || '')}">${encs[k].ok ? '✓ працює' : '✗ ' + why(encs[k])}</dd>`).join('');
+  // Для Intel показуємо й саму помилку ffmpeg: з нею одразу видно, чого бракує (драйвера, доступу до відеоядра…)
+  const detail = (k, e) => !e.ok && e.err && !/немає в цій збірці/.test(e.err) && (k === 'vaapi' || k === 'intel') && /intel/i.test(hw.gpu || '')
+    ? `<br><small class="mono" style="opacity:.75">${esc(e.err.slice(-160))}</small>` : '';
+  const list = Object.keys(encs).map(k => `<dt>${names[k] || k}</dt><dd class="${encs[k].ok ? 'ok' : 'no'}" title="${esc(encs[k].err || '')}">${encs[k].ok ? '✓ працює' + (encs[k].lp ? ' (енергоощадний режим)' : '') : '✗ ' + why(encs[k])}${detail(k, encs[k])}</dd>`).join('');
   const status = !hw.checked ? '<p class="note">Перевіряю відеокарту…</p>' :
     `<dl class="hwlist"><dt>Відеокарта</dt><dd>${esc(hw.gpu || 'не визначено')}</dd>` +
     `<dt>Кодує зараз</dt><dd class="${hw.hardware ? 'ok' : ''}">${esc(hw.current)}${hw.hardware ? ' (апаратне)' : ' (процесор)'}</dd>` +
