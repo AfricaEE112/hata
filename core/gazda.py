@@ -536,7 +536,9 @@ def do_wifi(a):
             raise Fail('Пароль Wi-Fi — від 8 до 63 символів')
         ap = ('\n          password: ' + json.dumps(pw, ensure_ascii=False)) if pw else ' {}'
         text = ('# Записано Hata (панель → мережа → Wi-Fi). Змінюй через панель.\nnetwork:\n  version: 2\n  wifis:\n'
-                f'    {iface}:\n      dhcp4: true\n      optional: true\n      access-points:\n'
+                f'    {iface}:\n      dhcp4: true\n      optional: true\n'
+                '      dhcp4-overrides:\n        route-metric: 2000\n'        # кабель (1024) завжди важливіший за Wi-Fi
+                '      access-points:\n'
                 f'        {json.dumps(ssid, ensure_ascii=False)}:{ap}\n')
         old = read(WIFI_NETPLAN, None)
         with LOCK:
