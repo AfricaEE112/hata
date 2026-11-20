@@ -615,6 +615,82 @@ def do_wifi(a):
     raise Fail('Невідома дія з Wi-Fi')
 
 
+# ───────────────────────── постійна адреса вдома ─────────────────────────
+# Кабельному підключенню — фіксована адреса (Wi-Fi лишається на DHCP як запасний).
+# Файл 90-… читається останнім, тож перекриває dhcp4 з файлу інсталятора Ubuntu для того ж інтерфейсу.
+
+STATIC_NETPLAN = '/etc/netplan/90-hata-static.yaml'
+
+
+def ip_json(*args):
+    try:
+        return json.loads(run(['ip', '-j', *args], 10).stdout or '[]')
+    except ValueError:
+        return []
+
+
+def static_status():
+    t = read(STATIC_NETPLAN, '')
+    m = re.search(r'^    (\S+):\n(?:.*\n)*?      addresses: \[([\d.]+)/(\d+)\]', t, re.M)
+    return {'iface': m.group(1), 'ip': m.group(2)} if m else {}
+
+
+def do_static_ip(a):
+    op = a.get('op') or 'status'
+    if op == 'status':
+        return {'static': static_status()}
+    if op == 'clear':
+        with LOCK:
+            if os.path.exists(STATIC_NETPLAN):
+                os.remove(STATIC_NETPLAN)
+            run(['netplan', 'apply'], 90)
+        return {'static': {}}
+    if op != 'set':
+        raise Fail('Невідома дія')
+    iface, want = str(a.get('iface') or ''), str(a.get('ip') or '')
+    if not re.fullmatch(r'[\w.-]{1,15}', iface) or not os.path.exists('/sys/class/net/' + iface):
+        raise Fail('Невідоме підключення')
+    if os.path.isdir('/sys/class/net/%s/wireless' % iface):
+        raise Fail('Постійну адресу ставимо кабелю; Wi-Fi лишається запасним на DHCP')
+    cur = next((x for i in ip_json('-4', 'addr', 'show', 'dev', iface) for x in i.get('addr_info', [])), None)
+    gw = next((r.get('gateway') for r in ip_json('route', 'show', 'default', 'dev', iface) if r.get('gateway')), None)
+    if not cur or not gw:
+        raise Fail('Кабель зараз без адреси від роутера — підключи його й спробуй ще раз')
+    plen = int(cur['prefixlen'])
+    try:
+        import ipaddress
+        net = ipaddress.ip_network('%s/%d' % (cur['local'], plen), strict=False)
+        addr = ipaddress.ip_address(want)
+    except ValueError:
+        raise Fail('Незрозуміла адреса: %s' % want)
+    if addr not in net or addr in (net.network_address, net.broadcast_address) or str(addr) == gw:
+        raise Fail('Адреса має бути в домашній мережі %s і не збігатися з роутером' % net)
+    if str(addr) != cur['local']:
+        # зайнята? телефони часто не відповідають на ping, тож дивимось ще й таблицю сусідів (ARP)
+        pong = run(['ping', '-c', '2', '-W', '1', str(addr)], 10).returncode == 0
+        neigh = 'lladdr' in run(['ip', 'neigh', 'show', str(addr)], 5).stdout
+        if pong or neigh:
+            raise Fail('%s уже зайнята іншим пристроєм — вибери іншу' % addr)
+    text = ('# Записано Hata (панель → мережа → постійна адреса). Змінюй через панель.\nnetwork:\n  version: 2\n  ethernets:\n'
+            f'    {iface}:\n      dhcp4: false\n      optional: true\n      addresses: [{addr}/{plen}]\n'
+            f'      routes:\n        - to: default\n          via: {gw}\n          metric: 1024\n'
+            f'      nameservers:\n        addresses: [{gw}, 1.1.1.1]\n')
+    with LOCK:
+        fd = os.open(STATIC_NETPLAN + '.tmp', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            f.write(text)
+        os.replace(STATIC_NETPLAN + '.tmp', STATIC_NETPLAN)
+        r = run(['netplan', 'apply'], 90)
+        ok = r.returncode == 0
+        for _ in range(15):          # чи працює: роутер відповідає з нової адреси
+            if ok and run(['ping', '-c', '1', '-W', '1', '-I', str(addr), gw], 5).returncode == 0:
+                return {'static': static_status()}
+            time.sleep(1)
+        os.remove(STATIC_NETPLAN)    # не вийшло — повертаємо як було, щоб не лишитись без мережі
+        run(['netplan', 'apply'], 90)
+    raise Fail('З адресою %s роутер не відповідає — повернув як було. %s' % (addr, (r.stderr or '').strip()[-200:]))
+
+
 ACTIONS = {
     'ping': lambda a: {'pong': True},
     'status': do_status,
@@ -630,6 +706,7 @@ ACTIONS = {
     'journal': do_journal,
     'wifi': do_wifi,
     'timezone': do_timezone,
+    'static_ip': do_static_ip,
 }
 
 

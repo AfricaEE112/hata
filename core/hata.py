@@ -116,6 +116,13 @@ def demo_gazda(req):
         os.makedirs(os.path.join(DEMO_ROOT, req['name'], 'Фільми'), exist_ok=True)
         os.makedirs(os.path.join(DEMO_ROOT, req['name'], 'Аніме'), exist_ok=True)
         return {'ok': True, 'path': '/srv/disks/' + req['name']}
+    if d == 'static_ip':
+        if req.get('op') == 'set':
+            time.sleep(2)
+            DEMO_STATE['static'] = {'iface': req.get('iface'), 'ip': req.get('ip')}
+        if req.get('op') == 'clear':
+            DEMO_STATE['static'] = {}
+        return {'ok': True, 'static': DEMO_STATE.get('static') or {}}
     if d == 'timezone':
         DEMO_STATE['tz'] = req.get('tz')
         return {'ok': True, 'tz': req.get('tz')}
@@ -489,6 +496,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p == '/api/net':
             r = net_ifaces()
             r['wifi'] = gazda({'do': 'wifi', 'op': 'status'}, 20)
+            r['static'] = gazda({'do': 'static_ip', 'op': 'status'}, 20).get('static') or {}
             return self.json(r)
         if p == '/api/live':
             return self.json(live())
@@ -541,6 +549,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if d.get('op') not in ('scan', 'connect', 'forget', 'status'):
                 return self.json({'ok': False, 'error': 'Невідома дія'})
             return self.json(gazda({'do': 'wifi', 'op': d['op'], 'ssid': d.get('ssid'), 'password': d.get('password')}, 700))
+        if p == '/api/static':
+            if d.get('op') not in ('set', 'clear'):
+                return self.json({'ok': False, 'error': 'Невідома дія'})
+            return self.json(gazda({'do': 'static_ip', 'op': d['op'], 'iface': d.get('iface'), 'ip': d.get('ip')}, 200))
         if p == '/api/timezone':
             return self.json(gazda({'do': 'timezone', 'tz': d.get('tz')}, 60))
         if p == '/api/speedtest':

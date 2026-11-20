@@ -373,7 +373,7 @@ async function panel(soft) {
     svcRow('tailscale', ts.state === 'Running' ? 'доступ звідусіль' : ts.installed ? 'не підключено' : 'не встановлено', ts.state === 'Running' ? 'active' : 'вимкнено', '') +
     `<div class="row svc"><div class="l"><b><span class="okdot always"></span>gazda</b><small>керує системою, не зупиняється</small></div><div class="r"><span class="st" style="color:var(--yel)">завжди</span></div></div>`;
 
-  const net = `<div id="ifaces"><p class="note" style="margin:0"><span class="spin"></span></p></div>
+  const net = `<div id="ifaces"><p class="note" style="margin:0"><span class="spin"></span></p></div><div id="pinBox"></div>
     <dl class="kv" style="margin-top:12px"><dt>ім'я</dt><dd>${esc(s.host)}.local</dd>
       <dt>tailscale</dt><dd>${ts.state === 'Running' ? `<span class="okdot"></span>${esc(ts.name)}` : ts.installed ? 'не підключено' : 'не встановлено'}</dd>
       ${ts.state === 'Running' ? `<dt>ззовні</dt><dd class="link"><a href="http://${esc(ts.name)}:8800/">vidbox</a> · <a href="http://${esc(ts.name)}/">панель</a></dd>` : ''}</dl>
@@ -404,6 +404,10 @@ async function panel(soft) {
   for (const [id, html] of [['disks', dsk], ['svc', svc], ['pwr', pwr]]) $(`#${id} .wbody`).dataset.html = html;
   bindPanel();
   $('#wifiBtn').onclick = () => wifiPage();
+  $('#ifaces').onclick = e => {           // рядки мережі перемальовуються — тож слухаємо на контейнері
+    const b = e.target.closest('[data-pin],[data-unpin]');
+    if (b) b.dataset.pin !== undefined ? pinForm(b.dataset.pin, b.dataset.ip) : unpin();
+  };
   $('#speed').onclick = speedTest;
   if ($('#tsOn')) $('#tsOn').onclick = () => openFromPanel(4);
   if (SPEED) $('#speedRes').innerHTML = SPEED;
@@ -454,12 +458,51 @@ async function netInfo() {
     const warn = i.kind === 'wifi' && w.ssid && w.signal <= -72 ? `Слабкий сигнал (${w.signal} дБм) — Wi-Fi буде повільним. Постав ноутбук ближче до роутера або спробуй мережу 2,4 ГГц: вона пробиває стіни краще.`
       : i.speed && i.speed <= 10 ? 'Лінк лише 10 Мбіт/с — заміни кабель або спробуй інший порт роутера/доку.'
       : i.usb && i.usb < 480 ? 'Пристрій працює як USB 1.1 (12 Мбіт/с) — переткни в інший порт або заміни кабель.' : '';
+    const pinned = (r.static || {}).iface === i.name;
+    const pin = i.kind === 'cable' && i.up ? (pinned ? `<button class="btn ghost" data-unpin aria-label="Прибрати постійну адресу">Скасувати</button>`
+      : `<button class="btn ghost" data-pin="${esc(i.name)}" data-ip="${esc((i.ips || [])[0] || '')}">Закріпити адресу</button>`) : '';
     return `<div class="row"><div class="l"><b><span class="okdot ${i.up ? '' : 'off'}"></span>${KIND[i.kind]}</b><small>${bits.join(' · ')}</small>` +
+      (pinned ? `<small style="display:block;color:var(--acc)">постійна адреса — не зміниться після перезавантаження</small>` : '') +
       (warn ? `<small style="display:block;color:var(--yel)">${warn}</small>` : '') + `</div><div class="r">` +
-      (i.name === r.route ? '<span class="tag ok">інтернет</span>' : i.up ? '' : '<span class="tag">вимкнено</span>') + '</div></div>';
+      (i.name === r.route ? '<span class="tag ok">інтернет</span>' : i.up ? '' : '<span class="tag">вимкнено</span>') + pin + '</div></div>';
   }).join('');
   const html = rows || '<p class="note" style="margin:0">Мережевих адаптерів не знайдено.</p>';
   if ($('#ifaces').dataset.html !== html) { $('#ifaces').innerHTML = html; $('#ifaces').dataset.html = html; }
+}
+
+// Постійна адреса вдома: кабель отримує фіксовану IP замість щоразу нової від роутера.
+let iface_ip = () => '';
+function pinForm(iface, ip) {
+  iface_ip = () => ip;
+  const base = ip.split('.').slice(0, 3).join('.');
+  $('#pinBox').innerHTML = `<form class="row" id="pinF" style="flex-wrap:wrap;border-bottom:0">
+    <div class="l" style="flex-basis:100%"><b>Постійна адреса для кабелю</b>
+      <small>Візьми адресу, яку роутер сам нікому не роздає (часто це .200–.250), або закріпи її ще й у роутері — тоді конфліктів точно не буде.</small></div>
+    <label class="field" style="flex:1 1 200px"><span aria-hidden="true">❯</span><input id="pinIp" value="${esc(base)}.200" aria-label="Постійна адреса" inputmode="decimal"></label>
+    <button class="btn primary" id="pinGo">Закріпити</button><button class="btn ghost" type="button" id="pinX">Скасувати</button>
+    <div class="err" id="pinErr" role="alert" style="flex-basis:100%"></div></form>`;
+  $('#pinX').onclick = () => $('#pinBox').innerHTML = '';
+  $('#pinF').onsubmit = async e => {
+    e.preventDefault();
+    const want = $('#pinIp').value.trim(), b = $('#pinGo');
+    b.disabled = true; b.innerHTML = '<span class="spin"></span> Перевіряю й застосовую…';
+    const r = await api('/api/static', {op: 'set', iface, ip: want}, 60000);
+    if (r.ok === false) {
+      // зайшли через стару IP: вона зникла разом з відповіддю — переходимо на нову
+      if (/Немає зв’язку|довго не відповідає/.test(r.error) && location.hostname === iface_ip()) { location.href = `http://${want}/`; return; }
+      $('#pinErr').textContent = r.error; b.disabled = false; b.textContent = 'Закріпити'; return;
+    }
+    $('#pinBox').innerHTML = '';
+    toast(`Тепер Хата завжди за адресою ${want}`);
+    if (location.hostname !== want && /^\d+\.\d+\.\d+\.\d+$/.test(location.hostname)) setTimeout(() => location.href = `http://${want}/`, 1500);
+    else netInfo();
+  };
+}
+async function unpin() {
+  if (!confirm('Прибрати постійну адресу? Роутер знову видаватиме кабелю адресу сам, і вона може змінюватися.')) return;
+  const r = await api('/api/static', {op: 'clear'}, 200000);
+  toast(r.ok === false ? r.error : 'Адресу знову видає роутер');
+  netInfo();
 }
 
 async function speedTest() {
