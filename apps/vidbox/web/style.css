@@ -714,6 +714,8 @@ code{font:13px var(--mono);color:var(--fg);background:rgba(255,255,255,.07);padd
 .mhead .title{font-size:clamp(30px,4vw,48px)}
 .mhead .acts{margin-top:18px}
 .mhead .btn.primary em{font-style:normal;font-weight:400;opacity:.8}
+.mwho{display:flex;flex-wrap:wrap;gap:4px 16px;margin:0 0 10px;font-size:13.5px;color:var(--fg)}
+.mwho em{font-style:normal;color:var(--mute);margin-right:4px}
 .mdesc{max-width:68ch;margin:4px 0 0;color:var(--mute);line-height:1.6;font-size:14.5px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .mdesc.open{display:block}
 .linkbtn{background:none;border:0;padding:4px 0;color:var(--acc2);font:inherit;font-size:13.5px;cursor:pointer}

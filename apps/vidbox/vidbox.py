@@ -23,6 +23,7 @@ import datetime
 import difflib
 import hashlib
 import html
+import html.parser
 import hmac
 import http.cookies
 import http.server
@@ -970,7 +971,8 @@ def manga_meta_public(tid):
     if not m or not m.get('id'):
         return None
     return {k: m.get(k) for k in ('src', 'id', 'url', 'romaji', 'english', 'native', 'alt', 'year', 'chapters',
-                                  'volumes', 'score', 'format', 'status', 'genres', 'desc', 'color')}
+                                  'volumes', 'score', 'format', 'status', 'genres', 'desc', 'color', 'site',
+                                  'artists', 'series', 'characters', 'lang')}
 
 
 def manga_hint(t, s):
@@ -1095,6 +1097,85 @@ def mu_search(q):
     return None
 
 
+def hitomi_gallery(gid):
+    """Hitomi: дані галереї за номером (той самий файл, що читає сам сайт). Обкладинку не беремо —
+    її адреса шифрується скриптом сайту; перша сторінка в теці й так зазвичай обкладинка."""
+    req = urllib.request.Request('https://ltn.gold-usergeneratedcontent.net/galleries/%d.js' % gid, headers={
+        'Referer': 'https://hitomi.la/', 'User-Agent': 'Mozilla/5.0 (VidBox/%s)' % VERSION})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            raw = r.read(4 << 20).decode('utf-8', 'replace')
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+    g = json.loads(raw[raw.index('{'):].rstrip().rstrip(';'))
+    names = lambda key, one: [x.get(one) for x in (g.get(key) or []) if x.get(one)]
+    tags = []
+    for t in g.get('tags') or []:
+        if t.get('tag'):
+            tags.append(('♀ ' if t.get('female') in (1, '1', True) else '♂ ' if t.get('male') in (1, '1', True) else '') + t['tag'])
+    try:
+        year = int(str(g.get('datepublished') or g.get('date') or '')[:4]) or None
+    except ValueError:
+        year = None
+    return {'src': 'hitomi', 'id': gid, 'url': 'https://hitomi.la/galleries/%d.html' % gid, 'romaji': g.get('title'),
+            'english': None, 'native': g.get('japanese_title'), 'alt': [], 'year': year, 'chapters': None, 'volumes': None,
+            'score': None, 'format': g.get('type'), 'status': None, 'genres': tags[:40], 'desc': '', 'color': None,
+            'artists': names('artists', 'artist') + names('groups', 'group'), 'series': names('parodys', 'parody'),
+            'characters': names('characters', 'character')[:12], 'lang': g.get('language_localname') or g.get('language'),
+            'image': None}
+
+
+class _MetaParser(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.meta, self.title, self._t = {}, '', False
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == 'meta':
+            k = (a.get('property') or a.get('name') or '').lower()
+            if k and a.get('content') and k not in self.meta:
+                self.meta[k] = a['content']
+        elif tag == 'title':
+            self._t = True
+
+    def handle_endtag(self, tag):
+        if tag == 'title':
+            self._t = False
+
+    def handle_data(self, d):
+        if self._t:
+            self.title += d
+
+
+def web_meta(url):
+    """Будь-який сайт (OpenHentai тощо): назва, картинка, опис і ключові слова з метатегів сторінки."""
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) VidBox/%s' % VERSION,
+                                               'Accept': 'text/html', 'Cookie': 'disclaimer=1; age_verified=1; adult=1'})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        body = r.read(3 << 20)
+        cs = r.headers.get_content_charset() or 'utf-8'
+    p = _MetaParser()
+    p.feed(body.decode(cs, 'replace'))
+    m = p.meta
+    title = (m.get('og:title') or m.get('twitter:title') or p.title or '').strip()
+    site = (m.get('og:site_name') or '').strip()
+    title = re.sub(r'\s*[|\-–—:]\s*%s\s*$' % re.escape(site), '', title, flags=re.I) if site else title
+    title = re.sub(r'\s*[|\-–—]\s*(OpenHentai|Hitomi\.la|nhentai|E-Hentai)[^|]*$', '', title, flags=re.I).strip()
+    if not title:
+        return None
+    img = m.get('og:image') or m.get('twitter:image')
+    junk = {'manga', 'hentai', 'doujin', 'doujinshi', 'free', 'read', 'online', 'download'}
+    kws = [k.strip() for k in (m.get('keywords') or '').split(',') if k.strip() and k.strip().lower() not in junk]
+    host = urllib.parse.urlsplit(url).hostname or ''
+    return {'src': 'web', 'site': re.sub(r'^www\.', '', host), 'id': url, 'url': url, 'romaji': html.unescape(title),
+            'english': None, 'native': None, 'alt': [], 'year': None, 'chapters': None, 'volumes': None, 'score': None,
+            'format': None, 'status': None, 'genres': kws[:30], 'desc': html_text(m.get('og:description') or m.get('description') or ''),
+            'color': None, 'image': urllib.parse.urljoin(url, img) if img else None, 'referer': url}
+
+
 def manga_queries(title):
     t = re.sub(r'\(\s*\d{4}\s*\)|\b(19|20)\d{2}\b', ' ', title)
     t = re.sub(r'\b(vol(ume)?s?|v)\.?\s*\d+(\s*-\s*\d+)?\b|\bch(apter)?s?\.?\s*\d+(\s*-\s*\d+)?\b', ' ', t, flags=re.I)
@@ -1111,14 +1192,21 @@ def manga_queries(title):
 def manga_fetch(tid, title, hint):
     d = manga_dir()
     os.makedirs(d, exist_ok=True)
-    al = mu = None
+    al = mu = web = None
     queries = []
     h = (hint or '').strip()
     if h:
         m = re.search(r'anilist\.co/manga/(\d+)', h)
         m2 = re.search(r'mangaupdates\.com/series/([0-9a-z]+)', h, re.I)
         m3 = re.fullmatch(r'mu:\s*(\d+)', h, re.I)
-        if m:
+        m4 = re.search(r'hitomi\.la/(?:[^?#\s]*?[/-])?(\d+)\.html', h, re.I)
+        if m4:
+            web = ('hitomi', int(m4.group(1)))
+        elif re.match(r'https?://', h, re.I) and not (m or m2):
+            web = ('web', h)
+        if web:
+            pass
+        elif m:
             al = int(m.group(1))
         elif m2:
             mu = int(m2.group(1).lower(), 36)
@@ -1131,7 +1219,9 @@ def manga_fetch(tid, title, hint):
     else:
         queries = manga_queries(title)
     meta = None
-    if al:
+    if web:
+        meta = hitomi_gallery(web[1]) if web[0] == 'hitomi' else web_meta(web[1])
+    elif al:
         meta = anilist_manga(mid=al)
     elif mu:
         meta = mu_series(mu)
@@ -1149,14 +1239,26 @@ def manga_fetch(tid, title, hint):
                     break
     out = {'v': MANGA_META_V, 'at': time.time(), 'hint': h, 'q': queries}
     if meta:
-        url = meta.pop('image', None)
+        url, ref = meta.pop('image', None), meta.pop('referer', None)
+        img = None
         if url:
-            req = urllib.request.Request(url, headers={'User-Agent': 'VidBox/%s' % VERSION})
-            with urllib.request.urlopen(req, timeout=30) as r:
-                img = r.read()
+            hdr = {'User-Agent': 'Mozilla/5.0 (VidBox/%s)' % VERSION}
+            if ref:
+                hdr['Referer'] = ref
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=30) as r:
+                    img = r.read(20 << 20)
+            except (OSError, ValueError) as e:
+                print('Манга: обкладинку з %s не завантажив (%s)' % (url, e))
+        if img and img[:3] in (b'\xff\xd8\xff', b'\x89PN', b'RIF', b'GIF') or (img and img[4:12] in (b'ftypavif', b'ftypavis')):
             with open(os.path.join(d, tid + '.part'), 'wb') as f:
                 f.write(img)
             os.replace(os.path.join(d, tid + '.part'), os.path.join(d, tid + '.jpg'))
+        else:      # джерело без обкладинки (Hitomi) — лишається своя: cover.jpg або перша сторінка
+            try:
+                os.remove(os.path.join(d, tid + '.jpg'))
+            except OSError:
+                pass
         out.update(meta)
         print('Манга: «%s» → %s (%s)' % (title, meta.get('romaji') or meta.get('english'), meta['src']))
     else:

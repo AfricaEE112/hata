@@ -1151,9 +1151,13 @@ function mangaMeta(t) {
   const alt = [m.english, m.romaji, m.native, ...(m.alt || [])].filter((x, i, a) => x && x !== t.title && a.indexOf(x) === i).slice(0, 3);
   const row = [m.year, MG_FMT[m.format] || m.format, m.chapters ? `${m.chapters} ${plural(m.chapters, 'розділ', 'розділи', 'розділів')}` : m.volumes ? `${m.volumes} т.` : '',
     MG_STATUS[m.status] || m.status, m.score ? `★ ${(m.score / 10).toFixed(1).replace('.', ',')}` : ''].filter(Boolean).map(x => `<span class="tag">${esc(x)}</span>`).join('');
-  return (alt.length ? `<p class="aalt">${alt.map(esc).join(' · ')}</p>` : '') +
+  const who = [['автор', m.artists], ['серія', m.series], ['персонажі', m.characters]].filter(([, v]) => v && v.length)
+    .map(([k, v]) => `<span><em>${k}</em> ${v.map(esc).join(', ')}</span>`);
+  if (m.lang) who.push(`<span><em>мова</em> ${esc(m.lang)}</span>`);
+  return (alt.length ? `<p class="aalt">${alt.map(esc).join(' · ')}</p>` : '') + (who.length ? `<p class="mwho">${who.join('')}</p>` : '') +
     `<div class="ameta">${row}${(m.genres || []).map(g => `<span class="tag ghost">${esc(g)}</span>`).join('')}</div>`;
 }
+const mgSrc = m => ({anilist: 'AniList', mangaupdates: 'MangaUpdates', hitomi: 'Hitomi'})[m.src] || m.site || 'сайту';
 async function setMangaMode(tid, mode) {
   await api('/api/manga/mode', {method: 'POST', body: JSON.stringify({tid, mode})}).catch(() => null);
 }
@@ -1163,7 +1167,7 @@ async function renderMangaTitle(tid) {
   const c = t.cont, first = t.chapters[0];
   const label = c ? (t.single ? `Продовжити <em>стор. ${c.page}</em>` : `Продовжити <em>${esc(c.label)} · стор. ${c.page}</em>`) : t.read >= t.n ? 'Читати ще раз' : 'Почати читати';
   const segs = Math.min(30, Math.max(10, t.n)), p = mgProgress(t);
-  const src = t.meta ? (t.meta.src === 'mangaupdates' ? 'MangaUpdates' : 'AniList') : '';
+  const src = t.meta ? mgSrc(t.meta) : '';
   const desc = t.meta && t.meta.desc;
   app.innerHTML = `${promptLine('~/манга/' + t.title, 'ls')}
     <a class="mback" href="#/manga">${I.left}манга</a>
@@ -1180,9 +1184,9 @@ async function renderMangaTitle(tid) {
       <div class="mch-head"><h2>${t.vols ? 'Томи' : 'Розділи'}</h2><span class="count">${t.n}</span><span class="sp"></span>
         <button class="btn ghost" id="mflip">${MG.newest ? I.arrDown + 'нові зверху' : I.arrUp + 'з першої'}</button></div>
       <ol class="mlist" id="mlist"></ol></div></section>`}
-    <section class="msrc"><p>${t.meta ? `Опис і обкладинка з <a href="${esc(t.meta.url)}" target="_blank" rel="noopener">${src}</a>.` : 'AniList і MangaUpdates цей тайтл поки не знайшли, тому обкладинка — перша сторінка.'}
-      ${t.meta ? 'Не той тайтл?' : 'Знаєш, як він там називається?'} Встав посилання з AniList чи MangaUpdates або точну назву.</p>
-      <div class="fadd"><input id="mlink" type="text" value="${esc(t.hint)}" placeholder="https://anilist.co/manga/… або назва" aria-label="Посилання на AniList чи MangaUpdates або назва"><button class="btn" id="mlinkset">Шукати</button></div></section>`;
+    <section class="msrc"><p>${t.meta ? `Дані з <a href="${esc(t.meta.url)}" target="_blank" rel="noopener">${esc(src)}</a>${t.meta.src === 'hitomi' ? ', обкладинка — своя (cover.jpg або перша сторінка)' : ''}.` : 'AniList і MangaUpdates цей тайтл поки не знайшли, тому обкладинка — перша сторінка.'}
+      ${t.meta ? 'Не той тайтл?' : 'Знаєш, де він є?'} Встав посилання з AniList, MangaUpdates, Hitomi чи іншого сайту або точну назву.</p>
+      <div class="fadd"><input id="mlink" type="text" value="${esc(t.hint)}" placeholder="https://anilist.co/manga/…, https://hitomi.la/…, будь-яке посилання або назва" aria-label="Посилання на сторінку тайтлу або назва"><button class="btn" id="mlinkset">Шукати</button></div></section>`;
   $$('[data-mm]').forEach(b => b.onclick = () => {
     $$('[data-mm]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
     setMangaMode(tid, b.dataset.mm);
