@@ -31,7 +31,7 @@ say "Встановлюю пакети (python3, ffmpeg, avahi, qrencode, дра
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
   python3 git ca-certificates curl ffmpeg qrencode avahi-daemon libnss-mdns console-setup kbd \
-  exfatprogs smartmontools unattended-upgrades vainfo iw wpasupplicant
+  exfatprogs smartmontools unattended-upgrades vainfo iw wpasupplicant openssh-server
 if grep -qsi 0x8086 /sys/class/drm/card*/device/vendor; then
   # відеоядро Intel: апаратне декодування HEVC/AV1 для VidBox (VAAPI)
   apt-get install -y -q --no-install-recommends intel-media-va-driver-non-free \
