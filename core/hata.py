@@ -346,23 +346,24 @@ def speedtest():
     if not SPEED_LOCK.acquire(blocking=False):
         return {'ok': False, 'error': 'Перевірка вже йде'}
     try:
-        hdr = {'User-Agent': 'Hata'}
+        # curl — той самий, що й у терміналі: Cloudflare його пускає, а запити з Python часом відкидає (403)
+        def curl(url, fmt, limit):
+            r = subprocess.run(['curl', '-o', '/dev/null', '-s', '--max-time', str(limit), '-w', fmt, url],
+                               stdout=subprocess.PIPE, text=True, timeout=limit + 5)
+            return r.stdout.split()
+        base = 'https://speed.cloudflare.com/__down?bytes='
         ms = []
         for _ in range(3):
-            t = time.monotonic()
-            urllib.request.urlopen(urllib.request.Request('https://speed.cloudflare.com/__down?bytes=0', headers=hdr), timeout=8).read()
-            ms.append((time.monotonic() - t) * 1000)
-        got, t = 0, time.monotonic()
-        with urllib.request.urlopen(urllib.request.Request('https://speed.cloudflare.com/__down?bytes=100000000', headers=hdr), timeout=15) as r:
-            while time.monotonic() - t < 10:
-                chunk = r.read(256 * 1024)
-                if not chunk:
-                    break
-                got += len(chunk)
-        sec = max(time.monotonic() - t, 0.001)
-        return {'ok': True, 'mbit': round(got * 8 / sec / 1e6, 1), 'ms': round(min(ms)), 'dev': net_ifaces()['route']}
-    except OSError as e:
-        return {'ok': False, 'error': 'Не вдалося перевірити: немає зв\'язку з інтернетом (%s)' % getattr(e, 'reason', e)}
+            code, conn = curl(base + '0', '%{http_code} %{time_connect}', 8)
+            if code == '000':
+                return {'ok': False, 'error': 'Немає зв\'язку з інтернетом'}
+            ms.append(float(conn) * 1000)
+        code, speed = curl(base + '100000000', '%{http_code} %{speed_download}', 10)
+        if code not in ('200', '000'):
+            return {'ok': False, 'error': 'Сервер перевірки (Cloudflare) відповів %s — спробуй пізніше' % code}
+        return {'ok': True, 'mbit': round(float(speed) * 8 / 1e6, 1), 'ms': round(min(ms)), 'dev': net_ifaces()['route']}
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        return {'ok': False, 'error': 'Не вдалося перевірити швидкість (%s)' % e}
     finally:
         SPEED_LOCK.release()
 
