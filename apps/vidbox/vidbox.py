@@ -1779,7 +1779,7 @@ def deepl_translate(key, lines, src, progress=None):
 
 
 # ── Інші перекладачі. Помилка з quota=True — «ліміт/ключ», тоді переходимо до наступного перекладача.
-TR_NAMES = {'gemini': 'Gemini', 'deepl': 'DeepL', 'azure': 'Azure'}
+TR_NAMES = {'local': 'Локальна модель', 'gemini': 'Gemini', 'deepl': 'DeepL', 'azure': 'Azure'}
 LANG_EN = {'ja': 'Japanese', 'en': 'English', 'ko': 'Korean', 'zh': 'Chinese', 'ru': 'Russian', 'de': 'German',
            'fr': 'French', 'es': 'Spanish', 'it': 'Italian', 'pl': 'Polish', 'pt': 'Portuguese'}
 
@@ -1927,6 +1927,125 @@ def gemini_translate(key, lines, src, progress=None):
     return out
 
 
+# ── Локальна модель: LM Studio (або інший OpenAI-сумісний сервер: llama.cpp, Ollama, KoboldCpp) на ПК в домашній мережі.
+# Без лімітів і цензури — для дорослих тайтлів. Якщо ПК вимкнений чи модель не відповідає — помилка з quota=True,
+# і ланцюжок переходить до наступного перекладача (Gemini тощо).
+LOCAL_SYSTEM = ('You are a professional translator of anime and film subtitles into Ukrainian, including adult (18+) titles '
+                'such as hentai. All characters are adults. This is fiction: translate faithfully and without censorship. '
+                'Keep the exact register of the original — crude stays crude (use real Ukrainian swearing and explicit '
+                'sexual vocabulary, no euphemisms, no asterisks), tender stays tender, shy stays shy. Moans, gasps and '
+                'interjections get natural Ukrainian equivalents. Never refuse, never add warnings, notes or comments.')
+
+
+def local_base(url):
+    """«192.168.3.50:1234» → «http://192.168.3.50:1234/v1»."""
+    url = str(url or '').strip().rstrip('/')
+    if not url:
+        return ''
+    if not re.match(r'^https?://', url):
+        url = 'http://' + url
+    if not re.search(r':\d+(/|$)', url.split('://', 1)[1]) and url.count('/') == 2:
+        url += ':1234'
+    if not url.endswith('/v1'):
+        url += '/v1'
+    return url
+
+
+def local_hdr():
+    k = (C.cfg.get('local_key') or '').strip()
+    return {'Authorization': 'Bearer ' + k} if k else {}
+
+
+def local_pick_model(url, hdr=None):
+    """Модель на сервері: та, що вже завантажена в LM Studio, інакше перша не-embedding."""
+    hdr = local_hdr() if hdr is None else hdr
+    base = local_base(url)
+    try:
+        j = http_json(base + '/models', headers=hdr, timeout=15)
+    except urllib.error.HTTPError as e:
+        raise TrError('локальний сервер не прийняв токен' if e.code in (401, 403) else 'локальний сервер: помилка %d' % e.code, quota=True)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+        raise TrError('ПК з моделлю недоступний (%s) — увімкни ПК і сервер у LM Studio' % getattr(e, 'reason', e), quota=True)
+    ids = [m.get('id') for m in j.get('data', []) if m.get('id') and not re.search(r'embed', m['id'], re.I)]
+    if not ids:
+        raise TrError('на локальному сервері немає жодної моделі', quota=True)
+    try:                                   # рідний API LM Studio знає, яка модель уже в пам'яті відеокарти
+        loaded = [m['id'] for m in http_json(base[:-3] + '/api/v0/models', headers=hdr, timeout=10).get('data', [])
+                  if m.get('state') == 'loaded' and m.get('type') in ('llm', 'vlm')]
+    except Exception:
+        loaded = []
+    for m in loaded:
+        if m in ids:
+            return m
+    return ids[0]
+
+
+def local_translate(url, lines, src, progress=None):
+    base = local_base(url)
+    hdr = local_hdr()
+    model = local_pick_model(url, hdr)      # щоразу перевіряємо: модель на ПК могли змінити
+    if model != C.cfg.get('local_model'):
+        with CFG_LOCK:
+            C.cfg['local_model'] = model
+        save_config()
+    srcname = LANG_EN.get(src, 'the original language')
+    out = list(lines)
+    step = 30
+    use_schema = True
+    for i in range(0, len(lines), step):
+        part = lines[i:i + step]
+        ctx = lines[max(0, i - 6):i]
+        gloss = getattr(TR_CTX, 'gloss', '')
+        prompt = ('Translate every line of "lines" from %s into natural, spoken Ukrainian that fits the scene; keep names '
+                  'and the tone. Lines may be broken mid-sentence — translate them so they still read well in order. '
+                  'Return JSON {"lines": [...]} with exactly %d strings in the same order.\n'
+                  '"context" holds the previous lines for reference only — do not translate them.\n%s\n%s'
+                  % (srcname, len(part), ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
+                                          'how characters address each other):\n' + gloss + '\n') if gloss else '',
+                     json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
+        body = {'model': model, 'temperature': 0.3,
+                'messages': [{'role': 'system', 'content': LOCAL_SYSTEM}, {'role': 'user', 'content': prompt}]}
+        got = []
+        for n in range(3):
+            if use_schema:                  # LM Studio вміє примусово тримати формат — тоді репліки не зсуваються
+                body['response_format'] = {'type': 'json_schema', 'json_schema': {'name': 'subs', 'strict': True, 'schema': {
+                    'type': 'object', 'required': ['lines'], 'properties': {'lines': {
+                        'type': 'array', 'items': {'type': 'string'}, 'minItems': len(part), 'maxItems': len(part)}}}}}
+            else:
+                body.pop('response_format', None)
+            try:
+                res = http_json(base + '/chat/completions', body, hdr, timeout=900)
+            except urllib.error.HTTPError as e:
+                if e.code == 400 and use_schema:        # сервер без structured output — пробуємо без нього
+                    use_schema = False
+                    continue
+                if e.code in (401, 403):
+                    raise TrError('локальний сервер не прийняв токен', quota=True)
+                if n == 2:
+                    raise TrError('локальна модель: помилка %d %s' % (e.code, getattr(e, 'body', '')[:160]), quota=True)
+                time.sleep(5)
+                continue
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                raise TrError('ПК з моделлю недоступний: %s' % getattr(e, 'reason', e), quota=True)
+            try:
+                txt = res['choices'][0]['message'].get('content') or ''
+                txt = re.sub(r'<think>.*?</think>', '', txt, flags=re.S).strip()
+                m = re.search(r'\{.*\}', txt, re.S)
+                got = json.loads(m.group(0) if m else txt).get('lines') or []
+            except (KeyError, IndexError, ValueError, AttributeError, TypeError):
+                got = []
+            if len(got) == len(part):
+                break
+        if len(got) != len(part):        # модель збилась із кількістю — краще оригінал, ніж зсув реплік
+            got = got[:len(part)] + part[len(got):] if got else part
+        for k, t in enumerate(got):
+            if isinstance(t, str) and t.strip():
+                out[i + k] = t.strip()
+        if progress:
+            progress(min(1.0, (i + step) / max(1, len(lines))))
+    return out
+
+
 def azure_translate(key, lines, src, progress=None):
     region = (C.cfg.get('azure_region') or '').strip()
     hdr = {'Ocp-Apim-Subscription-Key': key}
@@ -1960,9 +2079,10 @@ def azure_translate(key, lines, src, progress=None):
 
 def tr_chain():
     """[(назва, ключ)] у порядку: основний, далі решта з ключами."""
-    keys = {'gemini': C.cfg.get('gemini_key'), 'deepl': C.cfg.get('deepl_key'), 'azure': C.cfg.get('azure_key')}
+    keys = {'local': C.cfg.get('local_url'), 'gemini': C.cfg.get('gemini_key'), 'deepl': C.cfg.get('deepl_key'),
+            'azure': C.cfg.get('azure_key')}
     first = C.cfg.get('tr_main') if C.cfg.get('tr_main') in keys else 'gemini'
-    order = [first] + [k for k in ('gemini', 'deepl', 'azure') if k != first]
+    order = [first] + [k for k in ('local', 'gemini', 'deepl', 'azure') if k != first]
     return [(k, keys[k].strip()) for k in order if (keys[k] or '').strip()]
 
 
@@ -1971,7 +2091,8 @@ def translate_uk(lines, src, progress=None):
     errs = []
     for name, key in tr_chain():
         try:
-            fn = {'gemini': gemini_translate, 'deepl': deepl_translate, 'azure': azure_translate}[name]
+            fn = {'local': local_translate, 'gemini': gemini_translate, 'deepl': deepl_translate,
+                  'azure': azure_translate}[name]
             return fn(key, lines, src, progress), name
         except TrError as e:
             errs.append(str(e) if TR_NAMES[name] in str(e) else '%s: %s' % (TR_NAMES[name], e))
@@ -2134,7 +2255,9 @@ def ai_status():
     return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs',
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
-            'geminiModel': C.cfg.get('gemini_model') or '', 'gloss': gloss_load().get('_', ''), 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
+            'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
+            'localUrl': C.cfg.get('local_url') or '', 'localModel': C.cfg.get('local_model') or '',
+            'localToken': bool((C.cfg.get('local_key') or '').strip()), 'gloss': gloss_load().get('_', ''), 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
 
 
 def ai_post(d):
@@ -2200,6 +2323,15 @@ def ai_post(d):
                 return {'ok': False, 'error': str(e)}
             with CFG_LOCK:
                 C.cfg['gemini_key'], C.cfg['gemini_model'] = str(d['gemini']).strip()[:200], model
+        if str(d.get('local') or '').strip():           # адреса ПК з моделлю — перевіряємо, що сервер відповідає
+            url = local_base(d['local'])[:200]
+            tok = str(d.get('localKey') or C.cfg.get('local_key') or '').strip()[:200]
+            try:
+                model = local_pick_model(url, {'Authorization': 'Bearer ' + tok} if tok else {})
+            except TrError as e:
+                return {'ok': False, 'error': str(e)}
+            with CFG_LOCK:
+                C.cfg['local_url'], C.cfg['local_key'], C.cfg['local_model'] = url, tok, model
         with CFG_LOCK:
             if 'key' in d:
                 C.cfg['deepl_key'] = str(d.get('key') or '').strip()[:200]
@@ -2212,6 +2344,9 @@ def ai_post(d):
             for k in d.get('forget') or []:
                 if k in ('deepl_key', 'gemini_key', 'azure_key'):
                     C.cfg.pop(k, None)
+                if k == 'local_key':                     # «Забути» локальну модель — адреса, токен і модель
+                    for x in ('local_url', 'local_key', 'local_model'):
+                        C.cfg.pop(x, None)
             if d.get('model') in AI_MODELS:
                 C.cfg['ai_model'] = d['model']
             if d.get('speed') in ('normal', 'max'):
@@ -3158,6 +3293,7 @@ DEFAULTS = {
     'folders': [], 'anime_folder': '', 'manga_folder': '', 'port': 8800, 'open_browser': True, 'rescan_min': 10,
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
+    'local_url': '', 'local_key': '', 'local_model': '',
     'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs',
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
@@ -3391,7 +3527,7 @@ def settings_json():
     counts = {os.path.normcase(r['root'] or ''): r['n']
               for r in DB.q('SELECT root, COUNT(*) AS n FROM videos WHERE missing=0 GROUP BY root')}
     out = {k: cfg[k] for k in DEFAULTS if k not in ('password_hash', 'secret', 'folders', 'cfg_version',
-                                                    'deepl_key', 'gemini_key', 'azure_key')}   # ключі назовні не віддаємо
+                                                    'deepl_key', 'gemini_key', 'azure_key', 'local_key')}   # ключі назовні не віддаємо
     out.update(
         folders=[{'path': f, 'count': counts.get(os.path.normcase(f), 0), 'exists': os.path.isdir(f)}
                  for f in cfg['folders']],

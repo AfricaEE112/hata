@@ -1116,7 +1116,7 @@ async function renderAnimeTitle(sid) {
       if ($('#aglossBox')) return $('#aglossBox').remove();
       const g = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'gloss_get', sid: t.sid})});
       $('#aplay').parentElement.insertAdjacentHTML('afterend', `<div id="aglossBox" class="win" style="margin:14px 0;padding:14px 16px">
-        <b>Глосарій «${esc(t.title)}»</b><p class="note" style="margin:4px 0 8px">Імена, назви, терміни, звертання — рядками, наприклад «Frieren = Фрірен». Gemini дотримуватиметься їх у всіх серіях цього аніме (разом із загальним глосарієм з Налаштувань).</p>
+        <b>Глосарій «${esc(t.title)}»</b><p class="note" style="margin:4px 0 8px">Імена, назви, терміни, звертання — рядками, наприклад «Frieren = Фрірен». Gemini і локальна модель дотримуватимуться їх у всіх серіях цього аніме (разом із загальним глосарієм з Налаштувань).</p>
         <textarea id="aglossTxt" rows="6" style="width:100%;box-sizing:border-box;resize:vertical">${esc(g.text || '')}</textarea>
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn primary" id="aglossSave">Зберегти</button>
         <button class="btn ghost" id="aiDelAll">Видалити субтитри ШІ всіх серій</button></div></div>`);
@@ -1721,7 +1721,7 @@ async function drawAiSet(st) {
   st = st || await api('/api/aisubs').catch(() => null);
   if (!st || !st.queue || !$('#aiBody')) return;
   const busy = st.install === 'run' || st.queue.some(x => !['done', 'error'].includes(x.state));
-  box.innerHTML = `<p class="note" style="margin-top:0">VidBox сам слухає відео (Whisper — прямо на цьому комп’ютері) і робить субтитри, а українською їх перекладає вибраний перекладач (Gemini, DeepL або Azure). Серія на 24 хв — орієнтовно 15–40 хв, усе у фоні з низьким пріоритетом. Запустити — у плеєрі (кнопка CC → «Українські (ШІ)») або на сторінці аніме для всіх серій.</p>` +
+  box.innerHTML = `<p class="note" style="margin-top:0">VidBox сам слухає відео (Whisper — прямо на цьому комп’ютері) і робить субтитри, а українською їх перекладає вибраний перекладач (локальна модель на ПК, Gemini, DeepL або Azure). Серія на 24 хв — орієнтовно 15–40 хв, усе у фоні з низьким пріоритетом. Запустити — у плеєрі (кнопка CC → «Українські (ШІ)») або на сторінці аніме для всіх серій.</p>` +
     (!st.linux ? `<p class="warn">Поки працює лише на Linux (на Хаті).</p>`
     : !st.ready ? (st.install === 'run' ? `<p class="note">⏳ ${esc(st.log || 'Встановлюю…')} Це кілька хвилин.</p>`
       : `${st.install === 'error' ? `<p class="warn">${esc(st.log)}</p>` : ''}<button class="btn primary" id="aiInstall">${I.plus}Встановити розпізнавання</button><p class="note">Завантажиться ≈ 400 МБ, а з першим відео — модель ще ≈ 1,5 ГБ (швидша — ≈ 0,5 ГБ).</p>`)
@@ -1731,10 +1731,11 @@ async function drawAiSet(st) {
         <div class="sc"><div class="seg" id="aiSrc"><button data-src="subs" class="${st.source !== 'audio' ? 'on' : ''}">англ. субтитри</button><button data-src="audio" class="${st.source === 'audio' ? 'on' : ''}">завжди звук</button></div></div></div>
       <div class="srow"><div class="sl"><b>Швидкість</b><small>Максимальна — усі 8 потоків процесора, і Хата на час розпізнавання вмикає режим продуктивності: швидше, але ноутбук гарячіший і вентилятор гучніший. Якість однакова.</small></div>
         <div class="sc"><div class="seg" id="aiSpeed"><button data-s="normal" class="${st.speed !== 'max' ? 'on' : ''}">звичайна</button><button data-s="max" class="${st.speed === 'max' ? 'on' : ''}">максимальна</button></div></div></div>
-      <div class="srow"><div class="sl"><b>Перекладач</b><small>Перекладає основний; коли в нього скінчився ліміт — наступний, у якого є ключ. ${!(st.gemini || st.deepl || st.azure) ? 'Без жодного ключа будуть лише субтитри мовою оригіналу.' : ''}</small></div>
-        <div class="sc"><div class="seg" id="aiMain">${['gemini', 'deepl', 'azure'].map(k => `<button data-tm="${k}" class="${st.trMain === k ? 'on' : ''}">${TRN[k]}</button>`).join('')}</div></div></div>
-      <div class="srow"><div class="sl"><b>Глосарій</b><small>Підказки для Gemini для всіх відео: імена, терміни, як персонажі звертаються одне до одного. Рядками, наприклад «Rimuru = Рімуру», «senpai — лишати як «семпай»». Для окремого аніме — кнопка «Глосарій» на його сторінці. DeepL і Azure глосарій не використовують.</small></div></div>
+      <div class="srow"><div class="sl"><b>Перекладач</b><small>Перекладає основний; коли в нього скінчився ліміт — наступний, у якого є ключ. ${!(st.local || st.gemini || st.deepl || st.azure) ? 'Без жодного ключа будуть лише субтитри мовою оригіналу.' : ''}</small></div>
+        <div class="sc"><div class="seg" id="aiMain">${['local', 'gemini', 'deepl', 'azure'].map(k => `<button data-tm="${k}" class="${st.trMain === k ? 'on' : ''}">${TRN[k]}</button>`).join('')}</div></div></div>
+      <div class="srow"><div class="sl"><b>Глосарій</b><small>Підказки для Gemini і локальної моделі для всіх відео: імена, терміни, як персонажі звертаються одне до одного. Рядками, наприклад «Rimuru = Рімуру», «senpai — лишати як «семпай»». Для окремого аніме — кнопка «Глосарій» на його сторінці. DeepL і Azure глосарій не використовують.</small></div></div>
       <div class="fadd" style="align-items:flex-start"><textarea id="aiGloss" rows="4" style="flex:1;min-height:84px;resize:vertical" placeholder="Rimuru = Рімуру&#10;Tempest = Темпест&#10;Звертання -san/-chan не перекладати">${esc(st.gloss || '')}</textarea><button class="btn primary" id="aiGlossSave">Зберегти</button></div>
+      ${trLocal(st)}
       ${trKey('gemini', st.gemini, `Безкоштовно і без картки: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> → «Create API key». Мовна модель — краще тримає тон діалогів. На безкоштовному тарифі Google може використовувати тексти для навчання.${st.geminiModel ? ` Модель: ${esc(st.geminiModel)}.` : ''}`)}
       ${trKey('deepl', st.deepl, `<a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener">deepl.com/pro-api</a> → вкладка API → план Developer: 1 млн символів одноразово. Серія аніме японською ≈ 2 тис. символів.<small id="aiUsage"></small>`)}
       ${trKey('azure', st.azure, `Microsoft Translator: 2 млн символів щомісяця безкоштовно (тариф F0). Ключ і регіон — у ресурсі Translator на portal.azure.com → «Keys and Endpoint».`)}</div>`) +
@@ -1750,15 +1751,16 @@ async function drawAiSet(st) {
   $$('#aiMain [data-tm]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', main: b.dataset.tm})));
   $$('[data-savekey]').forEach(b => b.onclick = async () => {
     const k = b.dataset.savekey, v = $('#key_' + k).value.trim();
-    if (!v) { $('#key_' + k).focus(); return toast('Встав ключ ' + TRN[k]); }
+    if (!v) { $('#key_' + k).focus(); return toast(k === 'local' ? 'Впиши адресу ПК, напр. 192.168.3.50:1234' : 'Встав ключ ' + TRN[k]); }
     const body = {op: 'save', [k === 'deepl' ? 'key' : k]: v};
     if (k === 'azure') body.region = $('#key_region').value.trim();
+    if (k === 'local' && $('#key_localtok').value.trim()) body.localKey = $('#key_localtok').value.trim();
     b.disabled = true; b.textContent = 'Перевіряю…';
     const r = await post(body);
     if (!r || r.ok !== true) { b.disabled = false; b.textContent = 'Зберегти'; if (r && r.ok !== false) toast(r.error || 'Не вдалося зберегти'); return; }
     drawAiSet(r);
     if (k === 'deepl') { const u = await post({op: 'usage'}); toast(u.ok ? 'Ключ DeepL працює' : 'Ключ збережено, але DeepL відповів: ' + u.error); }
-    else toast(k === 'gemini' ? `Ключ Gemini працює (${r.geminiModel})` : 'Ключ Azure збережено');
+    else toast(k === 'gemini' ? `Ключ Gemini працює (${r.geminiModel})` : k === 'local' ? `ПК на зв’язку, модель: ${r.localModel}` : 'Ключ Azure збережено');
   });
   if ($('#aiGlossSave')) $('#aiGlossSave').onclick = async () => { const r = await post({op: 'gloss', sid: '_', text: $('#aiGloss').value}); if (r.ok) toast('Глосарій збережено'); };
   $$('[data-forget]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', forget: [b.dataset.forget + '_key']})));
@@ -1771,7 +1773,13 @@ async function drawAiSet(st) {
   if (busy) aiSetT = setTimeout(() => { if ($('#aiBody') && !$('#aiBody').contains(document.activeElement)) drawAiSet(); else if ($('#aiBody')) aiSetT = setTimeout(drawAiSet, 4000); }, 4000);
 }
 
-const TRN = {gemini: 'Gemini', deepl: 'DeepL', azure: 'Azure'};
+const TRN = {local: 'Локальна', gemini: 'Gemini', deepl: 'DeepL', azure: 'Azure'};
+function trLocal(st) {
+  return `<div class="srow"><div class="sl"><b>Локальна модель (ПК)</b><small>${st.local ? `<b style="color:var(--acc)">Підключено: ${esc(st.localUrl)}${st.localModel ? ' · ' + esc(st.localModel) : ''}.</b> ` : ''}Модель на твоєму ПК через LM Studio: без лімітів і цензури, тексти нікуди не йдуть. У LM Studio: Model Server → «Serve on Local Network» → Start. Впиши адресу ПК у домашній мережі (порт 1234) і, якщо задав, API-токен. Коли ПК вимкнений — перекладе наступний перекладач.</small></div></div>
+    <div class="fadd"><input id="key_local" autocomplete="off" value="${esc(st.localUrl ? st.localUrl.replace(/^https?:\/\//, '').replace(/\/v1$/, '') : '')}" placeholder="192.168.3.50:1234" aria-label="Адреса ПК з моделлю">
+      <input id="key_localtok" type="password" autocomplete="off" style="max-width:190px" placeholder="${st.localToken ? '•••• токен збережено' : 'токен (якщо є)'}" aria-label="API-токен LM Studio">
+      <button class="btn primary" data-savekey="local">Перевірити й зберегти</button>${st.local ? '<button class="btn ghost" data-forget="local">Забути</button>' : ''}</div>`;
+}
 function trKey(k, has, hint) {
   return `<div class="srow"><div class="sl"><b>Ключ ${TRN[k]}</b><small>${has ? '<b style="color:var(--acc)">Ключ збережено.</b> ' : ''}${hint}</small></div></div>
     <div class="fadd"><input id="key_${k}" type="password" autocomplete="off" placeholder="${has ? '•••••••• (вставити новий, щоб замінити)' : `Ключ ${TRN[k]}`}" aria-label="Ключ ${TRN[k]}">
