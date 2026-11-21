@@ -2875,29 +2875,51 @@ def crude_terms():
     return out
 
 
-def tr_harden(lines, out, batch=40):
+def tr_harden(lines, out, batch=20):
+    """Окремий прохід «жорсткіше» для 18+. Репліки пронумеровані, у відповіді — n, перші слова оригіналу (src) і новий
+    текст; приймаємо, лише якщо src з цієї репліки і новий текст схожий на свій старий переклад більше, ніж на сусідні.
+    Раніше відповідь була просто списком рядків — модель з'їжджала на одну-дві репліки, і в живій серії «Я цілий
+    тиждень не відчувала члена…» стало «Цей хуй просто охерений!» (переписана сусідня), а кілька реплік — дублями."""
     if not tr_adult() or not C.cfg.get('ai_harden', True):
         return out
     extra = crude_terms()
     idx = [i for i, l in enumerate(lines) if out[i] != l and (CRUDE_RE.search(l) or any(t in l.lower() for t in extra))]
+    sim = lambda a, b: difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
     for b in range(0, len(idx), batch):
         part = idx[b:b + batch]
-        pairs = [{'en': lines[i], 'uk': out[i]} for i in part]
+        pairs = [{'n': k + 1, 'en': lines[i], 'uk': out[i]} for k, i in enumerate(part)]
         schema = {'type': 'object', 'required': ['lines'], 'properties': {'lines': {
-            'type': 'array', 'items': {'type': 'string'}, 'minItems': len(part), 'maxItems': len(part)}}}
+            'type': 'array', 'minItems': len(part), 'maxItems': len(part), 'items': {
+                'type': 'object', 'required': ['n', 'src', 'uk'], 'properties': {
+                    'n': {'type': 'integer'}, 'src': {'type': 'string'}, 'uk': {'type': 'string'}}}}}}
         gloss = gloss_prompt('\n'.join(lines[i] for i in part), 'en')
-        prompt = ('Rewrite the "uk" of every pair so it matches the "en" in crudeness and explicitness. Return JSON '
-                  '{"lines": [...]} with exactly %d Ukrainian strings in the same order.\n%s\n%s'
+        prompt = ('Rewrite the "uk" of every pair so it matches its own "en" in crudeness and explicitness. Return JSON '
+                  '{"lines": [{"n": <the same n>, "src": "<first two words of that en>", "uk": "<rewritten uk>"}, ...]} — '
+                  'exactly %d items, the same n, in the same order; each "uk" is the rewrite of the "uk" with the same n, '
+                  'never of a neighbouring pair.\n%s\n%s'
                   % (len(part), ('Glossary (follow it):\n' + gloss + '\n') if gloss else '',
                      json.dumps({'pairs': pairs}, ensure_ascii=False)))
         j, _ = llm_json(HARDEN_SYSTEM, prompt, schema)
         got = (j or {}).get('lines') or []
-        if len(got) != len(part):
-            continue
-        for i, t in zip(part, got):
-            t = t.strip() if isinstance(t, str) else ''
-            if t and t != lines[i] and not tr_bad(lines[i], t) and len(t) < len(out[i]) * 2 + 20:
-                out[i] = t
+        old = {i: out[i] for i in part}
+        for g in got:
+            if not isinstance(g, dict):
+                continue
+            try:
+                k = int(g.get('n')) - 1
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= k < len(part):
+                continue
+            i, t = part[k], (g.get('uk') if isinstance(g.get('uk'), str) else '').strip()
+            if not t or t == lines[i] or t == old[i] or tr_bad(lines[i], t) or len(t) >= len(old[i]) * 2 + 20:
+                continue
+            if not tr_echo_ok(g.get('src'), lines[i]):
+                continue                 # src з іншої репліки — модель з'їхала
+            own = sim(t, old[i])
+            if own < 0.25 or any(sim(t, old[x]) > own for x in part if x != i):
+                continue                 # схоже на чужий переклад більше, ніж на свій — це переписана сусідня репліка
+            out[i] = t
     return out
 
 
