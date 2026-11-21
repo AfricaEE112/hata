@@ -1706,7 +1706,7 @@ let wantFs = false;   // наступне відео відкрити теж н�
 // Субтитри ШІ: стан однієї позиції черги звичайними словами
 function aiStateText(a) {
   const pct = Math.round((a.p || 0) * 100) + ' %';
-  return {queued: 'у черзі', audio: 'готую звук', model: 'завантажую модель (перший раз ~1,5 ГБ)', recog: `розпізнаю мову · ${pct}`,
+  return {queued: 'у черзі', audio: 'готую звук', model: 'завантажую модель (перший раз ~1,5 ГБ)', recog: `розпізнаю мову · ${pct}`, context: `читаю серію: персонажі, сленг, контекст · ${pct}`,
     translate: `${a.src === 'subs' ? 'перекладаю англійські субтитри' : 'перекладаю українською'} · ${pct}`, done: 'готово', error: 'не вдалося'}[a.state] || a.state;
 }
 let aiSetT = 0;
@@ -1725,6 +1725,8 @@ async function drawAiSet(st) {
         <div class="sc"><div class="seg" id="aiModel"><button data-m="large-v3-turbo" class="${st.model === 'large-v3-turbo' ? 'on' : ''}">точніша</button><button data-m="small" class="${st.model === 'small' ? 'on' : ''}">швидша</button></div></div></div>
       <div class="srow"><div class="sl"><b>Звідки брати текст</b><small>Якщо у відео є англійські субтитри, перекладати їх — текст від людей, точний час, серія за хвилину. Інакше — розпізнавати звук.</small></div>
         <div class="sc"><div class="seg" id="aiSrc"><button data-src="subs" class="${st.source !== 'audio' ? 'on' : ''}">англ. субтитри</button><button data-src="audio" class="${st.source === 'audio' ? 'on' : ''}">завжди звук</button></div></div></div>
+      <div class="srow"><div class="sl"><b>Спершу прочитати серію</b><small>Перед перекладом модель (локальна або Gemini) читає всю серію: про що вона, хто з персонажів чоловік чи жінка (закінчення «втомився/втомилася»), як хто говорить, який сленг. Персонажі й терміни самі додаються в глосарій аніме — твої правки не змінюються. Плюс 1–3 запити на серію.</small></div>
+        <div class="sc"><div class="seg" id="aiCtx"><button data-c="1" class="${st.context !== false ? 'on' : ''}">так</button><button data-c="0" class="${st.context === false ? 'on' : ''}">ні</button></div></div></div>
       <div class="srow"><div class="sl"><b>Швидкість</b><small>Максимальна — усі 8 потоків процесора, і Хата на час розпізнавання вмикає режим продуктивності: швидше, але ноутбук гарячіший і вентилятор гучніший. Якість однакова.</small></div>
         <div class="sc"><div class="seg" id="aiSpeed"><button data-s="normal" class="${st.speed !== 'max' ? 'on' : ''}">звичайна</button><button data-s="max" class="${st.speed === 'max' ? 'on' : ''}">максимальна</button></div></div></div>
       <div class="srow"><div class="sl"><b>Перекладач</b><small>Перекладає основний; коли в нього скінчився ліміт — наступний, у якого є ключ. ${!(st.local || st.gemini || st.deepl || st.azure) ? 'Без жодного ключа будуть лише субтитри мовою оригіналу.' : ''}</small></div>
@@ -1741,6 +1743,7 @@ async function drawAiSet(st) {
   if ($('#aiInstall')) $('#aiInstall').onclick = async () => drawAiSet(await post({op: 'install'}));
   $$('#aiModel [data-m]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', model: b.dataset.m})));
   $$('#aiSpeed [data-s]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', speed: b.dataset.s})));
+  $$('#aiCtx [data-c]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', context: b.dataset.c === '1'})));
   $$('#aiSrc [data-src]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', source: b.dataset.src})));
   $$('#aiMain [data-tm]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', main: b.dataset.tm})));
   $$('[data-savekey]').forEach(b => b.onclick = async () => {
