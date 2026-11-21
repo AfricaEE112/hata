@@ -2226,7 +2226,9 @@ LOCAL_SYSTEM_ADULT = ('You are a professional translator of adult (18+) anime su
                       'no asterisks), tender stays tender, shy stays shy. "Cum/finish" in a sexual sense is «кінчати», '
                       'never «фінішувати». Examples: "Fuck me harder" → «Трахни мене сильніше»; "your cock" → «твій член»; '
                       '"I\'m cumming!" → «Я кінчаю!»; "you slut" → «шльондро»; "Holy shit, your tits" → «Бляха, твої '
-                      'цицьки». ' + LOCAL_COMMON)
+                      'цицьки». During sex "come" means «кінчати» even without other sexual words: "Come whenever you '
+                      'want" → «Кінчай, коли захочеш»; "I\'m gonna catch it" → «Я все зловлю»; "Do it outside!" → «Кінчи '
+                      'назовні!». ' + LOCAL_COMMON)
 LOCAL_SYSTEM = LOCAL_SYSTEM_ADULT        # старе ім'я
 
 
@@ -2237,7 +2239,10 @@ def tr_adult():
 
 SPEAKER_HINT = ('Subtitles do not say who speaks: infer the speaker and the addressee of every line from context and the '
                 'character list. Past-tense verbs, adjectives and vocatives must match their gender (я хотів / я хотіла, '
-                'дурню / дурепо); for a man and a woman together use «обоє», «ми з тобою».')
+                'дурню / дурепо); for a man and a woman together use «обоє», «ми з тобою». A woman speaking about herself '
+                'always uses feminine forms (я зрозуміла, не могла, знала, відчувала), a man — masculine (я зрозумів, знав); '
+                'a line said TO a woman uses feminine forms for her (ти хотіла, ти здрейфила). Do not inflect Japanese '
+                'names in the vocative: «Такуя!», «Юкі!» (not «Такує»).')
 
 
 def local_base(url):
@@ -2262,7 +2267,8 @@ def local_hdr():
 def local_pick_model(url, hdr=None):
     """Яку модель просити в LM Studio. Порядок: вибрана в налаштуваннях VidBox → уже завантажена → та, що була минулого
     разу → перша в списку. Раніше без завантаженої моделі бралась перша зі списку — після того як докачалась Gemma 4
-    26B-A4B (18 ГБ) вона й завантажилась замість 12B, вилізла з 12 ГБ відеопам'яті, і драйвер AMD почав падати."""
+    26B-A4B (18 ГБ) вона й завантажилась замість 12B, вилізла з 12 ГБ відеопам'яті, і драйвер AMD почав падати.
+    Якщо вибрана модель ще не завантажена, а в LM Studio висить інша — ту вивантажуємо: дві моделі разом у 12 ГБ не влізуть."""
     hdr = local_hdr() if hdr is None else hdr
     base = local_base(url)
     try:
@@ -2274,22 +2280,31 @@ def local_pick_model(url, hdr=None):
     ids = [m.get('id') for m in j.get('data', []) if m.get('id') and not re.search(r'embed', m['id'], re.I)]
     if not ids:
         raise TrError('на локальному сервері немає жодної моделі', quota=True)
-    loaded = []                            # рідний API LM Studio знає, яка модель уже в пам'яті відеокарти
+    loaded, insts, v1 = [], [], False     # рідний API LM Studio знає, яка модель уже в пам'яті відеокарти
     for path in ('/api/v1/models', '/api/v0/models'):     # 0.4+ — v1, старші — v0
         try:
             j = http_json(base[:-3] + path, headers=hdr, timeout=10)
         except Exception:
             continue
+        v1 = path == '/api/v1/models'
         for m in (j.get('models') or j.get('data') or []) if isinstance(j, dict) else []:
             mid = m.get('id') or m.get('key') or m.get('model_key')
             if mid and (m.get('state') == 'loaded' or m.get('loaded_instances')) and m.get('type') not in ('embedding', 'embeddings'):
                 loaded.append(mid)
+                insts += [(mid, li.get('id')) for li in m.get('loaded_instances') or [] if isinstance(li, dict) and li.get('id')]
         if loaded:
             break
     with CFG_LOCK:
         C.cfg['local_models'] = ids[:40]
     pin = (C.cfg.get('local_pin') or '').strip()
     if pin and pin in ids:
+        if v1 and pin not in loaded:
+            for mid, iid in insts:          # інша модель у пам'яті — звільняємо місце під вибрану
+                try:
+                    http_json(base[:-3] + '/api/v1/models/unload', {'instance_id': iid}, hdr, timeout=60)
+                    print('LM Studio: вивантажено %s, щоб завантажити %s' % (mid, pin))
+                except Exception as e:
+                    print('LM Studio: не вдалося вивантажити %s: %s' % (mid, e))
         return pin
     for m in loaded:
         if m in ids:
@@ -2307,8 +2322,9 @@ def local_chunk(base, hdr, model, part, ctx, src, state):
     gloss = gloss_prompt('\n'.join(ctx + part), src)
     items = [{'n': k + 1, 'en': t} for k, t in enumerate(part)]
     prompt = ('Translate every item of "lines" from %s into natural, spoken Ukrainian that fits the scene; keep names and '
-              'the tone. Return JSON {"lines": [{"n": <the same n>, "uk": "<translation>"}, ...]} — exactly one item per '
-              'input line, the same n, in the same order. Never merge, split, skip or repeat lines: if a sentence goes on '
+              'the tone. Return JSON {"lines": [{"n": <the same n>, "who": "<who says it>", "uk": "<translation>"}, ...]} — '
+              'exactly one item per input line, the same n, in the same order. Fill "who" first (a name from the '
+              'character list, or «man» / «woman» / «?»), then write "uk" with the grammatical gender of that speaker. Never merge, split, skip or repeat lines: if a sentence goes on '
               'in the next line, translate each part in its own line.\n'
               '"context" holds the previous lines for reference only — do not translate them.\n%s\n%s\n%s'
               % (srcname, SPEAKER_HINT, (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') +
@@ -2323,8 +2339,9 @@ def local_chunk(base, hdr, model, part, ctx, src, state):
             body['response_format'] = {'type': 'json_schema', 'json_schema': {'name': 'subs', 'strict': True, 'schema': {
                 'type': 'object', 'required': ['lines'], 'properties': {'lines': {
                     'type': 'array', 'minItems': len(part), 'maxItems': len(part), 'items': {
-                        'type': 'object', 'required': ['n', 'uk'], 'properties': {
-                            'n': {'type': 'integer'}, 'uk': {'type': 'string'}}}}}}}}
+                        'type': 'object', 'required': ['n', 'who', 'uk'], 'properties': {    # «who» — до «uk»:
+                            'n': {'type': 'integer'}, 'who': {'type': 'string'},       # модель спершу вирішує, хто
+                            'uk': {'type': 'string'}}}}}}}}                            # говорить, і бере його рід
         else:
             body.pop('response_format', None)
         try:
@@ -2646,7 +2663,12 @@ def tr_chain():
 
 
 RU_WORDS = {'возьми', 'что', 'чтобы', 'сейчас', 'конечно', 'хорошо', 'ничего', 'тоже', 'пожалуйста', 'спасибо', 'очень',
-            'нужно', 'можно', 'нельзя', 'сегодня', 'всегда', 'когда', 'потому', 'здесь', 'девушка', 'мальчик', 'говорю'}
+            'нужно', 'можно', 'нельзя', 'сегодня', 'всегда', 'когда', 'потому', 'здесь', 'девушка', 'мальчик', 'говорю',
+            'грудь', 'вообще', 'теперь', 'только', 'тогда', 'ладно', 'щас', 'неверний', 'неверна', 'неверне'}
+# Русизми й вигадані форми, що пролазили в живих серіях: «дразнять», «чортовски», «жалющий», «смоктає», «задоволити»,
+# «кормільця» → дражнять, чортівськи, жалюгідний, смокче, задовольнити, годувальниця.
+RU_STEMS = re.compile(r'^(дразн|чортовск|жалющ|кормил|кормільц|задоволи|смокта(ю|єш|є|ємо|єте|ють)$|'
+                      r'бюстєкс|бюстгалтер|здрейфил[иі]л)', re.I)
 
 
 def tr_foreign(src, out):
@@ -2656,7 +2678,7 @@ def tr_foreign(src, out):
     for w in re.findall(r"[^\W\d_]+(?:['’ʼ-][^\W\d_]+)*", out or ''):
         letters = [ch for ch in w if ch.isalpha()]
         if all('Ѐ' <= ch <= 'ӿ' for ch in letters):
-            if re.search('[ыэъёЫЭЪЁ]', w) or w.lower() in RU_WORDS:   # русизм: «Чорт возьми», «что», «сейчас»
+            if re.search('[ыэъёЫЭЪЁ]', w) or w.lower() in RU_WORDS or RU_STEMS.match(w):   # русизм: «возьми», «дразнять»
                 bad.append(w)
             continue
         if not any('Ѐ' <= ch <= 'ӿ' for ch in letters) and w.lower() in low:
