@@ -1708,6 +1708,8 @@ async function drawAiSet(st) {
       : `${st.install === 'error' ? `<p class="warn">${esc(st.log)}</p>` : ''}<button class="btn primary" id="aiInstall">${I.plus}Встановити розпізнавання</button><p class="note">Завантажиться ≈ 400 МБ, а з першим відео — модель ще ≈ 1,5 ГБ (швидша — ≈ 0,5 ГБ).</p>`)
     : `<div class="srow"><div class="sl"><b>Модель</b><small>Точніша — краще чує японську й шумні сцени; швидша — помітно швидше, але більше помилок.</small></div>
         <div class="sc"><div class="seg" id="aiModel"><button data-m="large-v3-turbo" class="${st.model === 'large-v3-turbo' ? 'on' : ''}">точніша</button><button data-m="small" class="${st.model === 'small' ? 'on' : ''}">швидша</button></div></div></div>
+      <div class="srow"><div class="sl"><b>Швидкість</b><small>Максимальна — усі 8 потоків процесора, і Хата на час розпізнавання вмикає режим продуктивності: швидше, але ноутбук гарячіший і вентилятор гучніший. Якість однакова.</small></div>
+        <div class="sc"><div class="seg" id="aiSpeed"><button data-s="normal" class="${st.speed !== 'max' ? 'on' : ''}">звичайна</button><button data-s="max" class="${st.speed === 'max' ? 'on' : ''}">максимальна</button></div></div></div>
       <div class="srow"><div class="sl"><b>Ключ DeepL</b><small>${st.deepl ? 'Ключ збережено. ' : 'Без ключа будуть лише субтитри мовою оригіналу. '}Безкоштовний ключ — на <a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener">deepl.com/pro-api</a> → вкладка API → план Developer: 1 млн символів одноразово (не щомісяця) — орієнтовно 80–150 серій.</small><small id="aiUsage"></small></div></div>
       <div class="fadd"><input id="aiKey" type="password" autocomplete="off" placeholder="${st.deepl ? '•••••••• (вставити новий, щоб замінити)' : 'Ключ DeepL API, наприклад xxxxxxxx-…:fx'}" aria-label="Ключ DeepL API">
         <button class="btn primary" id="aiKeySave">Зберегти</button>${st.deepl ? '<button class="btn" id="aiUse">Скільки лишилось</button>' : ''}</div>`) +
@@ -1718,6 +1720,7 @@ async function drawAiSet(st) {
   const post = async b => { const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify(b)}); if (r.ok === false && r.error) toast(r.error); return r; };
   if ($('#aiInstall')) $('#aiInstall').onclick = async () => drawAiSet(await post({op: 'install'}));
   $$('#aiModel [data-m]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', model: b.dataset.m})));
+  $$('#aiSpeed [data-s]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', speed: b.dataset.s})));
   if ($('#aiKeySave')) $('#aiKeySave').onclick = async () => {
     const k = $('#aiKey').value.trim();
     if (!k) { $('#aiKey').focus(); return toast('Встав ключ DeepL'); }

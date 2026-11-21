@@ -10,6 +10,7 @@ gazda через unix-сокет /run/hata/gazda.sock, а gazda виконує �
 Те саме з терміналу:  gazda status | gazda disks | gazda update | gazda help
 Забув пароль панелі:  sudo gazda password
 """
+import glob
 import json
 import mmap
 import os
@@ -820,6 +821,52 @@ def do_disk_health(a):
 KEEPER_SAID = {}
 
 
+# Режим продуктивності на час субтитрів ШІ: VidBox у режимі «максимальна швидкість» кладе файл з PID розпізнавання;
+# поки цей процес живий — профіль Asus «performance» (якщо є) і EPP процесора «performance», потім — як було.
+BOOST_FLAG = '/var/lib/hata/vidbox/whisper/boost'
+BOOST = {'on': False, 'saved': {}}
+
+
+def boost_paths():
+    out = []
+    pp = '/sys/firmware/acpi/platform_profile'
+    if os.path.exists(pp) and 'performance' in read(pp + '_choices').split():
+        out.append(pp)
+    out += sorted(glob.glob('/sys/devices/system/cpu/cpu[0-9]*/cpufreq/energy_performance_preference'))
+    return out
+
+
+def boost_care():
+    want = False
+    try:
+        pid = int(read(BOOST_FLAG).strip() or 0)
+        want = pid > 0 and os.path.exists('/proc/%d' % pid) and 'whisper_worker' in read('/proc/%d/cmdline' % pid)
+    except (OSError, ValueError):
+        pass
+    if want == BOOST['on']:
+        return
+    if want:
+        BOOST['saved'] = {}
+        for p in boost_paths():
+            try:
+                BOOST['saved'][p] = read(p).strip()
+                with open(p, 'w') as f:
+                    f.write('performance')
+            except OSError:
+                pass
+        print('gazda: субтитри ШІ — режим продуктивності (%s)' % ', '.join(sorted({os.path.basename(p) for p in BOOST['saved']})), flush=True)
+    else:
+        for p, v in BOOST['saved'].items():
+            try:
+                with open(p, 'w') as f:
+                    f.write(v)
+            except OSError:
+                pass
+        BOOST['saved'] = {}
+        print('gazda: субтитри ШІ — режим продуктивності вимкнено', flush=True)
+    BOOST['on'] = want
+
+
 def keeper():
     """Фонова турбота, раз на 20 с:
     - диск з fstab з'явився пізніше за завантаження (USB, док без живлення) — підмонтувати;
@@ -840,6 +887,7 @@ def keeper():
                         KEEPER_SAID[point] = msg
             if shutil.which('smartctl'):
                 disk_care(time.time())
+            boost_care()
             iface = wifi_iface()
             if iface and shutil.which('iw') and 'on' in run(['iw', 'dev', iface, 'get', 'power_save'], 10).stdout:
                 run(['iw', 'dev', iface, 'set', 'power_save', 'off'], 10)

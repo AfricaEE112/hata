@@ -1784,11 +1784,20 @@ def ai_job(it):
             raise RuntimeError('не вдалося дістати звук: ' + res.stderr.decode('utf-8', 'replace')[-200:])
         ai_set(vid, state='model' if not os.path.isdir(ai_dir('models')) else 'recog', p=0)
         model = C.cfg.get('ai_model') if C.cfg.get('ai_model') in AI_MODELS else AI_MODELS[0]
-        threads = max(1, min(4, (os.cpu_count() or 4) // 2 or 1))
-        proc = subprocess.Popen(['nice', '-n', '15', ai_py(), os.path.join(app_dir(), 'whisper_worker.py'), wav, model,
+        fast = C.cfg.get('ai_speed') == 'max'
+        # звичайна: потік на ядро, найнижчий пріоритет; максимальна: усі потоки процесора, пріоритет вищий,
+        # а Хата (gazda) на цей час вмикає режим продуктивності. Якість та сама — модель і пошук ті самі.
+        threads = (os.cpu_count() or 4) if fast else max(1, min(4, (os.cpu_count() or 4) // 2 or 1))
+        proc = subprocess.Popen(['nice', '-n', '5' if fast else '15', ai_py(), os.path.join(app_dir(), 'whisper_worker.py'), wav, model,
                                  ai_dir('models'), str(threads)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env=ai_env(), text=True, encoding='utf-8')
         AI['proc'] = proc
+        if fast:
+            try:
+                with open(ai_dir('boost'), 'w') as f:
+                    f.write(str(proc.pid))
+            except OSError:
+                pass
         segs, lang, last = [], '', 0
         for line in proc.stdout:
             try:
@@ -1827,10 +1836,11 @@ def ai_job(it):
         ai_set(vid, state='error', err=str(e)[-300:])
     finally:
         AI['proc'] = None
-        try:
-            os.remove(wav)
-        except OSError:
-            pass
+        for f in (wav, ai_dir('boost')):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
 
 
 def ai_loop():
@@ -1859,7 +1869,7 @@ def ai_status():
     for it in q:
         r = DB.one('SELECT title, folder FROM videos WHERE id=?', (it['id'],))
         it['title'] = r['title'] if r else '(файл зник)'
-    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0],
+    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal',
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'linux': sys.platform.startswith('linux'), 'queue': q}
 
 
@@ -1904,6 +1914,8 @@ def ai_post(d):
                 C.cfg['deepl_key'] = str(d.get('key') or '').strip()[:200]
             if d.get('model') in AI_MODELS:
                 C.cfg['ai_model'] = d['model']
+            if d.get('speed') in ('normal', 'max'):
+                C.cfg['ai_speed'] = d['speed']
         save_config()
     elif op == 'usage':
         key = (C.cfg.get('deepl_key') or '').strip()
