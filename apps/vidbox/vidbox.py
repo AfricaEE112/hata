@@ -2079,11 +2079,18 @@ def local_pick_model(url, hdr=None):
     ids = [m.get('id') for m in j.get('data', []) if m.get('id') and not re.search(r'embed', m['id'], re.I)]
     if not ids:
         raise TrError('на локальному сервері немає жодної моделі', quota=True)
-    try:                                   # рідний API LM Studio знає, яка модель уже в пам'яті відеокарти
-        loaded = [m['id'] for m in http_json(base[:-3] + '/api/v0/models', headers=hdr, timeout=10).get('data', [])
-                  if m.get('state') == 'loaded' and m.get('type') in ('llm', 'vlm')]
-    except Exception:
-        loaded = []
+    loaded = []                            # рідний API LM Studio знає, яка модель уже в пам'яті відеокарти
+    for path in ('/api/v1/models', '/api/v0/models'):     # 0.4+ — v1, старші — v0
+        try:
+            j = http_json(base[:-3] + path, headers=hdr, timeout=10)
+        except Exception:
+            continue
+        for m in (j.get('models') or j.get('data') or []) if isinstance(j, dict) else []:
+            mid = m.get('id') or m.get('key') or m.get('model_key')
+            if mid and (m.get('state') == 'loaded' or m.get('loaded_instances')) and m.get('type') not in ('embedding', 'embeddings'):
+                loaded.append(mid)
+        if loaded:
+            break
     for m in loaded:
         if m in ids:
             return m
