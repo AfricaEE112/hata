@@ -358,7 +358,7 @@ ANILIST_Q = queue.Queue()
 ANILIST_PENDING, ANILIST_FAIL = set(), {}
 ANILIST_LOCK = threading.Lock()
 ANILIST_FIELDS = ('id siteUrl title{romaji english native} coverImage{extraLarge large color} '
-                  'description(asHtml:false) genres seasonYear episodes averageScore format')
+                  'description(asHtml:false) genres seasonYear episodes averageScore format isAdult')
 SEASON_RE = re.compile(r'\b(s\d{1,2}|season\s*\d+|\d+(st|nd|rd|th)\s*season|part\s*\d+|сезон\s*\d+|\d+\s*сезон|tv|complete)\b', re.I)
 
 
@@ -521,7 +521,7 @@ def anilist_fetch(sid, top):
         meta.update(id=media.get('id'), url=media.get('siteUrl'), romaji=t.get('romaji'), english=t.get('english'),
                     native=t.get('native'), year=media.get('seasonYear'), episodes=media.get('episodes'),
                     score=media.get('averageScore'), format=media.get('format'), genres=media.get('genres') or [],
-                    desc=desc, color=(media.get('coverImage') or {}).get('color'))
+                    desc=desc, color=(media.get('coverImage') or {}).get('color'), adult=bool(media.get('isAdult')))
         print('AniList: «%s» → %s' % (anime_title(top), t.get('romaji') or t.get('english')))
     else:
         meta['none'] = True
@@ -1700,6 +1700,9 @@ def read_srt(path):
     return segs
 
 
+ASS_DRAW_RE = re.compile(r'^\s*m\s+-?[\d.]+\s+-?[\d.]+(\s+[lbmnspc](\s+-?[\d.]+)+)+\s*$', re.I)
+
+
 def read_vtt(data):
     """WebVTT (як його віддає ffmpeg) → [{s, e, t}] без розмітки; однакові репліки, що йдуть впритул, зливаємо
     (караоке в опенінгах і ефекти фансабів часто розбиті на десятки однакових подій)."""
@@ -1715,6 +1718,9 @@ def read_vtt(data):
         a, b = lines[i].split('-->')
         txt = re.sub(r'<[^>]+>|\{[^}]*\}', '', '\n'.join(lines[i + 1:])).replace('\\N', '\n')
         txt = html.unescape(re.sub(r'[ \t]+', ' ', txt)).strip()
+        if ASS_DRAW_RE.match(txt):        # векторні рамки табличок ASS («m 894 325 l 1206 325…») — не текст
+            continue
+        txt = '\n'.join(x for x in (re.sub(r'^_+|_+$', '', l).strip() for l in txt.split('\n')) if x)   # «______Студент»
         if not txt:
             continue
         sg = {'s': t(a), 'e': t(b.strip().split()[0]), 't': txt}
@@ -1916,8 +1922,10 @@ def gloss_get(sid):
 def gloss_put(sid, notes, items):
     g = gloss_load()
     notes, items = str(notes or '').strip()[:4000], gloss_clean(items)
-    if notes or items:
-        g[sid] = {'notes': notes, 'items': items}
+    old = g.get(sid) if isinstance(g.get(sid), dict) else {}
+    keep = {k: old[k] for k in ('sets',) if k in old}          # вибір наборів для тайтлу не губимо
+    if notes or items or keep:
+        g[sid] = dict(keep, notes=notes, items=items)
     else:
         g.pop(sid, None)
     os.makedirs(os.path.join(C.data, 'aisubs'), exist_ok=True)
@@ -1925,6 +1933,76 @@ def gloss_put(sid, notes, items):
         json.dump(g, f, ensure_ascii=False, indent=1)
     os.replace(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), os.path.join(C.data, 'aisubs', 'glossary.json'))
     return {'notes': notes, 'items': items}
+
+
+# ── Набори глосаріїв (apps/vidbox/glossaries/*.json): «Аніме», «Хентай 18+»… Ідуть разом із VidBox, вмикаються
+# для кожного тайтлу окремо — щоб відверта лексика не потрапляла в звичайне аніме. Без явного вибору: «Аніме» для всіх
+# тайтлів аніме + «Хентай 18+», якщо AniList позначає тайтл як 18+ (isAdult) або жанр Hentai. Набір із adult=true
+# вмикає переклад без цензури. Пріоритет: авто-терміни < набори < загальний глосарій < глосарій тайтлу.
+GLOSS_SETS = {}
+
+
+def gloss_sets():
+    if not GLOSS_SETS:
+        d = os.path.join(app_dir(), 'glossaries')
+        for fn in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+            if fn.endswith('.json'):
+                try:
+                    with open(os.path.join(d, fn), encoding='utf-8') as f:
+                        j = json.load(f)
+                    GLOSS_SETS[fn[:-5]] = {'name': str(j.get('name') or fn[:-5]), 'adult': bool(j.get('adult')),
+                                           'desc': str(j.get('desc') or ''), 'notes': str(j.get('notes') or ''),
+                                           'items': gloss_clean(j.get('items'))}
+                except (OSError, ValueError):
+                    pass
+    return GLOSS_SETS
+
+
+def title_adult(sid):
+    """AniList (або сайт за посиланням) каже, що тайтл 18+? → True/False/None (невідомо)."""
+    try:
+        with open(os.path.join(C.data, 'anime', sid + '.json'), encoding='utf-8') as f:
+            m = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if m.get('none'):
+        return None
+    return bool(m.get('adult') or any(str(g).lower() == 'hentai' for g in m.get('genres') or []))
+
+
+def gloss_title_sets(sid):
+    """→ (набори, auto). Явний вибір користувача або автоматичний."""
+    if not sid or sid == '_':
+        return [], False
+    v = gloss_load().get(sid)
+    if isinstance(v, dict) and isinstance(v.get('sets'), list):
+        return [x for x in v['sets'] if x in gloss_sets()], False
+    auto = [x for x in ('anime',) if x in gloss_sets()]
+    if title_adult(sid) and 'hentai' in gloss_sets():
+        auto.append('hentai')
+    return auto, True
+
+
+def gloss_set_sets(sid, sets):
+    g = gloss_load()
+    v = g.get(sid) if isinstance(g.get(sid), dict) else gloss_get(sid)
+    v = dict(v)
+    if sets is None:
+        v.pop('sets', None)              # назад до автоматичного вибору
+    else:
+        v['sets'] = [x for x in sets if x in gloss_sets()]
+    g[sid] = v
+    os.makedirs(os.path.join(C.data, 'aisubs'), exist_ok=True)
+    with open(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), 'w', encoding='utf-8') as f:
+        json.dump(g, f, ensure_ascii=False, indent=1)
+    os.replace(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), os.path.join(C.data, 'aisubs', 'glossary.json'))
+
+
+def gloss_sets_info(sid):
+    sets, auto = gloss_title_sets(sid)
+    return {'sets': sets, 'setsAuto': auto, 'adultAuto': title_adult(sid) if sid and sid != '_' else None,
+            'setsAvail': [{'id': k, 'name': v['name'], 'adult': v['adult'], 'desc': v['desc'], 'n': len(v['items'])}
+                          for k, v in gloss_sets().items()]}
 
 
 def gloss_counts():
@@ -1936,6 +2014,13 @@ def gloss_prompt(text, src, limit=150):
     для інших мов (Whisper японською тощо) збіг не перевіриш — тоді імена/запозичення першими, до limit."""
     sids = getattr(TR_CTX, 'gloss_sids', None) or []
     notes, items = [], {it[0].lower(): it for it in getattr(TR_CTX, 'auto_items', None) or []}
+    for k in getattr(TR_CTX, 'sets', None) or []:
+        st = gloss_sets().get(k)
+        if st:
+            if st['notes']:
+                notes.append(st['notes'])
+            for it in st['items']:
+                items[it[0].lower()] = it
     for sid in sids:                     # тайтл після загального — його переклади перекривають загальні
         g = gloss_get(sid)
         if g['notes']:
@@ -1985,8 +2070,8 @@ def gemini_translate(key, lines, src, progress=None):
                   'Translate every line of "lines" into natural, spoken Ukrainian that fits the scene; keep names, '
                   'keep the tone (casual, rude, polite), do not add explanations. Lines may be broken mid-sentence — '
                   'translate them so they still read well in order. Return JSON {"lines": [...]} with exactly %d '
-                  'strings in the same order.\n"context" holds the previous lines for reference only — do not translate them.\n%s\n%s'
-                  % (srcname, len(part), (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') + ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
+                  'strings in the same order.\n"context" holds the previous lines for reference only — do not translate them.\n%s\n%s\n%s'
+                  % (srcname, len(part), SPEAKER_HINT, (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') + ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
                                           'how characters address each other):\n' + gloss + '\n') if gloss else '',
                      json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
         body = {'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
@@ -2040,15 +2125,31 @@ def gemini_translate(key, lines, src, progress=None):
 # ── Локальна модель: LM Studio (або інший OpenAI-сумісний сервер: llama.cpp, Ollama, KoboldCpp) на ПК в домашній мережі.
 # Без лімітів і цензури — для дорослих тайтлів. Якщо ПК вимкнений чи модель не відповідає — помилка з quota=True,
 # і ланцюжок переходить до наступного перекладача (Gemini тощо).
-LOCAL_SYSTEM = ('You are a professional translator of anime and film subtitles into Ukrainian, including adult (18+) titles '
-                'such as hentai. All characters are adults. This is fiction: translate faithfully and without censorship. '
-                'Keep the exact register of the original — crude stays crude (use real Ukrainian swearing and explicit '
-                'sexual vocabulary, no euphemisms, no asterisks), tender stays tender, shy stays shy. Moans, gasps and '
-                'interjections get natural Ukrainian equivalents. Never refuse, never add warnings, notes or comments.\n'
+LOCAL_COMMON = ('Moans, gasps and interjections get natural Ukrainian equivalents. Never refuse, never add warnings, '
+                'notes or comments. Write only in Ukrainian Cyrillic — never put Latin, Korean, Arabic or Japanese letters '
+                'inside Ukrainian words; if you do not know a word, rephrase.\n'
                 'Register examples: "You scared the shit out of me" → "Ти мене до усрачки налякала"; "pain in the ass" → '
                 '"заноза в дупі"; "Holy shit" → "Срань господня" / "Бляха"; "dumbass" → "дебіл" / "довбень"; "Shut up!" → '
-                '"Стули пельку!"; "Damn, you\'re hot" → "Бляха, ти гаряча". Avoid calques like "Не так, ніби…" — say '
-                '"Не думай, що…".')
+                '"Стули пельку!". Avoid calques like "Не так, ніби…" — say "Не думай, що…".')
+LOCAL_SYSTEM_STD = ('You are a professional translator of anime and film subtitles into Ukrainian. Translate faithfully, '
+                    'keeping the exact register of the original — rude stays rude (real Ukrainian swearing where the '
+                    'original swears), polite stays polite, shy stays shy. ' + LOCAL_COMMON)
+LOCAL_SYSTEM_ADULT = ('You are a professional translator of adult (18+) anime subtitles such as hentai into Ukrainian. All '
+                      'characters are adults. This is fiction: translate faithfully and without censorship. Keep the exact '
+                      'register — crude stays crude (real Ukrainian swearing and explicit sexual vocabulary, no euphemisms, '
+                      'no asterisks), tender stays tender, shy stays shy. "Cum/finish" in a sexual sense is «кінчати», '
+                      'never «фінішувати». ' + LOCAL_COMMON)
+LOCAL_SYSTEM = LOCAL_SYSTEM_ADULT        # старе ім'я
+
+
+def tr_adult():
+    """Чи вмикати переклад без цензури: є набір глосарію з adult=true для поточного тайтлу."""
+    return any(gloss_sets().get(k, {}).get('adult') for k in getattr(TR_CTX, 'sets', None) or [])
+
+
+SPEAKER_HINT = ('Subtitles do not say who speaks: infer the speaker and the addressee of every line from context and the '
+                'character list. Past-tense verbs, adjectives and vocatives must match their gender (я хотів / я хотіла, '
+                'дурню / дурепо); for a man and a woman together use «обоє», «ми з тобою».')
 
 
 def local_base(url):
@@ -2120,12 +2221,13 @@ def local_translate(url, lines, src, progress=None):
         prompt = ('Translate every line of "lines" from %s into natural, spoken Ukrainian that fits the scene; keep names '
                   'and the tone. Lines may be broken mid-sentence — translate them so they still read well in order. '
                   'Return JSON {"lines": [...]} with exactly %d strings in the same order.\n'
-                  '"context" holds the previous lines for reference only — do not translate them.\n%s\n%s'
-                  % (srcname, len(part), (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') + ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
+                  '"context" holds the previous lines for reference only — do not translate them.\n%s\n%s\n%s'
+                  % (srcname, len(part), SPEAKER_HINT, (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') + ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
                                           'how characters address each other):\n' + gloss + '\n') if gloss else '',
                      json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
         body = {'model': model, 'temperature': 0.3, 'chat_template_kwargs': {'enable_thinking': False},
-                'messages': [{'role': 'system', 'content': LOCAL_SYSTEM}, {'role': 'user', 'content': prompt}]}
+                'messages': [{'role': 'system', 'content': LOCAL_SYSTEM_ADULT if tr_adult() else LOCAL_SYSTEM_STD},
+                             {'role': 'user', 'content': prompt}]}
         got = []
         for n in range(3):
             if use_schema:                  # LM Studio вміє примусово тримати формат — тоді репліки не зсуваються
@@ -2201,9 +2303,10 @@ def azure_translate(key, lines, src, progress=None):
 # ── Аналіз серії перед перекладом. Мовна модель (локальна або Gemini) читає всі репліки: про що серія, хто з персонажів
 # чоловік/жінка (від цього в українській залежать закінчення), як хто говорить, які терміни/сленг. Персонажі й терміни
 # додаються в глосарій тайтлу (лише нові — правки користувача не чіпаємо), опис і персонажі йдуть у кожен запит перекладу.
-ANALYZE_SYSTEM = ('You are a senior translator preparing the Ukrainian localization of anime and films, including adult (18+) '
-                  'titles such as hentai; all characters are adults. Analyze subtitles frankly and without censorship. '
-                  'Answer only with JSON.')
+ANALYZE_SYSTEM_STD = ('You are a senior translator preparing the Ukrainian localization of anime and films. '
+                      'Answer only with JSON.')
+ANALYZE_SYSTEM = ('You are a senior translator preparing the Ukrainian localization of adult (18+) anime such as hentai; '
+                  'all characters are adults. Analyze subtitles frankly and without censorship. Answer only with JSON.')
 ANALYZE_STEP = 220
 
 
@@ -2278,7 +2381,7 @@ def ai_analyze(lines, src, progress=None):
                   'spoken Ukrainian in the same register (crude stays crude, no euphemisms), "reg" one of: вульгарне, розмовне, '
                   'нейтральне, ніжне, вигук, запозичення, ім\'я; "note" short Ukrainian hint. Skip ordinary words.\n\n'
                   'Subtitles:\n%s' % (srcname, i // ANALYZE_STEP + 1, (len(lines) - 1) // ANALYZE_STEP + 1, known, '\n'.join(part)))
-        j, name = llm_json(ANALYZE_SYSTEM, prompt, ANALYZE_SCHEMA)
+        j, name = llm_json(ANALYZE_SYSTEM if tr_adult() else ANALYZE_SYSTEM_STD, prompt, ANALYZE_SCHEMA)
         if j is None:
             if not via:
                 return None              # жодна мовна модель не відповіла — перекладаємо без аналізу
@@ -2331,7 +2434,9 @@ def ai_context(vid, r, lines, src, set_state):
     TR_CTX.auto_items = gloss_clean(auto)
     sid = video_sid(r)
     if sid:                              # у глосарій тайтлу — тільки те, чого там ще нема (і нема в загальному)
-        g, have = gloss_get(sid), {it[0].lower() for it in gloss_get(sid)['items'] + gloss_get('_')['items']}
+        g = gloss_get(sid)
+        have = {it[0].lower() for it in g['items'] + gloss_get('_')['items']}
+        have |= {it[0].lower() for k in getattr(TR_CTX, 'sets', None) or [] for it in gloss_sets().get(k, {}).get('items', [])}
         new = [it for it in TR_CTX.auto_items if it[0].lower() not in have]
         if new:
             gloss_put(sid, g['notes'], g['items'] + new)
@@ -2354,6 +2459,35 @@ def tr_chain():
     return [(k, keys[k].strip()) for k in order if (keys[k] or '').strip()]
 
 
+def tr_foreign(src, out):
+    """Слова перекладу з не-кириличними літерами, яких нема в оригіналі: «розglів», «비교є», «заваangيتي».
+    Латинське слово, що є в оригіналі (OK, Wi-Fi, ім'я латиницею), — не помилка."""
+    bad, low = [], src.lower()
+    for w in re.findall(r"[^\W\d_]+(?:['’ʼ-][^\W\d_]+)*", out or ''):
+        letters = [ch for ch in w if ch.isalpha()]
+        if all('Ѐ' <= ch <= 'ӿ' for ch in letters):
+            continue
+        if not any('Ѐ' <= ch <= 'ӿ' for ch in letters) and w.lower() in low:
+            continue
+        bad.append(w)
+    return bad
+
+
+def tr_fix_foreign(fn, key, lines, out, src):
+    """Рядки з «кашею» з інших абеток — перекласти ще раз, кожен окремо з двома попередніми репліками як контекстом."""
+    bad = [i for i, (a, b) in enumerate(zip(lines, out)) if b != a and tr_foreign(a, b)]
+    for i in bad[:40]:
+        for _ in range(2):
+            try:
+                got = fn(key, lines[max(0, i - 2):i + 1], src)
+            except Exception:
+                return out
+            if got and not tr_foreign(lines[i], got[-1]) and got[-1] != lines[i]:
+                out[i] = got[-1]
+                break
+    return out
+
+
 def translate_uk(lines, src, progress=None):
     """Переклад українською першим перекладачем, у якого не скінчився ліміт. → (тексти, назва перекладача)."""
     errs = []
@@ -2361,7 +2495,10 @@ def translate_uk(lines, src, progress=None):
         try:
             fn = {'local': local_translate, 'gemini': gemini_translate, 'deepl': deepl_translate,
                   'azure': azure_translate}[name]
-            return fn(key, lines, src, progress), name
+            out = fn(key, lines, src, progress)
+            if name in ('local', 'gemini'):  # DeepL/Azure такого не роблять — у мовних моделей буває
+                out = tr_fix_foreign(fn, key, lines, out, src)
+            return out, name
         except TrError as e:
             errs.append(str(e) if TR_NAMES[name] in str(e) else '%s: %s' % (TR_NAMES[name], e))
             if not e.quota:
@@ -2394,6 +2531,7 @@ def ai_job(it):
     wav = os.path.join(C.data, 'aisubs', 'tmp-%s.wav' % vid)
     key = bool(tr_chain())
     TR_CTX.gloss_sids = [x for x in ('_', video_sid(r)) if x]
+    TR_CTX.sets = gloss_title_sets(video_sid(r))[0]
     TR_CTX.ctx, TR_CTX.auto_items = '', []
     st = lambda **kw: ai_set(vid, **kw)
     have = [f for f in (os.listdir(out) if os.path.isdir(out) else []) if f.endswith('.srt') and f != 'uk.srt']
@@ -2578,7 +2716,18 @@ def ai_post(d):
         with AI_LOCK:
             ai_save_queue([it for it in ai_queue() if it['id'] not in ids or it['id'] == AI['cur']])
     elif op == 'gloss_get':
-        return dict(gloss_get(str(d.get('sid') or '_')), ok=True)
+        sid = str(d.get('sid') or '_')
+        return dict(gloss_get(sid), ok=True, **gloss_sets_info(sid))
+    elif op == 'gloss_sets':            # набори для тайтлу: список id або null — автоматично
+        sid = str(d.get('sid') or '')
+        if sid not in anime_series():
+            return {'ok': False, 'error': 'Тайтл не знайдено'}
+        sets = d.get('sets')
+        gloss_set_sets(sid, None if sets is None else [str(x) for x in sets if isinstance(x, str)])
+        return dict(gloss_get(sid), ok=True, **gloss_sets_info(sid))
+    elif op == 'gloss_set_view':        # вміст набору — подивитись
+        st = gloss_sets().get(str(d.get('id') or ''))
+        return dict(st, ok=True) if st else {'ok': False, 'error': 'Набір не знайдено'}
     elif op in ('gloss', 'gloss_import'):
         sid = str(d.get('sid') or '_')
         if sid != '_' and sid not in anime_series():
