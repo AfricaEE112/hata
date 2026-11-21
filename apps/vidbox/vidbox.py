@@ -2262,7 +2262,8 @@ def local_hdr():
 def local_pick_model(url, hdr=None):
     """Яку модель просити в LM Studio. Порядок: вибрана в налаштуваннях VidBox → уже завантажена → та, що була минулого
     разу → перша в списку. Раніше без завантаженої моделі бралась перша зі списку — після того як докачалась Gemma 4
-    26B-A4B (18 ГБ) вона й завантажилась замість 12B, вилізла з 12 ГБ відеопам'яті, і драйвер AMD почав падати."""
+    26B-A4B (18 ГБ) вона й завантажилась замість 12B, вилізла з 12 ГБ відеопам'яті, і драйвер AMD почав падати.
+    Якщо вибрана модель ще не завантажена, а в LM Studio висить інша — ту вивантажуємо: дві моделі разом у 12 ГБ не влізуть."""
     hdr = local_hdr() if hdr is None else hdr
     base = local_base(url)
     try:
@@ -2274,22 +2275,31 @@ def local_pick_model(url, hdr=None):
     ids = [m.get('id') for m in j.get('data', []) if m.get('id') and not re.search(r'embed', m['id'], re.I)]
     if not ids:
         raise TrError('на локальному сервері немає жодної моделі', quota=True)
-    loaded = []                            # рідний API LM Studio знає, яка модель уже в пам'яті відеокарти
+    loaded, insts, v1 = [], [], False     # рідний API LM Studio знає, яка модель уже в пам'яті відеокарти
     for path in ('/api/v1/models', '/api/v0/models'):     # 0.4+ — v1, старші — v0
         try:
             j = http_json(base[:-3] + path, headers=hdr, timeout=10)
         except Exception:
             continue
+        v1 = path == '/api/v1/models'
         for m in (j.get('models') or j.get('data') or []) if isinstance(j, dict) else []:
             mid = m.get('id') or m.get('key') or m.get('model_key')
             if mid and (m.get('state') == 'loaded' or m.get('loaded_instances')) and m.get('type') not in ('embedding', 'embeddings'):
                 loaded.append(mid)
+                insts += [(mid, li.get('id')) for li in m.get('loaded_instances') or [] if isinstance(li, dict) and li.get('id')]
         if loaded:
             break
     with CFG_LOCK:
         C.cfg['local_models'] = ids[:40]
     pin = (C.cfg.get('local_pin') or '').strip()
     if pin and pin in ids:
+        if v1 and pin not in loaded:
+            for mid, iid in insts:          # інша модель у пам'яті — звільняємо місце під вибрану
+                try:
+                    http_json(base[:-3] + '/api/v1/models/unload', {'instance_id': iid}, hdr, timeout=60)
+                    print('LM Studio: вивантажено %s, щоб завантажити %s' % (mid, pin))
+                except Exception as e:
+                    print('LM Studio: не вдалося вивантажити %s: %s' % (mid, e))
         return pin
     for m in loaded:
         if m in ids:
