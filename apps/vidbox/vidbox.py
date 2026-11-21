@@ -1936,6 +1936,24 @@ def gloss_put(sid, notes, items):
     return {'notes': notes, 'items': items, 'auto': gloss_clean(keep.get('auto'))}
 
 
+HONORIFIC_RE = re.compile(r"^(o?nee|o?nii|onee|onii|ane|ani)([\s-]?(chan|san|sama|kun|tan))?$|^(sis|bro|sister|brother|"
+                          r"mom|mommy|mother|mama|dad|daddy|papa|father|master|sensei|senpai|teacher)$", re.I)
+
+
+def gloss_auto_ok(it, name=False):
+    """Чи годиться авто-термін з аналізу серії: без «каші» абеток і русизмів, короткий, не звертання замість імені.
+    Мала модель приносить і таке: «sucking my tits → ssиш мої груди», «I'll come right away → Я зараз вибрюшу»."""
+    t, tr, note = it[0], it[1], it[3] if len(it) > 3 else ''
+    if not t or not tr or len(t.split()) > 4 or len(tr.split()) > 6:
+        return False
+    note_bad = [w for w in tr_foreign(t, note) if not (w.isascii() and w.isalpha())]   # «senpai» у примітці — можна
+    if tr_foreign(t, tr) or note_bad or re.search(r'[A-Za-z]', tr):
+        return False
+    if HONORIFIC_RE.match(t.strip()) and (name or "ім'я" in (it[2] if len(it) > 2 else '')):
+        return False
+    return True
+
+
 def gloss_put_auto(sid, auto):
     """Авто-терміни з аналізу серій — окремо від записів користувача і з найнижчим пріоритетом: помилка моделі
     («кічка», «втікаєш від сміливості») не закріплюється над наборами й правками."""
@@ -2016,7 +2034,7 @@ def gloss_set_sets(sid, sets):
 
 def gloss_sets_info(sid):
     sets, auto = gloss_title_sets(sid)
-    return {'sets': sets, 'setsAuto': auto, 'adultAuto': title_adult(sid) if sid and sid != '_' else None,
+    return {'autoBad': [it[0] for it in gloss_get(sid).get('auto') or [] if not gloss_auto_ok(it)] if sid and sid != '_' else [],'sets': sets, 'setsAuto': auto, 'adultAuto': title_adult(sid) if sid and sid != '_' else None,
             'setsAvail': [{'id': k, 'name': v['name'], 'adult': v['adult'], 'desc': v['desc'], 'n': len(v['items'])}
                           for k, v in gloss_sets().items()]}
 
@@ -2056,10 +2074,11 @@ def gloss_prompt(text, src, limit=150):
     """Глосарій для одного запиту: правила + терміни, що трапляються в text (для англ. джерела);
     для інших мов (Whisper японською тощо) збіг не перевіриш — тоді імена/запозичення першими, до limit."""
     sids = getattr(TR_CTX, 'gloss_sids', None) or []
-    notes, items = [], {it[0].lower(): it for it in getattr(TR_CTX, 'auto_items', None) or []}
+    notes, items = [], {it[0].lower(): it for it in getattr(TR_CTX, 'auto_items', None) or [] if gloss_auto_ok(it)}
     for sid in sids:                     # авто-терміни тайтлу з попередніх серій — найнижчий пріоритет
         for it in gloss_get(sid).get('auto') or []:
-            items[it[0].lower()] = it
+            if gloss_auto_ok(it):        # старе сміття з попередніх версій теж не пускаємо в запит
+                items[it[0].lower()] = it
     for k in getattr(TR_CTX, 'sets', None) or []:
         st = gloss_sets().get(k)
         if st:
@@ -2537,9 +2556,10 @@ def ai_context(vid, r, lines, src, set_state):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(ctx, f, ensure_ascii=False, indent=1)
-    chars = ctx.get('characters') or []
+    chars = [c for c in ctx.get('characters') or []
+             if gloss_auto_ok([c.get('name', ''), c.get('uk', ''), "ім'я", c.get('speech', '')], name=True)]
     auto = [[c['name'], c['uk'], "ім'я", ' · '.join(x for x in (GENDER_UK.get(c.get('gender'), ''), c.get('speech', '')) if x)]
-            for c in chars] + (ctx.get('terms') or [])
+            for c in chars] + [t for t in ctx.get('terms') or [] if gloss_auto_ok(t)]
     TR_CTX.auto_items = gloss_clean(auto)
     sid = video_sid(r)
     if sid:                              # у глосарій тайтлу — тільки те, чого там ще нема (і нема в загальному)
