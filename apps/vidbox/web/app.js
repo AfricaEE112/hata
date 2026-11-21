@@ -35,6 +35,8 @@ const I = {
   grid: svg('<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>'),
   folder: svg('<path d="M3.5 7a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>'),
   plus: svg('<path d="M12 5v14M5 12h14"/>'),
+  upload: svg('<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M4.5 15v3.5a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V15"/>'),
+  download: svg('<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M4.5 15v3.5a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V15"/>'),
   trash: svg('<path d="M4.5 7h15M10 11v6M14 11v6M6 7l.9 11.2a2 2 0 0 0 2 1.8h6.2a2 2 0 0 0 2-1.8L18 7M9 7V4.5h6V7"/>'),
   rew: svg('<path d="M11 18 4.5 12 11 6zM19.5 18 13 12l6.5-6z"/>', 'solid'),
   ff: svg('<path d="M13 6l6.5 6-6.5 6zM4.5 6 11 12l-6.5 6z"/>', 'solid'),
@@ -816,6 +818,7 @@ async function renderSettings() {
     <p class="warn" id="merr" hidden></p>
   </div></section>
   <section class="set win" id="aiSet">${winBar('~/.config/vidbox/субтитри-ші')}<div class="win-body"><h2>Субтитри ШІ</h2><div id="aiBody"><p class="note">Завантажую…</p></div></div></section>
+  <section class="set win" id="glSet">${winBar('~/.config/vidbox/глосарій')}<div class="win-body"><h2>Глосарій</h2><div id="glMain"></div></div></section>
   <section class="set win">${winBar('~/.config/vidbox/перегляд')}<div class="win-body"><h2>Перегляд</h2>
     ${row('Продовжувати з місця, де зупинився', 'Якщо вимкнути, відео щоразу починається спочатку.', sw('resume', st.resume))}
     ${row('Вмикати наступне відео', 'Коли відео закінчилось, вмикається наступне з тієї ж папки.', sw('autoplay_next', st.autoplay_next))}
@@ -868,6 +871,7 @@ async function renderSettings() {
   if ($('#animeoff')) $('#animeoff').onclick = () => { if (confirm('Прибрати папку з аніме? Розділ «Аніме» зникне, файли на диску лишаться.')) setAnime(''); };
 
   drawAiSet();
+  glossPanel($('#glMain'), '_');
   const setManga = async a => {
     const r = await api('/api/settings', {method: 'POST', body: JSON.stringify({manga_folder: a})});
     const e = $('#merr');
@@ -1112,19 +1116,11 @@ async function renderAnimeTitle(sid) {
   api('/api/aisubs').then(st => {
     if (!st || !st.ready || !$('#aplay')) return;
     $('#aplay').parentElement.insertAdjacentHTML('beforeend', `<button class="btn ghost" id="aisubs" title="Зробити українські субтитри ШІ для всіх серій">Субтитри ШІ</button><button class="btn ghost" id="agloss" title="Підказки для перекладу цього аніме">Глосарій</button>`);
-    $('#agloss').onclick = async () => {
+    $('#agloss').onclick = () => {
       if ($('#aglossBox')) return $('#aglossBox').remove();
-      const g = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'gloss_get', sid: t.sid})});
-      $('#aplay').parentElement.insertAdjacentHTML('afterend', `<div id="aglossBox" class="win" style="margin:14px 0;padding:14px 16px">
-        <b>Глосарій «${esc(t.title)}»</b><p class="note" style="margin:4px 0 8px">Імена, назви, терміни, звертання — рядками, наприклад «Frieren = Фрірен». Gemini і локальна модель дотримуватимуться їх у всіх серіях цього аніме (разом із загальним глосарієм з Налаштувань).</p>
-        <textarea id="aglossTxt" rows="6" style="width:100%;box-sizing:border-box;resize:vertical">${esc(g.text || '')}</textarea>
-        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn primary" id="aglossSave">Зберегти</button>
-        <button class="btn ghost" id="aiDelAll">Видалити субтитри ШІ всіх серій</button></div></div>`);
-      $('#aglossTxt').focus();
-      $('#aglossSave').onclick = async () => {
-        const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'gloss', sid: t.sid, text: $('#aglossTxt').value})});
-        toast(r.ok ? 'Глосарій збережено — діятиме для наступних перекладів' : (r.error || 'Не вдалося'));
-      };
+      $('#aplay').parentElement.insertAdjacentHTML('afterend', `<section id="aglossBox" class="set win" style="margin:16px 0">${winBar(`~/anime/${esc(t.title)}/глосарій`)}<div class="win-body"><h2>Глосарій</h2><div id="aglossBody"></div>
+        <div class="srow"><div class="sl"><b>Субтитри ШІ цього аніме</b><small>Оригінальні субтитри у відео не зачіпаються.</small></div><div class="sc"><button class="btn ghost" id="aiDelAll">${I.trash}Видалити для всіх серій</button></div></div></div></section>`);
+      glossPanel($('#aglossBody'), t.sid, t.title);
       $('#aiDelAll').onclick = async () => {
         if (!confirm('Видалити українські й інші субтитри ШІ всіх серій цього аніме? Оригінальні субтитри у відео не зачіпаються.')) return;
         const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'delete', sid: t.sid})});
@@ -1733,8 +1729,6 @@ async function drawAiSet(st) {
         <div class="sc"><div class="seg" id="aiSpeed"><button data-s="normal" class="${st.speed !== 'max' ? 'on' : ''}">звичайна</button><button data-s="max" class="${st.speed === 'max' ? 'on' : ''}">максимальна</button></div></div></div>
       <div class="srow"><div class="sl"><b>Перекладач</b><small>Перекладає основний; коли в нього скінчився ліміт — наступний, у якого є ключ. ${!(st.local || st.gemini || st.deepl || st.azure) ? 'Без жодного ключа будуть лише субтитри мовою оригіналу.' : ''}</small></div>
         <div class="sc"><div class="seg" id="aiMain">${['local', 'gemini', 'deepl', 'azure'].map(k => `<button data-tm="${k}" class="${st.trMain === k ? 'on' : ''}">${TRN[k]}</button>`).join('')}</div></div></div>
-      <div class="srow"><div class="sl"><b>Глосарій</b><small>Підказки для Gemini і локальної моделі для всіх відео: імена, терміни, як персонажі звертаються одне до одного. Рядками, наприклад «Rimuru = Рімуру», «senpai — лишати як «семпай»». Для окремого аніме — кнопка «Глосарій» на його сторінці. DeepL і Azure глосарій не використовують.</small></div></div>
-      <div class="fadd" style="align-items:flex-start"><textarea id="aiGloss" rows="4" style="flex:1;min-height:84px;resize:vertical" placeholder="Rimuru = Рімуру&#10;Tempest = Темпест&#10;Звертання -san/-chan не перекладати">${esc(st.gloss || '')}</textarea><button class="btn primary" id="aiGlossSave">Зберегти</button></div>
       ${trLocal(st)}
       ${trKey('gemini', st.gemini, `Безкоштовно і без картки: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> → «Create API key». Мовна модель — краще тримає тон діалогів. На безкоштовному тарифі Google може використовувати тексти для навчання.${st.geminiModel ? ` Модель: ${esc(st.geminiModel)}.` : ''}`)}
       ${trKey('deepl', st.deepl, `<a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener">deepl.com/pro-api</a> → вкладка API → план Developer: 1 млн символів одноразово. Серія аніме японською ≈ 2 тис. символів.<small id="aiUsage"></small>`)}
@@ -1762,7 +1756,6 @@ async function drawAiSet(st) {
     if (k === 'deepl') { const u = await post({op: 'usage'}); toast(u.ok ? 'Ключ DeepL працює' : 'Ключ збережено, але DeepL відповів: ' + u.error); }
     else toast(k === 'gemini' ? `Ключ Gemini працює (${r.geminiModel})` : k === 'local' ? `ПК на зв’язку, модель: ${r.localModel}` : 'Ключ Azure збережено');
   });
-  if ($('#aiGlossSave')) $('#aiGlossSave').onclick = async () => { const r = await post({op: 'gloss', sid: '_', text: $('#aiGloss').value}); if (r.ok) toast('Глосарій збережено'); };
   $$('[data-forget]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', forget: [b.dataset.forget + '_key']})));
   if ($('#aiUse')) $('#aiUse').onclick = async () => {
     const u = await post({op: 'usage'});
@@ -1771,6 +1764,113 @@ async function drawAiSet(st) {
   $$('[data-airm]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'remove', id: b.dataset.airm})));
   if ($('#aiClear')) $('#aiClear').onclick = async () => drawAiSet(await post({op: 'clear'}));
   if (busy) aiSetT = setTimeout(() => { if ($('#aiBody') && !$('#aiBody').contains(document.activeElement)) drawAiSet(); else if ($('#aiBody')) aiSetT = setTimeout(drawAiSet, 4000); }, 4000);
+}
+
+// ── Глосарій: однаковий блок у Налаштуваннях (sid '_') і на сторінці аніме. Файл (.csv/.tsv/.md/.txt) — перетягнути
+// або «Завантажити файл»; таблиця з пошуком, правка рядка — клік по ньому, експорт у .csv (той самий формат, що читає імпорт).
+const GL_REG = ['вульгарне', 'розмовне', 'нейтральне', 'ніжне', 'вигук', 'запозичення', "ім'я"];
+function glossPanel(host, sid, title) {
+  if (!host) return;
+  const G = {notes: '', items: [], q: '', more: 120, file: null};
+  const post = async b => { const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify(Object.assign({sid}, b))}); if (r.ok === false) toast(r.error || 'Не вдалося'); return r; };
+  const save = async () => { const r = await post({op: 'gloss', notes: G.notes, items: G.items}); if (r.ok) { G.items = r.items; G.notes = r.notes; } return r; };
+  const list = () => { const q = G.q.toLowerCase(); return q ? G.items.filter(it => it.some(x => x.toLowerCase().includes(q))) : G.items; };
+  const rows = () => {
+    const l = list();
+    if (!G.items.length) return `<div class="gl-empty">${I.upload}<b>Перетягни сюди файл глосарію</b><small>.csv із srt_glossary.py, таблицю .md або .txt рядками «Rimuru = Рімуру»</small></div>`;
+    if (!l.length) return `<p class="note">Нічого не знайдено.</p>`;
+    return l.slice(0, G.more).map(it => `<div class="gl-row" data-gt="${esc(it[0])}" tabindex="0" title="Змінити">
+        <b>${esc(it[0])}</b><span class="gl-tr">${esc(it[1])}</span>${it[2] ? `<i class="gl-reg">${esc(it[2])}</i>` : '<i></i>'}<small>${esc(it[3])}</small>
+        <button class="btn ghost icon" data-gdel="${esc(it[0])}" title="Прибрати" aria-label="Прибрати ${esc(it[0])}">${I.trash}</button></div>`).join('') +
+      (l.length > G.more ? `<button class="btn ghost" id="glMore" style="margin-top:10px">Показати ще ${Math.min(500, l.length - G.more)} з ${l.length - G.more}</button>` : '');
+  };
+  const draw = () => {
+    host.innerHTML = `<p class="note" style="margin-top:0">${sid === '_' ? 'Діє для всіх відео.' : `Тільки для «${esc(title || '')}» — разом із загальним із Налаштувань; переклади тут важливіші.`} Gemini й локальна модель отримують правила і ті терміни, що трапляються в репліках, які саме перекладаються, тож глосарій може бути великим. DeepL і Azure глосарій не використовують.</p>
+      <div class="gl-tools"><input type="search" id="glQ_${sid}" placeholder="Пошук у ${G.items.length} ${plural(G.items.length, 'терміні', 'термінах', 'термінах')}…" value="${esc(G.q)}" aria-label="Пошук у глосарії">
+        <input type="file" id="glF_${sid}" accept=".csv,.tsv,.md,.txt,text/csv,text/plain,text/markdown" hidden>
+        <button class="btn primary" data-gl="file">${I.upload}Завантажити файл</button>
+        ${G.items.length ? `<button class="btn ghost" data-gl="export">${I.download}Експорт .csv</button><button class="btn ghost" data-gl="clear">${I.trash}Очистити</button>` : ''}</div>
+      ${G.file ? `<div class="gl-imp"><div><b>${esc(G.file.name)}</b><small>${G.items.length ? 'Ті самі терміни з файлу замінять наявні.' : ''}</small></div>
+        ${G.items.length ? '<button class="btn primary" data-gl="merge">Додати до наявних</button><button class="btn ghost" data-gl="replace">Замінити все</button>' : '<button class="btn primary" data-gl="replace">Завантажити</button>'}
+        <button class="btn ghost" data-gl="cancel">Скасувати</button></div>` : ''}
+      <div class="gl-head"><b>Термін</b><b>Переклад</b><b>Регістр</b><b>Примітка</b><i></i></div>
+      <div class="gl-list" id="glL_${sid}">${rows()}</div>
+      <div class="fadd gl-add"><input id="glT_${sid}" placeholder="термін, напр. senpai" aria-label="Термін"><input id="glR_${sid}" placeholder="переклад" aria-label="Переклад">
+        <input id="glG_${sid}" list="glRegs" placeholder="регістр" aria-label="Регістр" style="max-width:140px"><input id="glN_${sid}" placeholder="примітка" aria-label="Примітка">
+        <button class="btn primary" data-gl="add">${I.plus}Додати</button></div>
+      <datalist id="glRegs">${GL_REG.map(x => `<option value="${esc(x)}">`).join('')}</datalist>
+      <div class="srow" style="align-items:flex-start"><div class="sl"><b>Правила</b><small>Вільним текстом, для всього перекладу: «звертання -san/-chan лишати», «героїня говорить на «ви»», «стогони не перекладати дослівно».</small></div></div>
+      <div class="fadd" style="align-items:flex-start"><textarea id="glNotes_${sid}" rows="3" style="flex:1;min-height:70px;resize:vertical" placeholder="Звертання -san/-chan не перекладати">${esc(G.notes)}</textarea><button class="btn primary" data-gl="notes">Зберегти</button></div>`;
+    bind();
+  };
+  const redrawList = () => { const L = $('#glL_' + sid); if (L) { L.innerHTML = rows(); bindRows(); } };
+  const bindRows = () => {
+    $$('[data-gdel]', host).forEach(b => b.onclick = async e => {
+      e.stopPropagation();
+      G.items = G.items.filter(it => it[0] !== b.dataset.gdel);
+      if ((await save()).ok) draw();
+    });
+    $$('.gl-row', host).forEach(r => r.onclick = r.onkeydown = e => {
+      if (e.type === 'keydown' && e.key !== 'Enter') return;
+      const it = G.items.find(x => x[0] === r.dataset.gt); if (!it) return;
+      ['T', 'R', 'G', 'N'].forEach((k, i) => $(`#gl${k}_${sid}`).value = it[i] || '');
+      $('#glR_' + sid).focus();
+    });
+    if ($('#glMore', host)) $('#glMore', host).onclick = () => { G.more += 500; redrawList(); };
+  };
+  const pick = f => {
+    if (!f) return;
+    if (f.size > 900000) return toast('Файл завеликий (до ~900 КБ)');
+    const rd = new FileReader();
+    rd.onload = () => { G.file = {name: f.name, text: rd.result}; draw(); };
+    rd.readAsText(f, 'utf-8');
+  };
+  const bind = () => {
+    const q = $('#glQ_' + sid);
+    q.oninput = () => { G.q = q.value; G.more = 120; redrawList(); };
+    $('#glF_' + sid).onchange = e => pick(e.target.files[0]);
+    $$('[data-gl]', host).forEach(b => b.onclick = async () => {
+      const a = b.dataset.gl;
+      if (a === 'file') return $('#glF_' + sid).click();
+      if (a === 'cancel') { G.file = null; return draw(); }
+      if (a === 'merge' || a === 'replace') {
+        if (a === 'replace' && G.items.length && !confirm(`Замінити всі ${G.items.length} термінів вмістом файлу?`)) return;
+        b.disabled = true;
+        const r = await post({op: 'gloss_import', name: G.file.name, text: G.file.text, mode: a});
+        if (!r.ok) { b.disabled = false; return; }
+        const was = G.items.length; Object.assign(G, {items: r.items, notes: r.notes, file: null, q: ''}); draw();
+        return toast(a === 'merge' ? `Додано ${Math.max(0, r.items.length - was)} нових, усього ${r.items.length}` : `Завантажено ${r.items.length} термінів`);
+      }
+      if (a === 'export') {
+        const cell = x => /[;"\n]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x;
+        const csv = '﻿Термін;Переклад;Регістр;Примітка\n' + G.items.map(it => it.map(cell).join(';')).join('\n') + '\n';
+        const u = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'}));
+        const l = document.createElement('a'); l.href = u; l.download = `глосарій ${sid === '_' ? 'загальний' : (title || sid).replace(/[\\/:*?"<>|]+/g, ' ').trim()}.csv`;
+        document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(u), 2000);
+        return;
+      }
+      if (a === 'clear') {
+        if (!confirm(`Прибрати всі ${G.items.length} термінів? Правила лишаться. Порада: спершу «Експорт .csv».`)) return;
+        G.items = []; if ((await save()).ok) draw(); return;
+      }
+      if (a === 'add') {
+        const v = ['T', 'R', 'G', 'N'].map(k => $(`#gl${k}_${sid}`).value.trim());
+        if (!v[0] || !v[1]) { $(v[0] ? '#glR_' + sid : '#glT_' + sid).focus(); return toast('Потрібні термін і переклад'); }
+        const had = G.items.some(it => it[0].toLowerCase() === v[0].toLowerCase());
+        G.items = G.items.filter(it => it[0].toLowerCase() !== v[0].toLowerCase()).concat([v]);
+        if ((await save()).ok) { draw(); toast(had ? 'Змінено' : 'Додано'); $('#glT_' + sid).focus(); }
+        return;
+      }
+      if (a === 'notes') { G.notes = $('#glNotes_' + sid).value; if ((await save()).ok) toast('Правила збережено'); }
+    });
+    $$(`#glT_${sid},#glR_${sid},#glG_${sid},#glN_${sid}`).forEach(i => i.onkeydown = e => { if (e.key === 'Enter') $('[data-gl="add"]', host).click(); });
+    bindRows();
+  };
+  host.ondragover = e => { e.preventDefault(); host.classList.add('gl-over'); };
+  host.ondragleave = e => { if (!host.contains(e.relatedTarget)) host.classList.remove('gl-over'); };
+  host.ondrop = e => { e.preventDefault(); host.classList.remove('gl-over'); pick(e.dataTransfer.files[0]); };
+  host.innerHTML = '<p class="note">Завантажую…</p>';
+  post({op: 'gloss_get'}).then(r => { if (r.ok) { G.items = r.items; G.notes = r.notes; } draw(); });
 }
 
 const TRN = {local: 'Локальна', gemini: 'Gemini', deepl: 'DeepL', azure: 'Azure'};

@@ -15,6 +15,7 @@ ffmpeg — необов'язковий: з ним будуть прев'юшки
 """
 import argparse
 import collections
+import csv
 import glob
 import io
 import urllib.request
@@ -1824,7 +1825,16 @@ def gemini_pick_model(key):
     return max(good, key=score)
 
 
-# ── Глосарій для Gemini: загальний і для кожного тайтлу аніме. Вільний текст, зазвичай «оригінал = переклад» рядками.
+# ── Глосарій: загальний ('_') і для кожного тайтлу аніме (sid). Таблиця термінів [термін, переклад, регістр, примітка]
+# плюс вільні правила («звертання -san не перекладати»). Заливається файлом (.csv з srt_glossary.py, .md-таблиця, .txt)
+# або редагується в інтерфейсі. У запит до перекладача йдуть правила і лише ті терміни, що є в поточному шматку.
+GLOSS_MAX = 3000
+GLOSS_COLS = {'t': ('термін', 'term', 'оригінал', 'source', 'en', 'english'),
+              'tr': ('переклад', 'translation', 'uk', 'українською', 'target'),
+              'reg': ('регістр', 'register', 'reg', 'тип', 'type'),
+              'note': ('примітка', 'пояснення', 'note', 'notes', 'коментар', 'comment')}
+
+
 def gloss_load():
     try:
         with open(os.path.join(C.data, 'aisubs', 'glossary.json'), encoding='utf-8') as f:
@@ -1833,17 +1843,117 @@ def gloss_load():
         return {}
 
 
-def gloss_save(sid, text):
+def gloss_clean(items):
+    """Нормалізує й прибирає дублікати (пізніший запис того самого терміна перемагає)."""
+    seen = {}
+    for it in items or []:
+        if isinstance(it, dict):
+            it = [it.get('t'), it.get('tr'), it.get('reg'), it.get('note')]
+        if not isinstance(it, (list, tuple)):
+            continue
+        it = [re.sub(r'\s+', ' ', str(x or '')).strip() for x in (list(it) + ['', '', '', ''])[:4]]
+        t, tr, reg, note = it[0][:80], it[1][:160], it[2][:24], it[3][:240]
+        if t and tr:
+            seen.pop(t.lower(), None)
+            seen[t.lower()] = [t, tr, reg, note]
+    return list(seen.values())[-GLOSS_MAX:]
+
+
+def gloss_parse_lines(text):
+    """Вільний текст «a = b», «a — b — регістр — примітка», «a → b». Рядки без розділювача — правила."""
+    items, notes = [], []
+    for line in str(text or '').splitlines():
+        line = line.strip().lstrip('\ufeff')
+        if not line:
+            continue
+        m = re.match(r'^(.+?)\s*(?:=|→|->|\s[—–]\s)\s*(.+)$', line)
+        if not m or len(m.group(1)) > 80:
+            notes.append(line)
+            continue
+        rest = [x.strip() for x in re.split(r'\s+[—–]\s+', m.group(2))]
+        items.append([m.group(1).strip(' «»"'), rest[0].strip(' «»"')] + rest[1:3])
+    return items, notes
+
+
+def gloss_parse_file(name, text):
+    """→ (items, notes). CSV/TSV з заголовком (як у srt_glossary.py), Markdown-таблиця або вільний текст."""
+    text = str(text or '').lstrip('\ufeff')
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines:
+        return [], []
+    rows = None
+    if any(re.fullmatch(r'\s*\|[\s|:\-]+', l) for l in lines):  # Markdown-таблиця (є рядок |---|---|)
+        rows = [[c.strip() for c in l.strip().strip('|').split('|')] for l in lines if l.lstrip().startswith('|')
+                and not re.fullmatch(r'[\s|:\-]+', l)]
+        notes = [l.strip() for l in lines if not l.lstrip().startswith('|') and not l.startswith('#')]
+    elif name.lower().endswith(('.csv', '.tsv')) or re.match(r'^\W*(%s)\W*[;\t,]' % '|'.join(sum(GLOSS_COLS.values(), ())), lines[0], re.I):
+        delim = max(';\t,', key=lambda c: lines[0].count(c))
+        rows = list(csv.reader(lines, delimiter=delim))
+        notes = []
+    if rows is None:
+        return gloss_parse_lines(text)
+    head = [h.strip().lower() for h in rows[0]]
+    idx = {k: next((i for i, h in enumerate(head) if h in names), None) for k, names in GLOSS_COLS.items()}
+    if idx['t'] is None or idx['tr'] is None:                 # без заголовка — по порядку колонок
+        idx = {'t': 0, 'tr': 1, 'reg': 2, 'note': 3}
+    else:
+        rows = rows[1:]
+    get = lambda r, k: r[idx[k]] if idx[k] is not None and idx[k] < len(r) else ''
+    return [[get(r, 't'), get(r, 'tr'), get(r, 'reg'), get(r, 'note')] for r in rows], notes
+
+
+def gloss_get(sid):
+    """{'notes': str, 'items': [[t, tr, reg, note]]}; старий формат (рядок) розбирається на льоту."""
+    v = gloss_load().get(sid)
+    if isinstance(v, str):
+        items, notes = gloss_parse_lines(v)
+        return {'notes': '\n'.join(notes), 'items': gloss_clean(items)}
+    if isinstance(v, dict):
+        return {'notes': str(v.get('notes') or ''), 'items': gloss_clean(v.get('items'))}
+    return {'notes': '', 'items': []}
+
+
+def gloss_put(sid, notes, items):
     g = gloss_load()
-    text = str(text or '').strip()[:8000]
-    if text:
-        g[sid] = text
+    notes, items = str(notes or '').strip()[:4000], gloss_clean(items)
+    if notes or items:
+        g[sid] = {'notes': notes, 'items': items}
     else:
         g.pop(sid, None)
     os.makedirs(os.path.join(C.data, 'aisubs'), exist_ok=True)
     with open(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), 'w', encoding='utf-8') as f:
         json.dump(g, f, ensure_ascii=False, indent=1)
     os.replace(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), os.path.join(C.data, 'aisubs', 'glossary.json'))
+    return {'notes': notes, 'items': items}
+
+
+def gloss_counts():
+    return {sid: len(gloss_get(sid)['items']) for sid in gloss_load()}
+
+
+def gloss_prompt(text, src, limit=150):
+    """Глосарій для одного запиту: правила + терміни, що трапляються в text (для англ. джерела);
+    для інших мов (Whisper японською тощо) збіг не перевіриш — тоді імена/запозичення першими, до limit."""
+    sids = getattr(TR_CTX, 'gloss_sids', None) or []
+    notes, items = [], {}
+    for sid in sids:                     # тайтл після загального — його переклади перекривають загальні
+        g = gloss_get(sid)
+        if g['notes']:
+            notes.append(g['notes'])
+        for it in g['items']:
+            items[it[0].lower()] = it
+    low = str(text or '').lower()
+    if src == 'en':
+        hit = [it for k, it in items.items()
+               if (re.search(r'(?<![\w])' + re.escape(k) + r'(?![\w])', low) if re.match(r'^[\w\s\'-]+$', k) else k in low)]
+    else:
+        hit = sorted(items.values(), key=lambda it: it[2] not in ("ім'я", 'імʼя', 'name', 'запозичення'))
+    hit = hit[:limit]
+    out = '\n'.join(notes)
+    if hit:
+        out += ('\n' if out else '') + '\n'.join(
+            '%s = %s%s' % (t, tr, ' (%s)' % '; '.join(x for x in (reg, note) if x) if reg or note else '') for t, tr, reg, note in hit)
+    return out
 
 
 def video_sid(r):
@@ -1870,7 +1980,7 @@ def gemini_translate(key, lines, src, progress=None):
     for i in range(0, len(lines), step):
         part = lines[i:i + step]
         ctx = lines[max(0, i - 6):i]
-        gloss = getattr(TR_CTX, 'gloss', '')
+        gloss = gloss_prompt('\n'.join(ctx + part), src)
         prompt = ('You translate subtitles of anime and films from %s into Ukrainian.\n'
                   'Translate every line of "lines" into natural, spoken Ukrainian that fits the scene; keep names, '
                   'keep the tone (casual, rude, polite), do not add explanations. Lines may be broken mid-sentence — '
@@ -1995,7 +2105,7 @@ def local_translate(url, lines, src, progress=None):
     for i in range(0, len(lines), step):
         part = lines[i:i + step]
         ctx = lines[max(0, i - 6):i]
-        gloss = getattr(TR_CTX, 'gloss', '')
+        gloss = gloss_prompt('\n'.join(ctx + part), src)
         prompt = ('Translate every line of "lines" from %s into natural, spoken Ukrainian that fits the scene; keep names '
                   'and the tone. Lines may be broken mid-sentence — translate them so they still read well in order. '
                   'Return JSON {"lines": [...]} with exactly %d strings in the same order.\n'
@@ -2125,8 +2235,7 @@ def ai_job(it):
     out = os.path.join(C.data, 'aisubs', vid)
     wav = os.path.join(C.data, 'aisubs', 'tmp-%s.wav' % vid)
     key = bool(tr_chain())
-    g = gloss_load()
-    TR_CTX.gloss = '\n'.join(x for x in (g.get('_', ''), g.get(video_sid(r), '')) if x)
+    TR_CTX.gloss_sids = [x for x in ('_', video_sid(r)) if x]
     have = [f for f in (os.listdir(out) if os.path.isdir(out) else []) if f.endswith('.srt') and f != 'uk.srt']
     if have and key and not os.path.exists(os.path.join(out, 'uk.srt')):
         try:                             # розпізнане вже є (раніше не було ключа) — лише перекласти
@@ -2257,7 +2366,7 @@ def ai_status():
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
             'localUrl': C.cfg.get('local_url') or '', 'localModel': C.cfg.get('local_model') or '',
-            'localToken': bool((C.cfg.get('local_key') or '').strip()), 'gloss': gloss_load().get('_', ''), 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
+            'localToken': bool((C.cfg.get('local_key') or '').strip()), 'gloss': len(gloss_get('_')['items']), 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
 
 
 def ai_post(d):
@@ -2305,13 +2414,26 @@ def ai_post(d):
         with AI_LOCK:
             ai_save_queue([it for it in ai_queue() if it['id'] not in ids or it['id'] == AI['cur']])
     elif op == 'gloss_get':
-        return {'ok': True, 'text': gloss_load().get(str(d.get('sid') or '_'), '')}
-    elif op == 'gloss':
+        return dict(gloss_get(str(d.get('sid') or '_')), ok=True)
+    elif op in ('gloss', 'gloss_import'):
         sid = str(d.get('sid') or '_')
         if sid != '_' and sid not in anime_series():
             return {'ok': False, 'error': 'Тайтл не знайдено'}
-        gloss_save(sid, d.get('text'))
-        return {'ok': True}
+        if op == 'gloss_import':        # файл: додати до наявного (ті самі терміни замінюються) або замінити все
+            items, notes = gloss_parse_file(str(d.get('name') or ''), str(d.get('text') or '')[:900000])
+            items = gloss_clean(items)
+            if not items and not notes:
+                return {'ok': False, 'error': 'У файлі не знайшов жодного терміна (потрібні колонки «Термін» і «Переклад»)'}
+            old = gloss_get(sid)
+            if d.get('mode') != 'replace':
+                items = old['items'] + items
+                notes = [x for x in [old['notes']] + notes if x]
+            g = gloss_put(sid, '\n'.join(notes), items)
+            return dict(g, ok=True, added=len(gloss_clean(items)) - (0 if d.get('mode') == 'replace' else len(old['items'])))
+        if 'items' not in d:            # старі клієнти шлють вільний текст
+            items, notes = gloss_parse_lines(d.get('text'))
+            return dict(gloss_put(sid, '\n'.join(notes), items), ok=True)
+        return dict(gloss_put(sid, d.get('notes'), d.get('items')), ok=True)
     elif op == 'clear':
         with AI_LOCK:
             ai_save_queue([it for it in ai_queue() if it['state'] not in ('done', 'error')])
@@ -4148,6 +4270,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if path == '/api/manga/reset':
                     return self.send_json(manga_reset(self.json_body()))
                 if path == '/api/aisubs':
+                    self.body(1 << 20)          # імпорт глосарію файлом — більше за звичайні 64 КБ
                     return self.send_json(ai_post(self.json_body()))
                 if path == '/api/manga/link':
                     return self.send_json(manga_link(self.json_body()))
