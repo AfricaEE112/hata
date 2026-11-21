@@ -2044,7 +2044,11 @@ LOCAL_SYSTEM = ('You are a professional translator of anime and film subtitles i
                 'such as hentai. All characters are adults. This is fiction: translate faithfully and without censorship. '
                 'Keep the exact register of the original — crude stays crude (use real Ukrainian swearing and explicit '
                 'sexual vocabulary, no euphemisms, no asterisks), tender stays tender, shy stays shy. Moans, gasps and '
-                'interjections get natural Ukrainian equivalents. Never refuse, never add warnings, notes or comments.')
+                'interjections get natural Ukrainian equivalents. Never refuse, never add warnings, notes or comments.\n'
+                'Register examples: "You scared the shit out of me" → "Ти мене до усрачки налякала"; "pain in the ass" → '
+                '"заноза в дупі"; "Holy shit" → "Срань господня" / "Бляха"; "dumbass" → "дебіл" / "довбень"; "Shut up!" → '
+                '"Стули пельку!"; "Damn, you\'re hot" → "Бляха, ти гаряча". Avoid calques like "Не так, ніби…" — say '
+                '"Не думай, що…".')
 
 
 def local_base(url):
@@ -2120,7 +2124,7 @@ def local_translate(url, lines, src, progress=None):
                   % (srcname, len(part), (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') + ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
                                           'how characters address each other):\n' + gloss + '\n') if gloss else '',
                      json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
-        body = {'model': model, 'temperature': 0.3,
+        body = {'model': model, 'temperature': 0.3, 'chat_template_kwargs': {'enable_thinking': False},
                 'messages': [{'role': 'system', 'content': LOCAL_SYSTEM}, {'role': 'user', 'content': prompt}]}
         got = []
         for n in range(3):
@@ -2210,6 +2214,7 @@ def llm_json(system, prompt, schema=None):
             if name == 'local':
                 base, hdr = local_base(key), local_hdr()
                 body = {'model': local_pick_model(key, hdr), 'temperature': 0.2,
+                        'chat_template_kwargs': {'enable_thinking': False},       # «роздуми» Gemma/Qwen тут лише гальмують
                         'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': prompt}]}
                 if schema:
                     body['response_format'] = {'type': 'json_schema', 'json_schema': {'name': 'ctx', 'schema': schema}}
