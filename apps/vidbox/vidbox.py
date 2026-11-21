@@ -3884,7 +3884,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     data = subs_vtt(r, int(m.group(2)))
                     # не вдалося перетворити — порожній WebVTT, щоб плеєр в апці не падав через субтитри
                     return self.send_bytes(data or b'WEBVTT\n\n', 'text/vtt; charset=utf-8',
-                                           cache='private, max-age=3600' if data else 'no-store')
+                                           cache='no-store')   # субтитри ШІ можна переробити під тим самим номером
                 m = re.fullmatch(r'/stream/(\w+)', path)
                 if m:
                     r = self.video_row(m.group(1))

@@ -2008,6 +2008,7 @@ function mountPlayer(vp, v, o) {
     menu.innerHTML = kind === 'subs'
       ? '<p>Субтитри</p>' + `<button data-sub="-1" class="${SB.on < 0 ? 'on' : ''}">Вимкнено</button>` +
         SB.list.map(t => `<button data-sub="${t.n}" class="${SB.on === t.n ? 'on' : ''}">${esc(subName(t))}${t.forced ? '<small>лише написи</small>' : ''}</button>`).join('') +
+        (SB.on >= 0 ? `<a class="vp-mlink" href="/subs/${v.id}/${SB.on}.vtt" download="${esc((v.title || 'subs').replace(/[\\/:*?"<>|]+/g, ' ').trim())}.${SB.list[SB.on] && SB.list[SB.on].lang || 'xx'}.vtt">${I.download || ''}Завантажити ці субтитри</a>` : '') +
         (!SB.aiReady ? '' : aiBusy() ? `<p class="vp-ai">ШІ: ${esc(aiStateText(SB.ai))}</p>`
           : SB.list.some(t => t.ai && t.lang === 'uk') ? `<button data-aidel>${I.trash}Видалити субтитри ШІ</button>`
           : `<button data-aisub>${I.plus}Українські (ШІ)</button>${SB.ai && SB.ai.err ? `<p class="vp-ai">${esc(SB.ai.err)}</p>` : ''}`)
