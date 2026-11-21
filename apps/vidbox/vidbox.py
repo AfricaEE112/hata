@@ -15,6 +15,7 @@ ffmpeg — необов'язковий: з ним будуть прев'юшки
 """
 import argparse
 import collections
+import csv
 import glob
 import io
 import urllib.request
@@ -1779,7 +1780,7 @@ def deepl_translate(key, lines, src, progress=None):
 
 
 # ── Інші перекладачі. Помилка з quota=True — «ліміт/ключ», тоді переходимо до наступного перекладача.
-TR_NAMES = {'gemini': 'Gemini', 'deepl': 'DeepL', 'azure': 'Azure'}
+TR_NAMES = {'local': 'Локальна модель', 'gemini': 'Gemini', 'deepl': 'DeepL', 'azure': 'Azure'}
 LANG_EN = {'ja': 'Japanese', 'en': 'English', 'ko': 'Korean', 'zh': 'Chinese', 'ru': 'Russian', 'de': 'German',
            'fr': 'French', 'es': 'Spanish', 'it': 'Italian', 'pl': 'Polish', 'pt': 'Portuguese'}
 
@@ -1824,7 +1825,16 @@ def gemini_pick_model(key):
     return max(good, key=score)
 
 
-# ── Глосарій для Gemini: загальний і для кожного тайтлу аніме. Вільний текст, зазвичай «оригінал = переклад» рядками.
+# ── Глосарій: загальний ('_') і для кожного тайтлу аніме (sid). Таблиця термінів [термін, переклад, регістр, примітка]
+# плюс вільні правила («звертання -san не перекладати»). Заливається файлом (.csv з srt_glossary.py, .md-таблиця, .txt)
+# або редагується в інтерфейсі. У запит до перекладача йдуть правила і лише ті терміни, що є в поточному шматку.
+GLOSS_MAX = 3000
+GLOSS_COLS = {'t': ('термін', 'term', 'оригінал', 'source', 'en', 'english'),
+              'tr': ('переклад', 'translation', 'uk', 'українською', 'target'),
+              'reg': ('регістр', 'register', 'reg', 'тип', 'type'),
+              'note': ('примітка', 'пояснення', 'note', 'notes', 'коментар', 'comment')}
+
+
 def gloss_load():
     try:
         with open(os.path.join(C.data, 'aisubs', 'glossary.json'), encoding='utf-8') as f:
@@ -1833,17 +1843,117 @@ def gloss_load():
         return {}
 
 
-def gloss_save(sid, text):
+def gloss_clean(items):
+    """Нормалізує й прибирає дублікати (пізніший запис того самого терміна перемагає)."""
+    seen = {}
+    for it in items or []:
+        if isinstance(it, dict):
+            it = [it.get('t'), it.get('tr'), it.get('reg'), it.get('note')]
+        if not isinstance(it, (list, tuple)):
+            continue
+        it = [re.sub(r'\s+', ' ', str(x or '')).strip() for x in (list(it) + ['', '', '', ''])[:4]]
+        t, tr, reg, note = it[0][:80], it[1][:160], it[2][:24], it[3][:240]
+        if t and tr:
+            seen.pop(t.lower(), None)
+            seen[t.lower()] = [t, tr, reg, note]
+    return list(seen.values())[-GLOSS_MAX:]
+
+
+def gloss_parse_lines(text):
+    """Вільний текст «a = b», «a — b — регістр — примітка», «a → b». Рядки без розділювача — правила."""
+    items, notes = [], []
+    for line in str(text or '').splitlines():
+        line = line.strip().lstrip('\ufeff')
+        if not line:
+            continue
+        m = re.match(r'^(.+?)\s*(?:=|→|->|\s[—–]\s)\s*(.+)$', line)
+        if not m or len(m.group(1)) > 80:
+            notes.append(line)
+            continue
+        rest = [x.strip() for x in re.split(r'\s+[—–]\s+', m.group(2))]
+        items.append([m.group(1).strip(' «»"'), rest[0].strip(' «»"')] + rest[1:3])
+    return items, notes
+
+
+def gloss_parse_file(name, text):
+    """→ (items, notes). CSV/TSV з заголовком (як у srt_glossary.py), Markdown-таблиця або вільний текст."""
+    text = str(text or '').lstrip('\ufeff')
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines:
+        return [], []
+    rows = None
+    if any(re.fullmatch(r'\s*\|[\s|:\-]+', l) for l in lines):  # Markdown-таблиця (є рядок |---|---|)
+        rows = [[c.strip() for c in l.strip().strip('|').split('|')] for l in lines if l.lstrip().startswith('|')
+                and not re.fullmatch(r'[\s|:\-]+', l)]
+        notes = [l.strip() for l in lines if not l.lstrip().startswith('|') and not l.startswith('#')]
+    elif name.lower().endswith(('.csv', '.tsv')) or re.match(r'^\W*(%s)\W*[;\t,]' % '|'.join(sum(GLOSS_COLS.values(), ())), lines[0], re.I):
+        delim = max(';\t,', key=lambda c: lines[0].count(c))
+        rows = list(csv.reader(lines, delimiter=delim))
+        notes = []
+    if rows is None:
+        return gloss_parse_lines(text)
+    head = [h.strip().lower() for h in rows[0]]
+    idx = {k: next((i for i, h in enumerate(head) if h in names), None) for k, names in GLOSS_COLS.items()}
+    if idx['t'] is None or idx['tr'] is None:                 # без заголовка — по порядку колонок
+        idx = {'t': 0, 'tr': 1, 'reg': 2, 'note': 3}
+    else:
+        rows = rows[1:]
+    get = lambda r, k: r[idx[k]] if idx[k] is not None and idx[k] < len(r) else ''
+    return [[get(r, 't'), get(r, 'tr'), get(r, 'reg'), get(r, 'note')] for r in rows], notes
+
+
+def gloss_get(sid):
+    """{'notes': str, 'items': [[t, tr, reg, note]]}; старий формат (рядок) розбирається на льоту."""
+    v = gloss_load().get(sid)
+    if isinstance(v, str):
+        items, notes = gloss_parse_lines(v)
+        return {'notes': '\n'.join(notes), 'items': gloss_clean(items)}
+    if isinstance(v, dict):
+        return {'notes': str(v.get('notes') or ''), 'items': gloss_clean(v.get('items'))}
+    return {'notes': '', 'items': []}
+
+
+def gloss_put(sid, notes, items):
     g = gloss_load()
-    text = str(text or '').strip()[:8000]
-    if text:
-        g[sid] = text
+    notes, items = str(notes or '').strip()[:4000], gloss_clean(items)
+    if notes or items:
+        g[sid] = {'notes': notes, 'items': items}
     else:
         g.pop(sid, None)
     os.makedirs(os.path.join(C.data, 'aisubs'), exist_ok=True)
     with open(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), 'w', encoding='utf-8') as f:
         json.dump(g, f, ensure_ascii=False, indent=1)
     os.replace(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), os.path.join(C.data, 'aisubs', 'glossary.json'))
+    return {'notes': notes, 'items': items}
+
+
+def gloss_counts():
+    return {sid: len(gloss_get(sid)['items']) for sid in gloss_load()}
+
+
+def gloss_prompt(text, src, limit=150):
+    """Глосарій для одного запиту: правила + терміни, що трапляються в text (для англ. джерела);
+    для інших мов (Whisper японською тощо) збіг не перевіриш — тоді імена/запозичення першими, до limit."""
+    sids = getattr(TR_CTX, 'gloss_sids', None) or []
+    notes, items = [], {}
+    for sid in sids:                     # тайтл після загального — його переклади перекривають загальні
+        g = gloss_get(sid)
+        if g['notes']:
+            notes.append(g['notes'])
+        for it in g['items']:
+            items[it[0].lower()] = it
+    low = str(text or '').lower()
+    if src == 'en':
+        hit = [it for k, it in items.items()
+               if (re.search(r'(?<![\w])' + re.escape(k) + r'(?![\w])', low) if re.match(r'^[\w\s\'-]+$', k) else k in low)]
+    else:
+        hit = sorted(items.values(), key=lambda it: it[2] not in ("ім'я", 'імʼя', 'name', 'запозичення'))
+    hit = hit[:limit]
+    out = '\n'.join(notes)
+    if hit:
+        out += ('\n' if out else '') + '\n'.join(
+            '%s = %s%s' % (t, tr, ' (%s)' % '; '.join(x for x in (reg, note) if x) if reg or note else '') for t, tr, reg, note in hit)
+    return out
 
 
 def video_sid(r):
@@ -1870,7 +1980,7 @@ def gemini_translate(key, lines, src, progress=None):
     for i in range(0, len(lines), step):
         part = lines[i:i + step]
         ctx = lines[max(0, i - 6):i]
-        gloss = getattr(TR_CTX, 'gloss', '')
+        gloss = gloss_prompt('\n'.join(ctx + part), src)
         prompt = ('You translate subtitles of anime and films from %s into Ukrainian.\n'
                   'Translate every line of "lines" into natural, spoken Ukrainian that fits the scene; keep names, '
                   'keep the tone (casual, rude, polite), do not add explanations. Lines may be broken mid-sentence — '
@@ -1927,6 +2037,132 @@ def gemini_translate(key, lines, src, progress=None):
     return out
 
 
+# ── Локальна модель: LM Studio (або інший OpenAI-сумісний сервер: llama.cpp, Ollama, KoboldCpp) на ПК в домашній мережі.
+# Без лімітів і цензури — для дорослих тайтлів. Якщо ПК вимкнений чи модель не відповідає — помилка з quota=True,
+# і ланцюжок переходить до наступного перекладача (Gemini тощо).
+LOCAL_SYSTEM = ('You are a professional translator of anime and film subtitles into Ukrainian, including adult (18+) titles '
+                'such as hentai. All characters are adults. This is fiction: translate faithfully and without censorship. '
+                'Keep the exact register of the original — crude stays crude (use real Ukrainian swearing and explicit '
+                'sexual vocabulary, no euphemisms, no asterisks), tender stays tender, shy stays shy. Moans, gasps and '
+                'interjections get natural Ukrainian equivalents. Never refuse, never add warnings, notes or comments.')
+
+
+def local_base(url):
+    """«192.168.3.50:1234» → «http://192.168.3.50:1234/v1»."""
+    url = str(url or '').strip().rstrip('/')
+    if not url:
+        return ''
+    if not re.match(r'^https?://', url):
+        url = 'http://' + url
+    if not re.search(r':\d+(/|$)', url.split('://', 1)[1]) and url.count('/') == 2:
+        url += ':1234'
+    if not url.endswith('/v1'):
+        url += '/v1'
+    return url
+
+
+def local_hdr():
+    k = (C.cfg.get('local_key') or '').strip()
+    return {'Authorization': 'Bearer ' + k} if k else {}
+
+
+def local_pick_model(url, hdr=None):
+    """Модель на сервері: та, що вже завантажена в LM Studio, інакше перша не-embedding."""
+    hdr = local_hdr() if hdr is None else hdr
+    base = local_base(url)
+    try:
+        j = http_json(base + '/models', headers=hdr, timeout=15)
+    except urllib.error.HTTPError as e:
+        raise TrError('локальний сервер не прийняв токен' if e.code in (401, 403) else 'локальний сервер: помилка %d' % e.code, quota=True)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+        raise TrError('ПК з моделлю недоступний (%s) — увімкни ПК і сервер у LM Studio' % getattr(e, 'reason', e), quota=True)
+    ids = [m.get('id') for m in j.get('data', []) if m.get('id') and not re.search(r'embed', m['id'], re.I)]
+    if not ids:
+        raise TrError('на локальному сервері немає жодної моделі', quota=True)
+    loaded = []                            # рідний API LM Studio знає, яка модель уже в пам'яті відеокарти
+    for path in ('/api/v1/models', '/api/v0/models'):     # 0.4+ — v1, старші — v0
+        try:
+            j = http_json(base[:-3] + path, headers=hdr, timeout=10)
+        except Exception:
+            continue
+        for m in (j.get('models') or j.get('data') or []) if isinstance(j, dict) else []:
+            mid = m.get('id') or m.get('key') or m.get('model_key')
+            if mid and (m.get('state') == 'loaded' or m.get('loaded_instances')) and m.get('type') not in ('embedding', 'embeddings'):
+                loaded.append(mid)
+        if loaded:
+            break
+    for m in loaded:
+        if m in ids:
+            return m
+    return ids[0]
+
+
+def local_translate(url, lines, src, progress=None):
+    base = local_base(url)
+    hdr = local_hdr()
+    model = local_pick_model(url, hdr)      # щоразу перевіряємо: модель на ПК могли змінити
+    if model != C.cfg.get('local_model'):
+        with CFG_LOCK:
+            C.cfg['local_model'] = model
+        save_config()
+    srcname = LANG_EN.get(src, 'the original language')
+    out = list(lines)
+    step = 30
+    use_schema = True
+    for i in range(0, len(lines), step):
+        part = lines[i:i + step]
+        ctx = lines[max(0, i - 6):i]
+        gloss = gloss_prompt('\n'.join(ctx + part), src)
+        prompt = ('Translate every line of "lines" from %s into natural, spoken Ukrainian that fits the scene; keep names '
+                  'and the tone. Lines may be broken mid-sentence — translate them so they still read well in order. '
+                  'Return JSON {"lines": [...]} with exactly %d strings in the same order.\n'
+                  '"context" holds the previous lines for reference only — do not translate them.\n%s\n%s'
+                  % (srcname, len(part), ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
+                                          'how characters address each other):\n' + gloss + '\n') if gloss else '',
+                     json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
+        body = {'model': model, 'temperature': 0.3,
+                'messages': [{'role': 'system', 'content': LOCAL_SYSTEM}, {'role': 'user', 'content': prompt}]}
+        got = []
+        for n in range(3):
+            if use_schema:                  # LM Studio вміє примусово тримати формат — тоді репліки не зсуваються
+                body['response_format'] = {'type': 'json_schema', 'json_schema': {'name': 'subs', 'strict': True, 'schema': {
+                    'type': 'object', 'required': ['lines'], 'properties': {'lines': {
+                        'type': 'array', 'items': {'type': 'string'}, 'minItems': len(part), 'maxItems': len(part)}}}}}
+            else:
+                body.pop('response_format', None)
+            try:
+                res = http_json(base + '/chat/completions', body, hdr, timeout=900)
+            except urllib.error.HTTPError as e:
+                if e.code == 400 and use_schema:        # сервер без structured output — пробуємо без нього
+                    use_schema = False
+                    continue
+                if e.code in (401, 403):
+                    raise TrError('локальний сервер не прийняв токен', quota=True)
+                if n == 2:
+                    raise TrError('локальна модель: помилка %d %s' % (e.code, getattr(e, 'body', '')[:160]), quota=True)
+                time.sleep(5)
+                continue
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                raise TrError('ПК з моделлю недоступний: %s' % getattr(e, 'reason', e), quota=True)
+            try:
+                txt = res['choices'][0]['message'].get('content') or ''
+                txt = re.sub(r'<think>.*?</think>', '', txt, flags=re.S).strip()
+                m = re.search(r'\{.*\}', txt, re.S)
+                got = json.loads(m.group(0) if m else txt).get('lines') or []
+            except (KeyError, IndexError, ValueError, AttributeError, TypeError):
+                got = []
+            if len(got) == len(part):
+                break
+        if len(got) != len(part):        # модель збилась із кількістю — краще оригінал, ніж зсув реплік
+            got = got[:len(part)] + part[len(got):] if got else part
+        for k, t in enumerate(got):
+            if isinstance(t, str) and t.strip():
+                out[i + k] = t.strip()
+        if progress:
+            progress(min(1.0, (i + step) / max(1, len(lines))))
+    return out
+
+
 def azure_translate(key, lines, src, progress=None):
     region = (C.cfg.get('azure_region') or '').strip()
     hdr = {'Ocp-Apim-Subscription-Key': key}
@@ -1960,9 +2196,10 @@ def azure_translate(key, lines, src, progress=None):
 
 def tr_chain():
     """[(назва, ключ)] у порядку: основний, далі решта з ключами."""
-    keys = {'gemini': C.cfg.get('gemini_key'), 'deepl': C.cfg.get('deepl_key'), 'azure': C.cfg.get('azure_key')}
+    keys = {'local': C.cfg.get('local_url'), 'gemini': C.cfg.get('gemini_key'), 'deepl': C.cfg.get('deepl_key'),
+            'azure': C.cfg.get('azure_key')}
     first = C.cfg.get('tr_main') if C.cfg.get('tr_main') in keys else 'gemini'
-    order = [first] + [k for k in ('gemini', 'deepl', 'azure') if k != first]
+    order = [first] + [k for k in ('local', 'gemini', 'deepl', 'azure') if k != first]
     return [(k, keys[k].strip()) for k in order if (keys[k] or '').strip()]
 
 
@@ -1971,7 +2208,8 @@ def translate_uk(lines, src, progress=None):
     errs = []
     for name, key in tr_chain():
         try:
-            fn = {'gemini': gemini_translate, 'deepl': deepl_translate, 'azure': azure_translate}[name]
+            fn = {'local': local_translate, 'gemini': gemini_translate, 'deepl': deepl_translate,
+                  'azure': azure_translate}[name]
             return fn(key, lines, src, progress), name
         except TrError as e:
             errs.append(str(e) if TR_NAMES[name] in str(e) else '%s: %s' % (TR_NAMES[name], e))
@@ -2004,8 +2242,7 @@ def ai_job(it):
     out = os.path.join(C.data, 'aisubs', vid)
     wav = os.path.join(C.data, 'aisubs', 'tmp-%s.wav' % vid)
     key = bool(tr_chain())
-    g = gloss_load()
-    TR_CTX.gloss = '\n'.join(x for x in (g.get('_', ''), g.get(video_sid(r), '')) if x)
+    TR_CTX.gloss_sids = [x for x in ('_', video_sid(r)) if x]
     have = [f for f in (os.listdir(out) if os.path.isdir(out) else []) if f.endswith('.srt') and f != 'uk.srt']
     if have and key and not os.path.exists(os.path.join(out, 'uk.srt')):
         try:                             # розпізнане вже є (раніше не було ключа) — лише перекласти
@@ -2134,7 +2371,9 @@ def ai_status():
     return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs',
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
-            'geminiModel': C.cfg.get('gemini_model') or '', 'gloss': gloss_load().get('_', ''), 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
+            'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
+            'localUrl': C.cfg.get('local_url') or '', 'localModel': C.cfg.get('local_model') or '',
+            'localToken': bool((C.cfg.get('local_key') or '').strip()), 'gloss': len(gloss_get('_')['items']), 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
 
 
 def ai_post(d):
@@ -2182,13 +2421,26 @@ def ai_post(d):
         with AI_LOCK:
             ai_save_queue([it for it in ai_queue() if it['id'] not in ids or it['id'] == AI['cur']])
     elif op == 'gloss_get':
-        return {'ok': True, 'text': gloss_load().get(str(d.get('sid') or '_'), '')}
-    elif op == 'gloss':
+        return dict(gloss_get(str(d.get('sid') or '_')), ok=True)
+    elif op in ('gloss', 'gloss_import'):
         sid = str(d.get('sid') or '_')
         if sid != '_' and sid not in anime_series():
             return {'ok': False, 'error': 'Тайтл не знайдено'}
-        gloss_save(sid, d.get('text'))
-        return {'ok': True}
+        if op == 'gloss_import':        # файл: додати до наявного (ті самі терміни замінюються) або замінити все
+            items, notes = gloss_parse_file(str(d.get('name') or ''), str(d.get('text') or '')[:900000])
+            items = gloss_clean(items)
+            if not items and not notes:
+                return {'ok': False, 'error': 'У файлі не знайшов жодного терміна (потрібні колонки «Термін» і «Переклад»)'}
+            old = gloss_get(sid)
+            if d.get('mode') != 'replace':
+                items = old['items'] + items
+                notes = [x for x in [old['notes']] + notes if x]
+            g = gloss_put(sid, '\n'.join(notes), items)
+            return dict(g, ok=True, added=len(gloss_clean(items)) - (0 if d.get('mode') == 'replace' else len(old['items'])))
+        if 'items' not in d:            # старі клієнти шлють вільний текст
+            items, notes = gloss_parse_lines(d.get('text'))
+            return dict(gloss_put(sid, '\n'.join(notes), items), ok=True)
+        return dict(gloss_put(sid, d.get('notes'), d.get('items')), ok=True)
     elif op == 'clear':
         with AI_LOCK:
             ai_save_queue([it for it in ai_queue() if it['state'] not in ('done', 'error')])
@@ -2200,6 +2452,15 @@ def ai_post(d):
                 return {'ok': False, 'error': str(e)}
             with CFG_LOCK:
                 C.cfg['gemini_key'], C.cfg['gemini_model'] = str(d['gemini']).strip()[:200], model
+        if str(d.get('local') or '').strip():           # адреса ПК з моделлю — перевіряємо, що сервер відповідає
+            url = local_base(d['local'])[:200]
+            tok = str(d.get('localKey') or C.cfg.get('local_key') or '').strip()[:200]
+            try:
+                model = local_pick_model(url, {'Authorization': 'Bearer ' + tok} if tok else {})
+            except TrError as e:
+                return {'ok': False, 'error': str(e)}
+            with CFG_LOCK:
+                C.cfg['local_url'], C.cfg['local_key'], C.cfg['local_model'] = url, tok, model
         with CFG_LOCK:
             if 'key' in d:
                 C.cfg['deepl_key'] = str(d.get('key') or '').strip()[:200]
@@ -2212,6 +2473,9 @@ def ai_post(d):
             for k in d.get('forget') or []:
                 if k in ('deepl_key', 'gemini_key', 'azure_key'):
                     C.cfg.pop(k, None)
+                if k == 'local_key':                     # «Забути» локальну модель — адреса, токен і модель
+                    for x in ('local_url', 'local_key', 'local_model'):
+                        C.cfg.pop(x, None)
             if d.get('model') in AI_MODELS:
                 C.cfg['ai_model'] = d['model']
             if d.get('speed') in ('normal', 'max'):
@@ -3158,6 +3422,7 @@ DEFAULTS = {
     'folders': [], 'anime_folder': '', 'manga_folder': '', 'port': 8800, 'open_browser': True, 'rescan_min': 10,
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
+    'local_url': '', 'local_key': '', 'local_model': '',
     'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs',
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
@@ -3391,7 +3656,7 @@ def settings_json():
     counts = {os.path.normcase(r['root'] or ''): r['n']
               for r in DB.q('SELECT root, COUNT(*) AS n FROM videos WHERE missing=0 GROUP BY root')}
     out = {k: cfg[k] for k in DEFAULTS if k not in ('password_hash', 'secret', 'folders', 'cfg_version',
-                                                    'deepl_key', 'gemini_key', 'azure_key')}   # ключі назовні не віддаємо
+                                                    'deepl_key', 'gemini_key', 'azure_key', 'local_key')}   # ключі назовні не віддаємо
     out.update(
         folders=[{'path': f, 'count': counts.get(os.path.normcase(f), 0), 'exists': os.path.isdir(f)}
                  for f in cfg['folders']],
@@ -4012,6 +4277,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if path == '/api/manga/reset':
                     return self.send_json(manga_reset(self.json_body()))
                 if path == '/api/aisubs':
+                    self.body(1 << 20)          # імпорт глосарію файлом — більше за звичайні 64 КБ
                     return self.send_json(ai_post(self.json_body()))
                 if path == '/api/manga/link':
                     return self.send_json(manga_link(self.json_body()))

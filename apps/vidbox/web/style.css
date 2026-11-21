@@ -560,6 +560,35 @@ aside section+section{margin-top:28px}
 .frow small{color:var(--mute)}
 .fadd{display:flex;gap:8px;margin:14px 0 6px}
 .fadd input{flex:1}
+/* глосарій — однаковий у Налаштуваннях і на сторінці аніме */
+.gl-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 4px}
+.gl-tools input[type=search],.gl-add input{background:rgba(var(--tint),.06);border:1px solid var(--edge);border-radius:11px;padding:9px 11px;color:var(--fg);outline:none;min-width:0}
+.gl-tools input[type=search]{flex:1;min-width:180px}
+.gl-tools input:focus,.gl-add input:focus{border-color:rgba(var(--glow),.7)}
+.gl-imp{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0;padding:10px 14px;border:1px dashed rgba(var(--glow),.7);border-radius:12px;background:rgba(var(--glow),.07)}
+.gl-imp>div{flex:1;min-width:160px}.gl-imp b{display:block;font:500 13.5px var(--mono);overflow-wrap:anywhere}.gl-imp small{color:var(--mute)}
+.gl-head,.gl-row{display:grid;grid-template-columns:minmax(110px,1.1fr) minmax(120px,1.3fr) 104px minmax(0,1.6fr) 36px;gap:12px;align-items:center}
+.gl-head{margin-top:12px;padding:0 0 6px;border-bottom:1px solid var(--line);font:11.5px var(--mono);color:var(--mute);text-transform:lowercase}
+.gl-head b{font-weight:400}
+.gl-list{display:flex;flex-direction:column;max-height:460px;overflow:auto;overscroll-behavior:contain}
+.gl-row{padding:8px 0;border-bottom:1px solid var(--edge);cursor:pointer;border-radius:6px;transition:background .12s}
+.gl-row:hover,.gl-row:focus-visible{background:rgba(var(--tint),.05);outline:none}
+.gl-row b{font:500 13.5px var(--mono);overflow-wrap:anywhere}
+.gl-row .gl-tr{color:var(--fg);overflow-wrap:anywhere}
+.gl-row small{color:var(--mute);font-size:12.5px;overflow-wrap:anywhere}
+.gl-reg{font:11.5px/1.2 var(--mono);font-style:normal;justify-self:start;padding:4px 8px;border-radius:8px;background:rgba(var(--tint),.08);border:1px solid var(--edge);color:var(--mute);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.gl-row .btn.icon{opacity:.5}.gl-row:hover .btn.icon{opacity:1}
+.gl-empty{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;padding:28px 16px;margin:10px 0;border:1px dashed var(--line);border-radius:12px;color:var(--mute)}
+.gl-empty .i{width:28px;height:28px;color:var(--acc)}.gl-empty b{color:var(--fg);font-weight:600}
+.gl-over .gl-list,.gl-over .gl-empty{outline:2px dashed var(--acc);outline-offset:4px;border-radius:12px}
+.gl-add{flex-wrap:wrap}.gl-add input{flex:1 1 140px}
+textarea[id^=glNotes]{background:rgba(var(--tint),.06);border:1px solid var(--edge);border-radius:11px;padding:9px 11px;color:var(--fg);outline:none;font:inherit}
+@media (max-width:760px){
+  .gl-head{display:none}
+  .gl-row{grid-template-columns:1fr auto 36px;grid-template-areas:"t r d" "tr tr tr" "n n n";gap:4px 10px}
+  .gl-row b{grid-area:t}.gl-row .gl-reg,.gl-row>i{grid-area:r}.gl-row .gl-tr{grid-area:tr}.gl-row small{grid-area:n}.gl-row .btn.icon{grid-area:d;opacity:1}
+  .gl-list{max-height:none}
+}
 .warn{background:rgba(var(--glow),.09);border-left:3px solid var(--acc);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14px;margin:10px 0;max-width:70ch}
 code{font:13px var(--mono);color:var(--fg);background:rgba(var(--tint),.07);padding:5px 9px;border-radius:8px;border:1px solid var(--edge)}
 .themes-h{margin:4px 0 0;font:600 14px var(--sans);color:var(--mute)}
