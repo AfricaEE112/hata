@@ -82,6 +82,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import app.vidbox.AppVM
 import app.vidbox.Info
@@ -525,6 +526,22 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
                     useController = false
                     setShutterBackgroundColor(android.graphics.Color.BLACK)
                     setKeepContentOnPlayerReset(true)
+                    // субтитри як на сайті: білий текст на напівпрозорій підложці (rgba 0,0,0,.6) з легкою тінню;
+                    // вбудовані стилі (ASS/VTT фансабів) не беремо — щоб усі доріжки виглядали однаково
+                    subtitleView?.apply {
+                        setApplyEmbeddedStyles(false)
+                        setApplyEmbeddedFontSizes(false)
+                        setStyle(
+                            CaptionStyleCompat(
+                                android.graphics.Color.WHITE,
+                                0x99000000.toInt(),
+                                android.graphics.Color.TRANSPARENT,
+                                CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
+                                0xCC000000.toInt(),
+                                null,
+                            )
+                        )
+                    }
                     this.player = player
                 }
             },
