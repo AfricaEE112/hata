@@ -1824,6 +1824,39 @@ def gemini_pick_model(key):
     return max(good, key=score)
 
 
+# ── Глосарій для Gemini: загальний і для кожного тайтлу аніме. Вільний текст, зазвичай «оригінал = переклад» рядками.
+def gloss_load():
+    try:
+        with open(os.path.join(C.data, 'aisubs', 'glossary.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def gloss_save(sid, text):
+    g = gloss_load()
+    text = str(text or '').strip()[:8000]
+    if text:
+        g[sid] = text
+    else:
+        g.pop(sid, None)
+    os.makedirs(os.path.join(C.data, 'aisubs'), exist_ok=True)
+    with open(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), 'w', encoding='utf-8') as f:
+        json.dump(g, f, ensure_ascii=False, indent=1)
+    os.replace(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), os.path.join(C.data, 'aisubs', 'glossary.json'))
+
+
+def video_sid(r):
+    """id тайтлу аніме для відео (як в anime_series), або ''."""
+    if not C.anime or r['root'] != C.anime:
+        return ''
+    parts = os.path.relpath(r['path'], C.anime).split(os.sep)
+    return hashlib.sha1(('anime:' + (parts[0] if len(parts) > 1 else '')).encode('utf-8', 'surrogateescape')).hexdigest()[:12]
+
+
+TR_CTX = threading.local()             # глосарій поточного завдання (перекладач — у тому ж потоці)
+
+
 def gemini_translate(key, lines, src, progress=None):
     model = C.cfg.get('gemini_model')
     if not model:
@@ -1837,12 +1870,15 @@ def gemini_translate(key, lines, src, progress=None):
     for i in range(0, len(lines), step):
         part = lines[i:i + step]
         ctx = lines[max(0, i - 6):i]
+        gloss = getattr(TR_CTX, 'gloss', '')
         prompt = ('You translate subtitles of anime and films from %s into Ukrainian.\n'
                   'Translate every line of "lines" into natural, spoken Ukrainian that fits the scene; keep names, '
                   'keep the tone (casual, rude, polite), do not add explanations. Lines may be broken mid-sentence — '
                   'translate them so they still read well in order. Return JSON {"lines": [...]} with exactly %d '
-                  'strings in the same order.\n"context" holds the previous lines for reference only — do not translate them.\n\n%s'
-                  % (srcname, len(part), json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
+                  'strings in the same order.\n"context" holds the previous lines for reference only — do not translate them.\n%s\n%s'
+                  % (srcname, len(part), ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
+                                          'how characters address each other):\n' + gloss + '\n') if gloss else '',
+                     json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
         body = {'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
                 'generationConfig': {'temperature': 0.3, 'responseMimeType': 'application/json'}}
         res = None
@@ -1968,6 +2004,8 @@ def ai_job(it):
     out = os.path.join(C.data, 'aisubs', vid)
     wav = os.path.join(C.data, 'aisubs', 'tmp-%s.wav' % vid)
     key = bool(tr_chain())
+    g = gloss_load()
+    TR_CTX.gloss = '\n'.join(x for x in (g.get('_', ''), g.get(video_sid(r), '')) if x)
     have = [f for f in (os.listdir(out) if os.path.isdir(out) else []) if f.endswith('.srt') and f != 'uk.srt']
     if have and key and not os.path.exists(os.path.join(out, 'uk.srt')):
         try:                             # розпізнане вже є (раніше не було ключа) — лише перекласти
@@ -2096,7 +2134,7 @@ def ai_status():
     return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs',
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
-            'geminiModel': C.cfg.get('gemini_model') or '', 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
+            'geminiModel': C.cfg.get('gemini_model') or '', 'gloss': gloss_load().get('_', ''), 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
 
 
 def ai_post(d):
@@ -2131,6 +2169,26 @@ def ai_post(d):
                 AI['proc'].kill()
             except OSError:
                 pass
+    elif op == 'delete':                # прибрати готові субтитри ШІ відео (або всього тайтлу аніме)
+        ids = [x for x in d.get('ids') or [] if isinstance(x, str) and ID_RE.fullmatch(x)]
+        if d.get('sid'):
+            ser = anime_series().get(str(d['sid']))
+            ids += [r['id'] for r in (ser[1] if ser else [])]
+        for vid in ids:
+            if AI['cur'] == vid:
+                continue
+            shutil.rmtree(os.path.join(C.data, 'aisubs', vid), ignore_errors=True)
+            SUBS_CACHE.pop(vid, None)
+        with AI_LOCK:
+            ai_save_queue([it for it in ai_queue() if it['id'] not in ids or it['id'] == AI['cur']])
+    elif op == 'gloss_get':
+        return {'ok': True, 'text': gloss_load().get(str(d.get('sid') or '_'), '')}
+    elif op == 'gloss':
+        sid = str(d.get('sid') or '_')
+        if sid != '_' and sid not in anime_series():
+            return {'ok': False, 'error': 'Тайтл не знайдено'}
+        gloss_save(sid, d.get('text'))
+        return {'ok': True}
     elif op == 'clear':
         with AI_LOCK:
             ai_save_queue([it for it in ai_queue() if it['state'] not in ('done', 'error')])

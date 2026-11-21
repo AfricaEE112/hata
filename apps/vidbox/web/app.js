@@ -1111,7 +1111,26 @@ async function renderAnimeTitle(sid) {
   $('#aplay').onclick = () => playAnime(t, startId);
   api('/api/aisubs').then(st => {
     if (!st || !st.ready || !$('#aplay')) return;
-    $('#aplay').parentElement.insertAdjacentHTML('beforeend', `<button class="btn ghost" id="aisubs" title="Зробити українські субтитри ШІ для всіх серій">Субтитри ШІ</button>`);
+    $('#aplay').parentElement.insertAdjacentHTML('beforeend', `<button class="btn ghost" id="aisubs" title="Зробити українські субтитри ШІ для всіх серій">Субтитри ШІ</button><button class="btn ghost" id="agloss" title="Підказки для перекладу цього аніме">Глосарій</button>`);
+    $('#agloss').onclick = async () => {
+      if ($('#aglossBox')) return $('#aglossBox').remove();
+      const g = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'gloss_get', sid: t.sid})});
+      $('#aplay').parentElement.insertAdjacentHTML('afterend', `<div id="aglossBox" class="win" style="margin:14px 0;padding:14px 16px">
+        <b>Глосарій «${esc(t.title)}»</b><p class="note" style="margin:4px 0 8px">Імена, назви, терміни, звертання — рядками, наприклад «Frieren = Фрірен». Gemini дотримуватиметься їх у всіх серіях цього аніме (разом із загальним глосарієм з Налаштувань).</p>
+        <textarea id="aglossTxt" rows="6" style="width:100%;box-sizing:border-box;resize:vertical">${esc(g.text || '')}</textarea>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn primary" id="aglossSave">Зберегти</button>
+        <button class="btn ghost" id="aiDelAll">Видалити субтитри ШІ всіх серій</button></div></div>`);
+      $('#aglossTxt').focus();
+      $('#aglossSave').onclick = async () => {
+        const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'gloss', sid: t.sid, text: $('#aglossTxt').value})});
+        toast(r.ok ? 'Глосарій збережено — діятиме для наступних перекладів' : (r.error || 'Не вдалося'));
+      };
+      $('#aiDelAll').onclick = async () => {
+        if (!confirm('Видалити українські й інші субтитри ШІ всіх серій цього аніме? Оригінальні субтитри у відео не зачіпаються.')) return;
+        const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'delete', sid: t.sid})});
+        toast(r.ok ? 'Субтитри ШІ видалено' : 'Не вдалося');
+      };
+    };
     $('#aisubs').onclick = async () => {
       if (!confirm(`Зробити українські субтитри для ${t.eps.length} ${plural(t.eps.length, 'серії', 'серій', 'серій')}? Це у фоні, орієнтовно 15–40 хв на серію.`)) return;
       const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'add', ids: t.eps.map(e => e.id)})});
@@ -1714,6 +1733,8 @@ async function drawAiSet(st) {
         <div class="sc"><div class="seg" id="aiSpeed"><button data-s="normal" class="${st.speed !== 'max' ? 'on' : ''}">звичайна</button><button data-s="max" class="${st.speed === 'max' ? 'on' : ''}">максимальна</button></div></div></div>
       <div class="srow"><div class="sl"><b>Перекладач</b><small>Перекладає основний; коли в нього скінчився ліміт — наступний, у якого є ключ. ${!(st.gemini || st.deepl || st.azure) ? 'Без жодного ключа будуть лише субтитри мовою оригіналу.' : ''}</small></div>
         <div class="sc"><div class="seg" id="aiMain">${['gemini', 'deepl', 'azure'].map(k => `<button data-tm="${k}" class="${st.trMain === k ? 'on' : ''}">${TRN[k]}</button>`).join('')}</div></div></div>
+      <div class="srow"><div class="sl"><b>Глосарій</b><small>Підказки для Gemini для всіх відео: імена, терміни, як персонажі звертаються одне до одного. Рядками, наприклад «Rimuru = Рімуру», «senpai — лишати як «семпай»». Для окремого аніме — кнопка «Глосарій» на його сторінці. DeepL і Azure глосарій не використовують.</small></div></div>
+      <div class="fadd" style="align-items:flex-start"><textarea id="aiGloss" rows="4" style="flex:1;min-height:84px;resize:vertical" placeholder="Rimuru = Рімуру&#10;Tempest = Темпест&#10;Звертання -san/-chan не перекладати">${esc(st.gloss || '')}</textarea><button class="btn primary" id="aiGlossSave">Зберегти</button></div>
       ${trKey('gemini', st.gemini, `Безкоштовно і без картки: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> → «Create API key». Мовна модель — краще тримає тон діалогів. На безкоштовному тарифі Google може використовувати тексти для навчання.${st.geminiModel ? ` Модель: ${esc(st.geminiModel)}.` : ''}`)}
       ${trKey('deepl', st.deepl, `<a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener">deepl.com/pro-api</a> → вкладка API → план Developer: 1 млн символів одноразово. Серія аніме японською ≈ 2 тис. символів.<small id="aiUsage"></small>`)}
       ${trKey('azure', st.azure, `Microsoft Translator: 2 млн символів щомісяця безкоштовно (тариф F0). Ключ і регіон — у ресурсі Translator на portal.azure.com → «Keys and Endpoint».`)}</div>`) +
@@ -1739,6 +1760,7 @@ async function drawAiSet(st) {
     if (k === 'deepl') { const u = await post({op: 'usage'}); toast(u.ok ? 'Ключ DeepL працює' : 'Ключ збережено, але DeepL відповів: ' + u.error); }
     else toast(k === 'gemini' ? `Ключ Gemini працює (${r.geminiModel})` : 'Ключ Azure збережено');
   });
+  if ($('#aiGlossSave')) $('#aiGlossSave').onclick = async () => { const r = await post({op: 'gloss', sid: '_', text: $('#aiGloss').value}); if (r.ok) toast('Глосарій збережено'); };
   $$('[data-forget]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', forget: [b.dataset.forget + '_key']})));
   if ($('#aiUse')) $('#aiUse').onclick = async () => {
     const u = await post({op: 'usage'});
@@ -1987,7 +2009,7 @@ function mountPlayer(vp, v, o) {
       ? '<p>Субтитри</p>' + `<button data-sub="-1" class="${SB.on < 0 ? 'on' : ''}">Вимкнено</button>` +
         SB.list.map(t => `<button data-sub="${t.n}" class="${SB.on === t.n ? 'on' : ''}">${esc(subName(t))}${t.forced ? '<small>лише написи</small>' : ''}</button>`).join('') +
         (!SB.aiReady ? '' : aiBusy() ? `<p class="vp-ai">ШІ: ${esc(aiStateText(SB.ai))}</p>`
-          : SB.list.some(t => t.ai && t.lang === 'uk') ? ''
+          : SB.list.some(t => t.ai && t.lang === 'uk') ? `<button data-aidel>${I.trash}Видалити субтитри ШІ</button>`
           : `<button data-aisub>${I.plus}Українські (ШІ)</button>${SB.ai && SB.ai.err ? `<p class="vp-ai">${esc(SB.ai.err)}</p>` : ''}`)
       : kind === 'quality' && o.quality
       ? '<p>Якість</p>' + o.quality.items().map(x => `<button data-q="${x.id}" class="${x.on ? 'on' : ''}"${x.off ? ' disabled' : ''}>${x.name}<small>${esc(x.hint)}</small></button>`).join('')
@@ -2010,6 +2032,16 @@ function mountPlayer(vp, v, o) {
   vp.addEventListener('click', async e => {
     const r = e.target.closest('[data-rate]');
     if (r) { setRate(+r.dataset.rate); closeMenu(); return; }
+    if (e.target.closest('[data-aidel]')) {
+      closeMenu();
+      const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'delete', ids: [v.id]})}).catch(() => null);
+      if (!r || !r.ok) return vpToast('Не вдалося видалити');
+      if (SB.on >= 0 && SB.list[SB.on] && SB.list[SB.on].ai) pickSub(-1, false);
+      SB.list.filter(t => t.ai).forEach(t => delete SB.vtt[t.n]);
+      SB.list = SB.list.filter(t => !t.ai); SB.ai = null;
+      vpToast('Субтитри ШІ видалено — можна зробити заново');
+      return;
+    }
     if (e.target.closest('[data-aisub]')) {
       closeMenu();
       const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'add', ids: [v.id]})}).catch(() => null);
