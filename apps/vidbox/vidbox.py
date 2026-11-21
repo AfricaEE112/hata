@@ -1949,9 +1949,25 @@ def gloss_auto_ok(it, name=False):
     note_bad = [w for w in tr_foreign(t, note) if not (w.isascii() and w.isalpha())]   # «senpai» у примітці — можна
     if tr_foreign(t, tr) or note_bad or re.search(r'[A-Za-z]', tr):
         return False
+    if any(rx.search(tr) for st in gloss_sets().values() for rx in st.get('forbid') or []):
+        return False
     if HONORIFIC_RE.match(t.strip()) and (name or "ім'я" in (it[2] if len(it) > 2 else '')):
         return False
     return True
+
+
+def gloss_overlaps(term, higher):
+    """Авто-термін перетинається з записом набору чи користувача («jerk you off» ↔ «jerk off», «coming» ↔ «come») —
+    тоді модель отримала б два різні переклади; лишаємо тільки важливіший."""
+    low = term.lower()
+    return any(gloss_hit(h, low) or gloss_hit(term, h.lower()) for h in higher)
+
+
+def gloss_higher_terms(sids, sets):
+    hi = [it[0] for k in sets or [] for it in gloss_sets().get(k, {}).get('items', [])]
+    for sid in sids or []:
+        hi += [it[0] for it in gloss_get(sid)['items']]
+    return hi
 
 
 def gloss_put_auto(sid, auto):
@@ -1986,7 +2002,8 @@ def gloss_sets():
                         j = json.load(f)
                     GLOSS_SETS[fn[:-5]] = {'name': str(j.get('name') or fn[:-5]), 'adult': bool(j.get('adult')),
                                            'desc': str(j.get('desc') or ''), 'notes': str(j.get('notes') or ''),
-                                           'items': gloss_clean(j.get('items'))}
+                                           'items': gloss_clean(j.get('items')),
+                                           'forbid': [re.compile(x, re.I) for x in j.get('forbid') or [] if isinstance(x, str)]}
                 except (OSError, ValueError):
                     pass
     return GLOSS_SETS
@@ -2034,7 +2051,9 @@ def gloss_set_sets(sid, sets):
 
 def gloss_sets_info(sid):
     sets, auto = gloss_title_sets(sid)
-    return {'autoBad': [it[0] for it in gloss_get(sid).get('auto') or [] if not gloss_auto_ok(it)] if sid and sid != '_' else [],'sets': sets, 'setsAuto': auto, 'adultAuto': title_adult(sid) if sid and sid != '_' else None,
+    hi = gloss_higher_terms(['_', sid], sets) if sid and sid != '_' else []
+    return {'autoBad': [it[0] for it in gloss_get(sid).get('auto') or []
+                        if not gloss_auto_ok(it) or (it[2] != "ім'я" and gloss_overlaps(it[0], hi))] if sid and sid != '_' else [],'sets': sets, 'setsAuto': auto, 'adultAuto': title_adult(sid) if sid and sid != '_' else None,
             'setsAvail': [{'id': k, 'name': v['name'], 'adult': v['adult'], 'desc': v['desc'], 'n': len(v['items'])}
                           for k, v in gloss_sets().items()]}
 
@@ -2074,11 +2093,14 @@ def gloss_prompt(text, src, limit=150):
     """Глосарій для одного запиту: правила + терміни, що трапляються в text (для англ. джерела);
     для інших мов (Whisper японською тощо) збіг не перевіриш — тоді імена/запозичення першими, до limit."""
     sids = getattr(TR_CTX, 'gloss_sids', None) or []
-    notes, items = [], {it[0].lower(): it for it in getattr(TR_CTX, 'auto_items', None) or [] if gloss_auto_ok(it)}
+    hi = gloss_higher_terms(sids, getattr(TR_CTX, 'sets', None))
+    auto = list(getattr(TR_CTX, 'auto_items', None) or [])
     for sid in sids:                     # авто-терміни тайтлу з попередніх серій — найнижчий пріоритет
-        for it in gloss_get(sid).get('auto') or []:
-            if gloss_auto_ok(it):        # старе сміття з попередніх версій теж не пускаємо в запит
-                items[it[0].lower()] = it
+        auto += gloss_get(sid).get('auto') or []
+    notes, items = [], {}
+    for it in auto:                      # сміття й перетини з важливішими записами (і старі з glossary.json) — не в запит
+        if it[0].lower() not in items and gloss_auto_ok(it) and (it[2] == "ім'я" or not gloss_overlaps(it[0], hi)):
+            items[it[0].lower()] = it
     for k in getattr(TR_CTX, 'sets', None) or []:
         st = gloss_sets().get(k)
         if st:
@@ -2566,7 +2588,8 @@ def ai_context(vid, r, lines, src, set_state):
         g = gloss_get(sid)
         have = {it[0].lower() for it in g['items'] + g['auto'] + gloss_get('_')['items']}
         have |= {it[0].lower() for k in getattr(TR_CTX, 'sets', None) or [] for it in gloss_sets().get(k, {}).get('items', [])}
-        new = [it for it in TR_CTX.auto_items if it[0].lower() not in have]
+        hi = gloss_higher_terms(['_', sid], getattr(TR_CTX, 'sets', None))
+        new = [it for it in TR_CTX.auto_items if it[0].lower() not in have and (it[2] == "ім'я" or not gloss_overlaps(it[0], hi))]
         if new:
             gloss_put_auto(sid, g['auto'] + new)
     lines_ = []
@@ -2608,18 +2631,40 @@ def tr_foreign(src, out):
     return bad
 
 
+def tr_forbidden(text):
+    """Слова, заборонені в увімкнених наборах: помилки, що повторюються («фінішую», «кічка», «Ні-чан», «свойриця»)."""
+    out = []
+    for k in getattr(TR_CTX, 'sets', None) or []:
+        for rx in gloss_sets().get(k, {}).get('forbid') or []:
+            m = rx.search(text or '')
+            if m:
+                out.append(m.group(0).strip())
+    return out
+
+
+def tr_bad(src, out):
+    return tr_foreign(src, out) + tr_forbidden(out)
+
+
 def tr_fix_foreign(fn, key, lines, out, src):
-    """Рядки з «кашею» з інших абеток — перекласти ще раз, кожен окремо з двома попередніми репліками як контекстом."""
-    bad = [i for i, (a, b) in enumerate(zip(lines, out)) if b != a and tr_foreign(a, b)]
-    for i in bad[:40]:
-        for _ in range(2):
-            try:
-                got = fn(key, lines[max(0, i - 2):i + 1], src)
-            except Exception:
-                return out
-            if got and not tr_foreign(lines[i], got[-1]) and got[-1] != lines[i]:
-                out[i] = got[-1]
-                break
+    """Рядки з «кашею» з інших абеток, русизмами чи забороненими словами наборів — перекласти ще раз, кожен окремо
+    з двома попередніми репліками як контекстом і підказкою, чого саме не писати."""
+    bad = [i for i, (a, b) in enumerate(zip(lines, out)) if b != a and tr_bad(a, b)]
+    ctx0 = getattr(TR_CTX, 'ctx', '') or ''
+    try:
+        for i in bad[:40]:
+            words = sorted(set(tr_bad(lines[i], out[i])))
+            TR_CTX.ctx = ctx0 + '\nIn the last line do NOT write: %s — these are wrong or non-Ukrainian; use a proper Ukrainian word.' % ', '.join('«%s»' % w for w in words)
+            for _ in range(2):
+                try:
+                    got = fn(key, lines[max(0, i - 2):i + 1], src)
+                except Exception:
+                    return out
+                if got and not tr_bad(lines[i], got[-1]) and got[-1] != lines[i]:
+                    out[i] = got[-1]
+                    break
+    finally:
+        TR_CTX.ctx = ctx0
     return out
 
 
@@ -2672,7 +2717,7 @@ def tr_harden(lines, out, batch=40):
             continue
         for i, t in zip(part, got):
             t = t.strip() if isinstance(t, str) else ''
-            if t and t != lines[i] and not tr_foreign(lines[i], t) and len(t) < len(out[i]) * 2 + 20:
+            if t and t != lines[i] and not tr_bad(lines[i], t) and len(t) < len(out[i]) * 2 + 20:
                 out[i] = t
     return out
 
