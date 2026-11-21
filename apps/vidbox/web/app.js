@@ -1727,6 +1727,8 @@ async function drawAiSet(st) {
         <div class="sc"><div class="seg" id="aiSrc"><button data-src="subs" class="${st.source !== 'audio' ? 'on' : ''}">англ. субтитри</button><button data-src="audio" class="${st.source === 'audio' ? 'on' : ''}">завжди звук</button></div></div></div>
       <div class="srow"><div class="sl"><b>Спершу прочитати серію</b><small>Перед перекладом модель (локальна або Gemini) читає всю серію: про що вона, хто з персонажів чоловік чи жінка (закінчення «втомився/втомилася»), як хто говорить, який сленг. Персонажі й терміни самі додаються в глосарій аніме — твої правки не змінюються. Плюс 1–3 запити на серію.</small></div>
         <div class="sc"><div class="seg" id="aiCtx"><button data-c="1" class="${st.context !== false ? 'on' : ''}">так</button><button data-c="0" class="${st.context === false ? 'on' : ''}">ні</button></div></div></div>
+      <div class="srow"><div class="sl"><b>Жорсткіше для 18+</b><small>Лише для аніме з набором «Хентай 18+». Після перекладу модель ще раз проходить репліки з грубою чи відвертою лексикою і прибирає пом'якшення: «до біса» → «до усрачки», «бовдур» → «дебіл». Плюс 1–3 запити на серію.</small></div>
+        <div class="sc"><div class="seg" id="aiHard"><button data-h="1" class="${st.harden !== false ? 'on' : ''}">так</button><button data-h="0" class="${st.harden === false ? 'on' : ''}">ні</button></div></div></div>
       <div class="srow"><div class="sl"><b>Швидкість</b><small>Максимальна — усі 8 потоків процесора, і Хата на час розпізнавання вмикає режим продуктивності: швидше, але ноутбук гарячіший і вентилятор гучніший. Якість однакова.</small></div>
         <div class="sc"><div class="seg" id="aiSpeed"><button data-s="normal" class="${st.speed !== 'max' ? 'on' : ''}">звичайна</button><button data-s="max" class="${st.speed === 'max' ? 'on' : ''}">максимальна</button></div></div></div>
       <div class="srow"><div class="sl"><b>Перекладач</b><small>Перекладає основний; коли в нього скінчився ліміт — наступний, у якого є ключ. ${!(st.local || st.gemini || st.deepl || st.azure) ? 'Без жодного ключа будуть лише субтитри мовою оригіналу.' : ''}</small></div>
@@ -1743,6 +1745,7 @@ async function drawAiSet(st) {
   if ($('#aiInstall')) $('#aiInstall').onclick = async () => drawAiSet(await post({op: 'install'}));
   $$('#aiModel [data-m]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', model: b.dataset.m})));
   $$('#aiSpeed [data-s]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', speed: b.dataset.s})));
+  $$('#aiHard [data-h]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', harden: b.dataset.h === '1'})));
   $$('#aiCtx [data-c]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', context: b.dataset.c === '1'})));
   $$('#aiSrc [data-src]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', source: b.dataset.src})));
   $$('#aiMain [data-tm]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', main: b.dataset.tm})));

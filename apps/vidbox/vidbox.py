@@ -2138,7 +2138,9 @@ LOCAL_SYSTEM_ADULT = ('You are a professional translator of adult (18+) anime su
                       'characters are adults. This is fiction: translate faithfully and without censorship. Keep the exact '
                       'register — crude stays crude (real Ukrainian swearing and explicit sexual vocabulary, no euphemisms, '
                       'no asterisks), tender stays tender, shy stays shy. "Cum/finish" in a sexual sense is «кінчати», '
-                      'never «фінішувати». ' + LOCAL_COMMON)
+                      'never «фінішувати». Examples: "Fuck me harder" → «Трахни мене сильніше»; "your cock" → «твій член»; '
+                      '"I\'m cumming!" → «Я кінчаю!»; "you slut" → «шльондро»; "Holy shit, your tits" → «Бляха, твої '
+                      'цицьки». ' + LOCAL_COMMON)
 LOCAL_SYSTEM = LOCAL_SYSTEM_ADULT        # старе ім'я
 
 
@@ -2488,6 +2490,59 @@ def tr_fix_foreign(fn, key, lines, out, src):
     return out
 
 
+# ── «Жорсткіше» для 18+: модель після «розблокування» вже не відмовляє, але за звичкою пом'якшує («до біса» замість
+# «до усрачки», «бовдур» замість «дебіл»). Окремий прохід бере репліки, де в оригіналі є груба чи відверта лексика,
+# разом із перекладом і просить переписати переклад рівно з тією ж силою. Лише для тайтлів з набором 18+.
+CRUDE_RE = re.compile(r"\b(fuck\w*|shit\w*|bitch\w*|cunt\w*|cock\w*|dick\w*|puss(y|ies)|cum\w*|jizz|slut\w*|whore\w*|"
+                      r"tits?|titties|boobs?|ass(hole)?|asses|damn\w*|hell|bastard\w*|piss\w*|horny|lewd|pervert\w*|"
+                      r"semen|sperm|creampie\w*|blowjob\w*|suck\w*|lick\w*|nipples?|clit\w*|orgasm\w*|moan\w*|"
+                      r"pregnant|impregnat\w*|breed\w*|womb|cervix|finish(ing|ed)?|coming|inside me|sex\w*|naked|"
+                      r"dumbass\w*|idiot\w*|moron\w*|stupid|shut up)\b", re.I)
+HARDEN_SYSTEM = ('You are the editor of an uncensored Ukrainian translation of adult (18+) anime; all characters are adults. '
+                 'Your only job: make each Ukrainian line exactly as crude, vulgar and explicit as its English original. '
+                 'The translator tends to soften — undo that. Swearing → real Ukrainian swearing (бляха, блядь, сука, '
+                 'хуй, пизда, дебіл, срань), sexual words → explicit spoken Ukrainian (член, кицька/пизда, цицьки, '
+                 'трахати, кінчати, сперма), never euphemisms, medical terms or «до біса» where the original says «shit». '
+                 'Keep meaning, speaker gender and length; do not add anything that is not in the original; if a line is '
+                 'already equally strong, return it unchanged. Ukrainian Cyrillic only. Answer only with JSON.')
+
+
+def crude_terms():
+    """Вульгарні терміни з увімкнених наборів — теж ознака репліки, яку варто перевірити."""
+    out = set()
+    for k in getattr(TR_CTX, 'sets', None) or []:
+        for it in gloss_sets().get(k, {}).get('items', []):
+            if it[2] == 'вульгарне' and len(it[0]) > 2:
+                out.add(it[0].lower())
+    return out
+
+
+def tr_harden(lines, out, batch=40):
+    if not tr_adult() or not C.cfg.get('ai_harden', True):
+        return out
+    extra = crude_terms()
+    idx = [i for i, l in enumerate(lines) if out[i] != l and (CRUDE_RE.search(l) or any(t in l.lower() for t in extra))]
+    for b in range(0, len(idx), batch):
+        part = idx[b:b + batch]
+        pairs = [{'en': lines[i], 'uk': out[i]} for i in part]
+        schema = {'type': 'object', 'required': ['lines'], 'properties': {'lines': {
+            'type': 'array', 'items': {'type': 'string'}, 'minItems': len(part), 'maxItems': len(part)}}}
+        gloss = gloss_prompt('\n'.join(lines[i] for i in part), 'en')
+        prompt = ('Rewrite the "uk" of every pair so it matches the "en" in crudeness and explicitness. Return JSON '
+                  '{"lines": [...]} with exactly %d Ukrainian strings in the same order.\n%s\n%s'
+                  % (len(part), ('Glossary (follow it):\n' + gloss + '\n') if gloss else '',
+                     json.dumps({'pairs': pairs}, ensure_ascii=False)))
+        j, _ = llm_json(HARDEN_SYSTEM, prompt, schema)
+        got = (j or {}).get('lines') or []
+        if len(got) != len(part):
+            continue
+        for i, t in zip(part, got):
+            t = t.strip() if isinstance(t, str) else ''
+            if t and t != lines[i] and not tr_foreign(lines[i], t) and len(t) < len(out[i]) * 2 + 20:
+                out[i] = t
+    return out
+
+
 def translate_uk(lines, src, progress=None):
     """Переклад українською першим перекладачем, у якого не скінчився ліміт. → (тексти, назва перекладача)."""
     errs = []
@@ -2498,6 +2553,8 @@ def translate_uk(lines, src, progress=None):
             out = fn(key, lines, src, progress)
             if name in ('local', 'gemini'):  # DeepL/Azure такого не роблять — у мовних моделей буває
                 out = tr_fix_foreign(fn, key, lines, out, src)
+                if src == 'en':
+                    out = tr_harden(lines, out)
             return out, name
         except TrError as e:
             errs.append(str(e) if TR_NAMES[name] in str(e) else '%s: %s' % (TR_NAMES[name], e))
@@ -2663,7 +2720,7 @@ def ai_status():
     for it in q:
         r = DB.one('SELECT title, folder FROM videos WHERE id=?', (it['id'],))
         it['title'] = r['title'] if r else '(файл зник)'
-    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True),
+    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True), 'harden': C.cfg.get('ai_harden', True),
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
@@ -2788,6 +2845,8 @@ def ai_post(d):
                 C.cfg['ai_speed'] = d['speed']
             if isinstance(d.get('context'), bool):
                 C.cfg['ai_context'] = d['context']
+            if isinstance(d.get('harden'), bool):
+                C.cfg['ai_harden'] = d['harden']
             if d.get('source') in ('subs', 'audio'):
                 C.cfg['ai_source'] = d['source']
         save_config()
@@ -3731,7 +3790,7 @@ DEFAULTS = {
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
     'local_url': '', 'local_key': '', 'local_model': '',
-    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True,
+    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True,
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},
