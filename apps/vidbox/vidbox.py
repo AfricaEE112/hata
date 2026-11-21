@@ -3098,6 +3098,9 @@ def video_stats(vid):
 
 DEFAULTS = {
     'folders': [], 'anime_folder': '', 'manga_folder': '', 'port': 8800, 'open_browser': True, 'rescan_min': 10,
+    # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
+    'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
+    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs',
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},
@@ -3329,7 +3332,8 @@ def settings_json():
     cfg = C.cfg
     counts = {os.path.normcase(r['root'] or ''): r['n']
               for r in DB.q('SELECT root, COUNT(*) AS n FROM videos WHERE missing=0 GROUP BY root')}
-    out = {k: cfg[k] for k in DEFAULTS if k not in ('password_hash', 'secret', 'folders', 'cfg_version')}
+    out = {k: cfg[k] for k in DEFAULTS if k not in ('password_hash', 'secret', 'folders', 'cfg_version',
+                                                    'deepl_key', 'gemini_key', 'azure_key')}   # ключі назовні не віддаємо
     out.update(
         folders=[{'path': f, 'count': counts.get(os.path.normcase(f), 0), 'exists': os.path.isdir(f)}
                  for f in cfg['folders']],
