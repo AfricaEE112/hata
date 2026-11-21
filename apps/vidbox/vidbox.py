@@ -1699,6 +1699,44 @@ def read_srt(path):
     return segs
 
 
+def read_vtt(data):
+    """WebVTT (як його віддає ffmpeg) → [{s, e, t}] без розмітки; однакові репліки, що йдуть впритул, зливаємо
+    (караоке в опенінгах і ефекти фансабів часто розбиті на десятки однакових подій)."""
+    def t(x):
+        p = x.strip().split(':')
+        return (int(p[0]) * 3600 + int(p[1]) * 60 + float(p[2])) if len(p) == 3 else int(p[0]) * 60 + float(p[1])
+    segs = []
+    for block in re.split(r'\n\s*\n', data.decode('utf-8', 'replace').replace('\r', '')):
+        lines = block.strip().split('\n')
+        i = next((k for k, l in enumerate(lines) if '-->' in l), -1)
+        if i < 0:
+            continue
+        a, b = lines[i].split('-->')
+        txt = re.sub(r'<[^>]+>|\{[^}]*\}', '', '\n'.join(lines[i + 1:])).replace('\\N', '\n')
+        txt = html.unescape(re.sub(r'[ \t]+', ' ', txt)).strip()
+        if not txt:
+            continue
+        sg = {'s': t(a), 'e': t(b.strip().split()[0]), 't': txt}
+        if segs and segs[-1]['t'] == txt and sg['s'] - segs[-1]['e'] < 0.3:
+            segs[-1]['e'] = max(segs[-1]['e'], sg['e'])
+        else:
+            segs.append(sg)
+    return sorted(segs, key=lambda x: x['s'])
+
+
+def ai_text_source(r):
+    """Номер англійської текстової доріжки, з якої краще перекладати (повна, не «лише написи»), або None."""
+    if C.cfg.get('ai_source') == 'audio':
+        return None
+    cand = [t for t in subs_list(r) if t['lang'] == 'en' and not t.get('ai') and not t['forced']]
+    if not cand:
+        return None
+    def score(t):
+        lab = (t['label'] or '').lower()
+        return (not re.search(r'sign|song|title|надпис', lab), bool(re.search(r'full|dialog|subs', lab)), t['def'])
+    return max(cand, key=score)['n']
+
+
 def deepl_call(key, path, data=None):
     host = 'api-free.deepl.com' if key.strip().endswith(':fx') else 'api.deepl.com'
     req = urllib.request.Request('https://%s/v2/%s' % (host, path), data=json.dumps(data).encode() if data else None,
@@ -1942,9 +1980,25 @@ def ai_job(it):
         except Exception as e:
             SUBS_CACHE.pop(vid, None)
             return ai_set(vid, state='error', err=str(e)[-300:])
+    src_n = ai_text_source(r) if key else None
+    if src_n is not None:                # є англійські субтитри — перекладаємо їх: текст від людей, час точний, без Whisper
+        try:
+            ai_set(vid, state='translate', p=0, lang='en', src='subs')
+            segs = read_vtt(subs_vtt(r, src_n) or b'')
+            if len(segs) < 5:
+                raise ValueError('замало реплік')
+            uk, via = translate_uk([x['t'] for x in segs], 'en', lambda f: ai_set(vid, p=f))
+            write_srt(os.path.join(out, 'uk.srt'), segs, uk)
+            SUBS_CACHE.pop(vid, None)
+            return ai_set(vid, state='done', p=1, err='', via=via)
+        except ValueError:
+            pass                         # субтитри порожні чи картинкові — розпізнаємо звук, як звичайно
+        except Exception as e:
+            SUBS_CACHE.pop(vid, None)
+            return ai_set(vid, state='error', err=str(e)[-300:])
     os.makedirs(os.path.dirname(wav), exist_ok=True)
     try:
-        ai_set(vid, state='audio', p=0)
+        ai_set(vid, state='audio', p=0, src='audio')
         a = ai_audio_stream(r['path'])
         res = subprocess.run(['nice', '-n', '15', C.ffmpeg, '-v', 'error', '-y', '-i', r['path'], '-map', '0:a:%d' % a,
                               '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
@@ -2039,7 +2093,7 @@ def ai_status():
     for it in q:
         r = DB.one('SELECT title, folder FROM videos WHERE id=?', (it['id'],))
         it['title'] = r['title'] if r else '(файл зник)'
-    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal',
+    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs',
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
@@ -2104,6 +2158,8 @@ def ai_post(d):
                 C.cfg['ai_model'] = d['model']
             if d.get('speed') in ('normal', 'max'):
                 C.cfg['ai_speed'] = d['speed']
+            if d.get('source') in ('subs', 'audio'):
+                C.cfg['ai_source'] = d['source']
         save_config()
     elif op == 'usage':
         key = (C.cfg.get('deepl_key') or '').strip()

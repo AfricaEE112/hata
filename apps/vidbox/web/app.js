@@ -1692,7 +1692,7 @@ let wantFs = false;   // наступне відео відкрити теж н�
 function aiStateText(a) {
   const pct = Math.round((a.p || 0) * 100) + ' %';
   return {queued: 'у черзі', audio: 'готую звук', model: 'завантажую модель (перший раз ~1,5 ГБ)', recog: `розпізнаю мову · ${pct}`,
-    translate: `перекладаю українською · ${pct}`, done: 'готово', error: 'не вдалося'}[a.state] || a.state;
+    translate: `${a.src === 'subs' ? 'перекладаю англійські субтитри' : 'перекладаю українською'} · ${pct}`, done: 'готово', error: 'не вдалося'}[a.state] || a.state;
 }
 let aiSetT = 0;
 async function drawAiSet(st) {
@@ -1708,6 +1708,8 @@ async function drawAiSet(st) {
       : `${st.install === 'error' ? `<p class="warn">${esc(st.log)}</p>` : ''}<button class="btn primary" id="aiInstall">${I.plus}Встановити розпізнавання</button><p class="note">Завантажиться ≈ 400 МБ, а з першим відео — модель ще ≈ 1,5 ГБ (швидша — ≈ 0,5 ГБ).</p>`)
     : `<div class="srow"><div class="sl"><b>Модель</b><small>Точніша — краще чує японську й шумні сцени; швидша — помітно швидше, але більше помилок.</small></div>
         <div class="sc"><div class="seg" id="aiModel"><button data-m="large-v3-turbo" class="${st.model === 'large-v3-turbo' ? 'on' : ''}">точніша</button><button data-m="small" class="${st.model === 'small' ? 'on' : ''}">швидша</button></div></div></div>
+      <div class="srow"><div class="sl"><b>Звідки брати текст</b><small>Якщо у відео є англійські субтитри, перекладати їх — текст від людей, точний час, серія за хвилину. Інакше — розпізнавати звук.</small></div>
+        <div class="sc"><div class="seg" id="aiSrc"><button data-src="subs" class="${st.source !== 'audio' ? 'on' : ''}">англ. субтитри</button><button data-src="audio" class="${st.source === 'audio' ? 'on' : ''}">завжди звук</button></div></div></div>
       <div class="srow"><div class="sl"><b>Швидкість</b><small>Максимальна — усі 8 потоків процесора, і Хата на час розпізнавання вмикає режим продуктивності: швидше, але ноутбук гарячіший і вентилятор гучніший. Якість однакова.</small></div>
         <div class="sc"><div class="seg" id="aiSpeed"><button data-s="normal" class="${st.speed !== 'max' ? 'on' : ''}">звичайна</button><button data-s="max" class="${st.speed === 'max' ? 'on' : ''}">максимальна</button></div></div></div>
       <div class="srow"><div class="sl"><b>Перекладач</b><small>Перекладає основний; коли в нього скінчився ліміт — наступний, у якого є ключ. ${!(st.gemini || st.deepl || st.azure) ? 'Без жодного ключа будуть лише субтитри мовою оригіналу.' : ''}</small></div>
@@ -1716,13 +1718,14 @@ async function drawAiSet(st) {
       ${trKey('deepl', st.deepl, `<a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener">deepl.com/pro-api</a> → вкладка API → план Developer: 1 млн символів одноразово. Серія аніме японською ≈ 2 тис. символів.<small id="aiUsage"></small>`)}
       ${trKey('azure', st.azure, `Microsoft Translator: 2 млн символів щомісяця безкоштовно (тариф F0). Ключ і регіон — у ресурсі Translator на portal.azure.com → «Keys and Endpoint».`)}</div>`) +
     (st.queue.length ? `<h3 style="margin:16px 0 6px">Черга</h3><div class="flist">${st.queue.map(x => `<div class="frow"><div><b>${esc(x.title)}</b>
-        <small style="color:var(${x.state === 'error' ? '--red, #e66' : '--mute'})">${esc(aiStateText(x))}${x.via && x.state === 'done' ? ' · ' + TRN[x.via] : ''}${x.err ? ' — ' + esc(x.err) : ''}</small></div>
+        <small style="color:var(${x.state === 'error' ? '--red, #e66' : '--mute'})">${esc(aiStateText(x))}${x.via && x.state === 'done' ? ' · ' + (x.src === 'subs' ? 'з англ. субтитрів · ' : '') + TRN[x.via] : ''}${x.err ? ' — ' + esc(x.err) : ''}</small></div>
         <button class="btn ghost icon" data-airm="${esc(x.id)}" title="${['done', 'error'].includes(x.state) ? 'Прибрати зі списку' : 'Скасувати'}" aria-label="Прибрати">${I.trash}</button></div>`).join('')}</div>
       ${st.queue.some(x => ['done', 'error'].includes(x.state)) ? '<button class="btn ghost" id="aiClear" style="margin-top:8px">Прибрати готові</button>' : ''}` : '');
   const post = async b => { const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify(b)}); if (r.ok === false && r.error) toast(r.error); return r; };
   if ($('#aiInstall')) $('#aiInstall').onclick = async () => drawAiSet(await post({op: 'install'}));
   $$('#aiModel [data-m]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', model: b.dataset.m})));
   $$('#aiSpeed [data-s]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', speed: b.dataset.s})));
+  $$('#aiSrc [data-src]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', source: b.dataset.src})));
   $$('#aiMain [data-tm]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', main: b.dataset.tm})));
   $$('[data-savekey]').forEach(b => b.onclick = async () => {
     const k = b.dataset.savekey, v = $('#key_' + k).value.trim();
