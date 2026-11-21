@@ -1774,7 +1774,7 @@ async function drawAiSet(st) {
 const GL_REG = ['вульгарне', 'розмовне', 'нейтральне', 'ніжне', 'вигук', 'запозичення', "ім'я"];
 function glossPanel(host, sid, title) {
   if (!host) return;
-  const G = {notes: '', items: [], q: '', more: 120, file: null};
+  const G = {notes: '', items: [], q: '', more: 120, file: null, sets: [], setsAuto: true, adultAuto: null, avail: [], view: ''};
   const post = async b => { const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify(Object.assign({sid}, b))}); if (r.ok === false) toast(r.error || 'Не вдалося'); return r; };
   const save = async () => { const r = await post({op: 'gloss', notes: G.notes, items: G.items}); if (r.ok) { G.items = r.items; G.notes = r.notes; } return r; };
   const list = () => { const q = G.q.toLowerCase(); return q ? G.items.filter(it => it.some(x => x.toLowerCase().includes(q))) : G.items; };
@@ -1787,8 +1787,23 @@ function glossPanel(host, sid, title) {
         <button class="btn ghost icon" data-gdel="${esc(it[0])}" title="Прибрати" aria-label="Прибрати ${esc(it[0])}">${I.trash}</button></div>`).join('') +
       (l.length > G.more ? `<button class="btn ghost" id="glMore" style="margin-top:10px">Показати ще ${Math.min(500, l.length - G.more)} з ${l.length - G.more}</button>` : '');
   };
+  const setsHtml = () => {
+    if (!G.avail.length) return '';
+    if (sid === '_') return `<div class="srow" style="align-items:flex-start"><div class="sl"><b>Набори глосаріїв</b><small>Готові глосарії, що йдуть разом із VidBox. Вмикаються для кожного аніме окремо — на його сторінці → «Глосарій»: «Аніме» — для всіх, «Хентай 18+» — сам для тайтлів, які AniList позначає 18+. Твої записи тут і в тайтлі важливіші за набори.</small></div></div>
+      <div class="gl-sets">${G.avail.map(a => `<button class="chip${G.view === a.id ? ' on' : ''}" data-glview="${esc(a.id)}" title="${esc(a.desc)}">${esc(a.name)} · ${a.n}${a.adult && !/18\+/.test(a.name) ? ' · 18+' : ''}</button>`).join('')}</div>${viewHtml()}`;
+    const why = G.setsAuto ? (G.adultAuto ? 'Вибрано автоматично: AniList позначає тайтл як 18+.' : G.adultAuto === false ? 'Вибрано автоматично: тайтл не 18+.' : 'Вибрано автоматично (даних AniList про 18+ немає).') : 'Вибрано вручну.';
+    return `<div class="srow" style="align-items:flex-start"><div class="sl"><b>Набори глосаріїв</b><small>${why} Набір «18+» вмикає переклад без цензури — лише для дорослих тайтлів. ${G.setsAuto ? '' : '<a href="#" data-glauto>Повернути автоматичний вибір</a>'}</small></div></div>
+      <div class="gl-sets">${G.avail.map(a => `<button class="chip${G.sets.includes(a.id) ? ' on' : ''}" data-glset="${esc(a.id)}" title="${esc(a.desc)}" aria-pressed="${G.sets.includes(a.id)}">${esc(a.name)} · ${a.n}${a.adult && !/18\+/.test(a.name) ? ' · 18+' : ''}</button>`).join('')}</div>`;
+  };
+  const viewHtml = () => {
+    const a = G.view && G.viewData;
+    if (!a) return '';
+    return `<div class="gl-view"><p class="note" style="margin-top:6px">${esc(a.desc)}</p>${a.notes ? `<p class="note" style="white-space:pre-line">${esc(a.notes)}</p>` : ''}
+      <div class="gl-head"><b>Термін</b><b>Переклад</b><b>Регістр</b><b>Примітка</b><i></i></div>
+      <div class="gl-list">${a.items.map(it => `<div class="gl-row ro"><b>${esc(it[0])}</b><span class="gl-tr">${esc(it[1])}</span>${it[2] ? `<i class="gl-reg">${esc(it[2])}</i>` : '<i></i>'}<small>${esc(it[3])}</small><i></i></div>`).join('')}</div></div>`;
+  };
   const draw = () => {
-    host.innerHTML = `<p class="note" style="margin-top:0">${sid === '_' ? 'Діє для всіх відео.' : `Тільки для «${esc(title || '')}» — разом із загальним із Налаштувань; переклади тут важливіші.`} Gemini й локальна модель отримують правила і ті терміни, що трапляються в репліках, які саме перекладаються, тож глосарій може бути великим. DeepL і Azure глосарій не використовують.</p>
+    host.innerHTML = setsHtml() + `<p class="note" style="margin-top:${G.avail.length ? 14 : 0}px">${sid === '_' ? 'Діє для всіх відео.' : `Тільки для «${esc(title || '')}» — разом із загальним із Налаштувань; переклади тут важливіші.`} Gemini й локальна модель отримують правила і ті терміни, що трапляються в репліках, які саме перекладаються, тож глосарій може бути великим. DeepL і Azure глосарій не використовують.</p>
       <div class="gl-tools"><input type="search" id="glQ_${sid}" placeholder="Пошук у ${G.items.length} ${plural(G.items.length, 'терміні', 'термінах', 'термінах')}…" value="${esc(G.q)}" aria-label="Пошук у глосарії">
         <input type="file" id="glF_${sid}" accept=".csv,.tsv,.md,.txt,text/csv,text/plain,text/markdown" hidden>
         <button class="btn primary" data-gl="file">${I.upload}Завантажити файл</button>
@@ -1813,7 +1828,7 @@ function glossPanel(host, sid, title) {
       G.items = G.items.filter(it => it[0] !== b.dataset.gdel);
       if ((await save()).ok) draw();
     });
-    $$('.gl-row', host).forEach(r => r.onclick = r.onkeydown = e => {
+    $$('.gl-row:not(.ro)', host).forEach(r => r.onclick = r.onkeydown = e => {
       if (e.type === 'keydown' && e.key !== 'Enter') return;
       const it = G.items.find(x => x[0] === r.dataset.gt); if (!it) return;
       ['T', 'R', 'G', 'N'].forEach((k, i) => $(`#gl${k}_${sid}`).value = it[i] || '');
@@ -1829,6 +1844,23 @@ function glossPanel(host, sid, title) {
     rd.readAsText(f, 'utf-8');
   };
   const bind = () => {
+    $$('[data-glset]', host).forEach(b => b.onclick = async () => {
+      const id = b.dataset.glset, on = G.sets.includes(id);
+      const a = G.avail.find(x => x.id === id);
+      if (!on && a && a.adult && !confirm(`Увімкнути «${a.name}» для цього тайтлу? Переклад буде без цензури, з відвертою лексикою.`)) return;
+      const r = await post({op: 'gloss_sets', sets: on ? G.sets.filter(x => x !== id) : G.sets.concat([id])});
+      if (r.ok) { Object.assign(G, {sets: r.sets, setsAuto: r.setsAuto, adultAuto: r.adultAuto}); draw(); }
+    });
+    if ($('[data-glauto]', host)) $('[data-glauto]', host).onclick = async e => {
+      e.preventDefault();
+      const r = await post({op: 'gloss_sets', sets: null});
+      if (r.ok) { Object.assign(G, {sets: r.sets, setsAuto: r.setsAuto, adultAuto: r.adultAuto}); draw(); }
+    };
+    $$('[data-glview]', host).forEach(b => b.onclick = async () => {
+      if (G.view === b.dataset.glview) { G.view = ''; return draw(); }
+      const r = await post({op: 'gloss_set_view', id: b.dataset.glview});
+      if (r.ok) { G.view = b.dataset.glview; G.viewData = r; draw(); }
+    });
     const q = $('#glQ_' + sid);
     q.oninput = () => { G.q = q.value; G.more = 120; redrawList(); };
     $('#glF_' + sid).onchange = e => pick(e.target.files[0]);
@@ -1873,7 +1905,7 @@ function glossPanel(host, sid, title) {
   host.ondragleave = e => { if (!host.contains(e.relatedTarget)) host.classList.remove('gl-over'); };
   host.ondrop = e => { e.preventDefault(); host.classList.remove('gl-over'); pick(e.dataTransfer.files[0]); };
   host.innerHTML = '<p class="note">Завантажую…</p>';
-  post({op: 'gloss_get'}).then(r => { if (r.ok) { G.items = r.items; G.notes = r.notes; } draw(); });
+  post({op: 'gloss_get'}).then(r => { if (r.ok) Object.assign(G, {items: r.items, notes: r.notes, sets: r.sets || [], setsAuto: r.setsAuto !== false, adultAuto: r.adultAuto, avail: r.setsAvail || []}); draw(); });
 }
 
 const TRN = {local: 'Локальна', gemini: 'Gemini', deepl: 'DeepL', azure: 'Azure'};
