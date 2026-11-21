@@ -1779,7 +1779,7 @@ def ai_job(it):
         ai_set(vid, state='audio', p=0)
         a = ai_audio_stream(r['path'])
         res = subprocess.run(['nice', '-n', '15', C.ffmpeg, '-v', 'error', '-y', '-i', r['path'], '-map', '0:a:%d' % a,
-                              '-ac', '1', '-ar', '16000', wav], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
+                              '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
         if res.returncode or not os.path.exists(wav):
             raise RuntimeError('не вдалося дістати звук: ' + res.stderr.decode('utf-8', 'replace')[-200:])
         ai_set(vid, state='model' if not os.path.isdir(ai_dir('models')) else 'recog', p=0)
