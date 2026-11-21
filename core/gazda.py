@@ -822,48 +822,63 @@ KEEPER_SAID = {}
 
 
 # Режим продуктивності на час субтитрів ШІ: VidBox у режимі «максимальна швидкість» кладе файл з PID розпізнавання;
-# поки цей процес живий — профіль Asus «performance» (якщо є) і EPP процесора «performance», потім — як було.
+# поки цей процес живий — профіль Asus «performance» (якщо є), EPP процесора «performance» і вентилятори на 100 %
+# (asus-nb-wmi: pwm1_enable 0 — на повну, 2 — авто); потім — як було. Попередні значення зберігаємо в стані gazda,
+# щоб повернути їх і після перезапуску gazda посеред розпізнавання.
 BOOST_FLAG = '/var/lib/hata/vidbox/whisper/boost'
-BOOST = {'on': False, 'saved': {}}
+BOOST = {'on': None}
 
 
-def boost_paths():
+def boost_targets():
+    """[(файл, значення на час розпізнавання)] — лише те, що є на цьому ноутбуці."""
     out = []
     pp = '/sys/firmware/acpi/platform_profile'
     if os.path.exists(pp) and 'performance' in read(pp + '_choices').split():
-        out.append(pp)
-    out += sorted(glob.glob('/sys/devices/system/cpu/cpu[0-9]*/cpufreq/energy_performance_preference'))
+        out.append((pp, 'performance'))
+    out += [(p, 'performance') for p in sorted(glob.glob('/sys/devices/system/cpu/cpu[0-9]*/cpufreq/energy_performance_preference'))]
+    for h in glob.glob('/sys/class/hwmon/hwmon*'):
+        if read(h + '/name') == 'asus' and os.path.exists(h + '/pwm1_enable'):
+            out.append((h + '/pwm1_enable', '0'))
     return out
+
+
+def boost_write(p, v):
+    try:
+        with open(p, 'w') as f:
+            f.write(v)
+        return True
+    except OSError:
+        return False
 
 
 def boost_care():
     want = False
     try:
-        pid = int(read(BOOST_FLAG).strip() or 0)
-        want = pid > 0 and os.path.exists('/proc/%d' % pid) and 'whisper_worker' in read('/proc/%d/cmdline' % pid)
-    except (OSError, ValueError):
+        pid = int(read(BOOST_FLAG) or 0)
+        want = pid > 0 and 'whisper_worker' in read('/proc/%d/cmdline' % pid)
+    except ValueError:
         pass
     if want == BOOST['on']:
         return
-    if want:
-        BOOST['saved'] = {}
-        for p in boost_paths():
-            try:
-                BOOST['saved'][p] = read(p).strip()
-                with open(p, 'w') as f:
-                    f.write('performance')
-            except OSError:
-                pass
-        print('gazda: субтитри ШІ — режим продуктивності (%s)' % ', '.join(sorted({os.path.basename(p) for p in BOOST['saved']})), flush=True)
-    else:
-        for p, v in BOOST['saved'].items():
-            try:
-                with open(p, 'w') as f:
-                    f.write(v)
-            except OSError:
-                pass
-        BOOST['saved'] = {}
-        print('gazda: субтитри ШІ — режим продуктивності вимкнено', flush=True)
+    with LOCK:
+        st = load_state()
+        saved = st.get('boost_saved') or {}
+        if want and not saved:
+            done = []
+            for p, v in boost_targets():
+                old = read(p)
+                if old and boost_write(p, v):
+                    saved[p] = old
+                    done.append('вентилятори 100 %' if p.endswith('pwm1_enable') else os.path.basename(p))
+            st['boost_saved'] = saved
+            save_state(st)
+            print('gazda: субтитри ШІ — режим продуктивності (%s)' % ', '.join(sorted(set(done))), flush=True)
+        elif not want and saved:
+            for p, v in saved.items():
+                boost_write(p, v)
+            st.pop('boost_saved', None)
+            save_state(st)
+            print('gazda: субтитри ШІ — режим продуктивності вимкнено, усе як було', flush=True)
     BOOST['on'] = want
 
 
