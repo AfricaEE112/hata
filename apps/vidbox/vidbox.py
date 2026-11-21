@@ -2983,6 +2983,37 @@ def ai_loop():
                 ai_save_queue([x for x in ai_queue() if not x.get('cancel')])
 
 
+def ai_done_files():
+    """{id відео: час створення uk.srt} — усі готові українські субтитри ШІ."""
+    out, root = {}, os.path.join(C.data, 'aisubs')
+    for vid in os.listdir(root) if os.path.isdir(root) else []:
+        f = os.path.join(root, vid, 'uk.srt')
+        if ID_RE.fullmatch(vid) and os.path.exists(f):
+            out[vid] = os.path.getmtime(f)
+    return out
+
+
+def ai_done_list():
+    """Тайтли з готовими субтитрами ШІ: скільки серій з усіх, коли зроблено (найстаріше/найновіше). Не-аніме — «Інше»."""
+    done = ai_done_files()
+    if not done:
+        return []
+    out, seen = [], set()
+    for sid, (top, rows) in anime_series().items():
+        mine = [done[r['id']] for r in rows if r['id'] in done]
+        seen |= {r['id'] for r in rows}
+        if mine:
+            out.append({'sid': sid, 'title': anime_title(top) if top else 'Без папки', 'n': len(mine), 'total': len(rows),
+                        'oldest': min(mine), 'newest': max(mine)})
+    rest = [vid for vid in done if vid not in seen]
+    if rest:
+        rows = [DB.one('SELECT id, title FROM videos WHERE id=?', (vid,)) for vid in rest]
+        out.append({'sid': '', 'ids': rest, 'title': 'Інше відео', 'n': len(rest), 'total': len(rest),
+                    'names': [r['title'] for r in rows if r][:20],
+                    'oldest': min(done[v] for v in rest), 'newest': max(done[v] for v in rest)})
+    return sorted(out, key=lambda t: -t['newest'])
+
+
 def ai_status():
     q = ai_queue()
     for it in q:
@@ -3054,18 +3085,38 @@ def ai_post(d):
                 AI['proc'].kill()
             except OSError:
                 pass
-    elif op == 'delete':                # прибрати готові субтитри ШІ відео (або всього тайтлу аніме)
+    elif op == 'done_list':             # готові субтитри ШІ по тайтлах — щоб швидко прибрати чи перекласти заново
+        return {'ok': True, 'titles': ai_done_list()}
+    elif op in ('delete', 'redo'):      # прибрати готові субтитри ШІ (відео / тайтл / усі); redo — і одразу знову в чергу
         ids = [x for x in d.get('ids') or [] if isinstance(x, str) and ID_RE.fullmatch(x)]
         if d.get('sid'):
             ser = anime_series().get(str(d['sid']))
             ids += [r['id'] for r in (ser[1] if ser else [])]
+        if d.get('all'):                 # усі готові (з uk.srt); before — лише зроблені раніше за цей час
+            before = float(d.get('before') or 0)
+            ids += [vid for vid, mt in ai_done_files().items() if not before or mt < before]
+        ids = list(dict.fromkeys(ids))
+        done = ai_done_files()
+        if op == 'redo':                 # заново — лише ті, де переклад справді був
+            ids = [vid for vid in ids if vid in done]
+        n = 0
         for vid in ids:
             if AI['cur'] == vid:
                 continue
-            shutil.rmtree(os.path.join(C.data, 'aisubs', vid), ignore_errors=True)
+            if vid in done:
+                n += 1
+            shutil.rmtree(os.path.join(C.data, 'aisubs', vid), ignore_errors=True)   # разом з аналізом серії
             SUBS_CACHE.pop(vid, None)
         with AI_LOCK:
-            ai_save_queue([it for it in ai_queue() if it['id'] not in ids or it['id'] == AI['cur']])
+            q = [it for it in ai_queue() if it['id'] not in ids or it['id'] == AI['cur']]
+            if op == 'redo':
+                order = {r['id']: k for k, r in enumerate(DB.q('SELECT id FROM videos ORDER BY path'))}
+                q += [{'id': vid, 'state': 'queued', 'p': 0, 'at': time.time()}
+                      for vid in sorted(ids, key=lambda v: order.get(v, 1 << 30)) if vid != AI['cur']]
+            ai_save_queue(q)
+        if op == 'redo':
+            AI_WAKE.set()
+        return dict(ai_status(), ok=True, count=n)
     elif op == 'gloss_get':
         sid = str(d.get('sid') or '_')
         return dict(gloss_get(sid), ok=True, **gloss_sets_info(sid))

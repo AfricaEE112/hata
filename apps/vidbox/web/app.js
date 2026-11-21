@@ -1119,8 +1119,13 @@ async function renderAnimeTitle(sid) {
     $('#agloss').onclick = () => {
       if ($('#aglossBox')) return $('#aglossBox').remove();
       $('#aplay').parentElement.insertAdjacentHTML('afterend', `<section id="aglossBox" class="set win" style="margin:16px 0">${winBar(`~/anime/${esc(t.title)}/глосарій`)}<div class="win-body"><h2>Глосарій</h2><div id="aglossBody"></div>
-        <div class="srow"><div class="sl"><b>Субтитри ШІ цього аніме</b><small>Оригінальні субтитри у відео не зачіпаються.</small></div><div class="sc"><button class="btn ghost" id="aiDelAll">${I.trash}Видалити для всіх серій</button></div></div></div></section>`);
+        <div class="srow"><div class="sl"><b>Субтитри ШІ цього аніме</b><small>Оригінальні субтитри у відео не зачіпаються.</small></div><div class="sc"><button class="btn ghost" id="aiRedoAll" title="Видалити й одразу перекласти заново — разом з аналізом серій">Перекласти заново</button><button class="btn ghost" id="aiDelAll">${I.trash}Видалити для всіх серій</button></div></div></div></section>`);
       glossPanel($('#aglossBody'), t.sid, t.title);
+      $('#aiRedoAll').onclick = async () => {
+        if (!confirm('Видалити готові субтитри ШІ цього аніме й одразу перекласти їх заново (разом з аналізом серій)?')) return;
+        const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'redo', sid: t.sid})});
+        toast(!r.ok ? 'Не вдалося' : r.count ? `${r.count} ${plural(r.count, 'серія', 'серії', 'серій')} знову в черзі` : 'Готових субтитрів ШІ тут ще немає');
+      };
       $('#aiDelAll').onclick = async () => {
         if (!confirm('Видалити українські й інші субтитри ШІ всіх серій цього аніме? Оригінальні субтитри у відео не зачіпаються.')) return;
         const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'delete', sid: t.sid})});
@@ -1729,6 +1734,9 @@ async function drawAiSet(st) {
         <div class="sc"><div class="seg" id="aiCtx"><button data-c="1" class="${st.context !== false ? 'on' : ''}">так</button><button data-c="0" class="${st.context === false ? 'on' : ''}">ні</button></div></div></div>
       <div class="srow"><div class="sl"><b>Перекласти бібліотеку</b><small>Додає в чергу всі серії аніме без українських субтитрів ШІ — по порядку серій, тож глосарій кожного тайтлу накопичується від першої до останньої. Серія ≈ 5–7 хв на локальній моделі; сотня серій — це ніч.</small></div>
         <div class="sc"><button class="btn" data-bulk="adult">Усі 18+</button><button class="btn ghost" data-bulk="all">Усе аніме</button></div></div>
+      <div class="srow"><div class="sl"><b>Готові субтитри</b><small>Які тайтли вже перекладені й коли. Старий переклад (напр. зроблений іншою моделлю) можна прибрати або одразу перекласти заново — разом з аналізом серії. Оригінальні субтитри у відео не зачіпаються.</small></div>
+        <div class="sc"><button class="btn ghost" id="aiDoneBtn">Показати</button></div></div>
+      <div id="aiDone"></div>
       <div class="srow"><div class="sl"><b>18+ лише локально</b><small>Тайтли з набором «Хентай 18+» перекладає тільки модель на ПК. Якщо ПК вимкнений чи спить — серія чекає й повторює спробу кожні 2 хв, а не йде в Gemini (той відмовить чи пом'якшить і витратить ліміт).</small></div>
         <div class="sc"><div class="seg" id="aiAdl"><button data-al="1" class="${st.adultLocal !== false ? 'on' : ''}">так</button><button data-al="0" class="${st.adultLocal === false ? 'on' : ''}">ні</button></div></div></div>
       <div class="srow"><div class="sl"><b>Жорсткіше для 18+</b><small>Лише для аніме з набором «Хентай 18+». Після перекладу модель ще раз проходить репліки з грубою чи відвертою лексикою і прибирає пом'якшення: «до біса» → «до усрачки», «бовдур» → «дебіл». Плюс 1–3 запити на серію.</small></div>
@@ -1760,6 +1768,7 @@ async function drawAiSet(st) {
     const r = await post({op: 'add_bulk', scope});
     if (r.ok) { drawAiSet(r); toast(`Додав ${r.count} ${plural(r.count, 'серію', 'серії', 'серій')}`); }
   });
+  if ($('#aiDoneBtn')) $('#aiDoneBtn').onclick = () => { if ($('#aiDone').innerHTML) { $('#aiDone').innerHTML = ''; $('#aiDoneBtn').textContent = 'Показати'; } else aiDoneDraw(post); };
   $$('#aiHard [data-h]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', harden: b.dataset.h === '1'})));
   $$('#aiCtx [data-c]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', context: b.dataset.c === '1'})));
   $$('#aiSrc [data-src]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', source: b.dataset.src})));
@@ -1785,6 +1794,44 @@ async function drawAiSet(st) {
   $$('[data-airm]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'remove', id: b.dataset.airm})));
   if ($('#aiClear')) $('#aiClear').onclick = async () => drawAiSet(await post({op: 'clear'}));
   if (busy) aiSetT = setTimeout(() => { if ($('#aiBody') && !$('#aiBody').contains(document.activeElement)) drawAiSet(); else if ($('#aiBody')) aiSetT = setTimeout(drawAiSet, 4000); }, 4000);
+}
+
+// Готові субтитри ШІ по тайтлах: «Перекласти заново» (видалити + у чергу) і «Видалити» — для тайтлу або для всіх,
+// зроблених раніше за вибрану дату (щоб прибрати переклади старої моделі одним натиском).
+async function aiDoneDraw(post) {
+  const box = $('#aiDone');
+  if (!box) return;
+  const r = await post({op: 'done_list'});
+  if (!r.ok) return;
+  $('#aiDoneBtn').textContent = 'Сховати';
+  const T = r.titles || [];
+  if (!T.length) { box.innerHTML = '<p class="note">Готових субтитрів ШІ ще немає.</p>'; return; }
+  const day = t => new Date(t * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'short'});
+  const when = t => day(t.oldest) === day(t.newest) ? day(t.newest) : day(t.oldest) + ' – ' + day(t.newest);
+  const all = T.reduce((a, t) => a + t.n, 0);
+  box.innerHTML = `<div class="srow"><div class="sl"><b>Усі ${all} ${plural(all, 'серія', 'серії', 'серій')}</b><small>Лише зроблені до:</small></div>
+      <div class="sc"><input type="date" id="aiBefore" aria-label="Зроблені до цієї дати" value="${new Date().toISOString().slice(0, 10)}">
+      <button class="btn" data-dall="redo">Перекласти заново</button><button class="btn ghost" data-dall="delete">${I.trash}Видалити</button></div></div>
+    <div class="flist">${T.map((t, k) => `<div class="frow"><div><b>${esc(t.title)}</b><small style="color:var(--mute)">${t.n} з ${t.total} ${plural(t.total, 'серії', 'серій', 'серій')} · ${when(t)}</small></div>
+      <div style="display:flex;gap:6px"><button class="btn ghost" data-dt="${k}" data-act="redo" title="Видалити й одразу перекласти заново">Заново</button>
+      <button class="btn ghost icon" data-dt="${k}" data-act="delete" title="Видалити субтитри ШІ тайтлу" aria-label="Видалити">${I.trash}</button></div></div>`).join('')}</div>`;
+  const go = async (b, what, n) => {
+    if (!confirm(b.op === 'redo' ? `Видалити субтитри ШІ ${what} (${n} ${plural(n, 'серія', 'серії', 'серій')}) і одразу перекласти заново? Аналіз серії теж зробиться наново.`
+      : `Видалити субтитри ШІ ${what} (${n} ${plural(n, 'серія', 'серії', 'серій')})? Оригінальні субтитри у відео не зачіпаються.`)) return;
+    const r = await post(b);
+    if (!r.ok) return;
+    toast(b.op === 'redo' ? `${r.count} ${plural(r.count, 'серія', 'серії', 'серій')} знову в черзі` : `Видалено: ${r.count}`);
+    drawAiSet(r).then(() => aiDoneDraw(post));
+  };
+  $$('[data-dt]', box).forEach(b => b.onclick = () => {
+    const t = T[+b.dataset.dt];
+    go(Object.assign({op: b.dataset.act}, t.sid ? {sid: t.sid} : {ids: t.ids}), `«${t.title}»`, t.n);
+  });
+  $$('[data-dall]', box).forEach(b => b.onclick = () => {
+    const v = $('#aiBefore').value, before = v ? new Date(v + 'T23:59:59').getTime() / 1000 : 0;
+    const n = T.reduce((a, t) => a + (t.oldest < before ? t.n : 0), 0);
+    go({op: b.dataset.dall, all: true, before}, v ? `усіх серій, зроблених до ${day(before)} включно` : 'усіх серій', n);
+  });
 }
 
 // ── Глосарій: однаковий блок у Налаштуваннях (sid '_') і на сторінці аніме. Файл (.csv/.tsv/.md/.txt) — перетягнути
