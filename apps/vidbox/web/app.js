@@ -1749,6 +1749,7 @@ async function drawAiSet(st) {
   if ($('#aiInstall')) $('#aiInstall').onclick = async () => drawAiSet(await post({op: 'install'}));
   $$('#aiModel [data-m]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', model: b.dataset.m})));
   $$('#aiSpeed [data-s]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', speed: b.dataset.s})));
+  if ($('#aiPin')) $('#aiPin').onchange = async e => { drawAiSet(await post({op: 'save', localPin: e.target.value})); toast(e.target.value ? 'Перекладатиме ' + e.target.value : 'Модель — як у LM Studio'); };
   $$('#aiPar [data-par]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', localPar: +b.dataset.par})));
   $$('#aiAdl [data-al]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', adultLocal: b.dataset.al === '1'})));
   $$('[data-bulk]').forEach(b => b.onclick = async () => {
@@ -1950,6 +1951,8 @@ function trLocal(st) {
     <div class="fadd"><input id="key_local" autocomplete="off" value="${esc(st.localUrl ? st.localUrl.replace(/^https?:\/\//, '').replace(/\/v1$/, '') : '')}" placeholder="192.168.3.50:1234" aria-label="Адреса ПК з моделлю">
       <input id="key_localtok" type="password" autocomplete="off" style="max-width:190px" placeholder="${st.localToken ? '•••• токен збережено' : 'токен (якщо є)'}" aria-label="API-токен LM Studio">
       <button class="btn primary" data-savekey="local">Перевірити й зберегти</button>${st.local ? '<button class="btn ghost" data-forget="local">Забути</button>' : ''}</div>` +
+    (st.local ? `<div class="srow"><div class="sl"><b>Модель</b><small>Яку модель LM Studio має завантажувати для перекладу. «Як у LM Studio» — ту, що там уже завантажена, а якщо жодної — ту, що була минулого разу. Модель більша за відеопам'ять (напр. 26B на 12 ГБ) вилізе в оперативку — переклад стане в рази повільнішим, а драйвер може падати.</small></div>
+      <div class="sc"><label class="sel wide"><select id="aiPin" aria-label="Модель для перекладу"><option value="">Як у LM Studio${st.localModel ? ' (зараз: ' + esc(st.localModel) + ')' : ''}</option>${(st.localModels || []).map(m => `<option value="${esc(m)}" ${st.localPin === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label></div></div>` : '') +
     (st.local ? `<div class="srow"><div class="sl"><b>Одночасних запитів до ПК</b><small>Скільки шматків серії модель перекладає разом. <b>На картах з 12 ГБ і менше — 1</b>: на RX 6700 XT два запити не влізли у відеопам'ять, і LM Studio падав. 2–3 — для карт з 16–24 ГБ. Зміна діє одразу; якщо на кількох запитах LM Studio видає помилку — до кінця серії VidBox перекладає по одному. У LM Studio «Parallel» має бути не менше, а «Context Length» — ≈ 4 тис. на кожен запит (2 → 8192, 3 → 12288). Не влізе в контекст — VidBox перекладе ці репліки по одній.</small></div>
       <div class="sc"><div class="seg" id="aiPar">${[1, 2, 3].map(n => `<button data-par="${n}" class="${(st.localPar || 1) === n ? 'on' : ''}">${n}</button>`).join('')}</div></div></div>` : '');
 }
