@@ -2260,7 +2260,9 @@ def local_hdr():
 
 
 def local_pick_model(url, hdr=None):
-    """Модель на сервері: та, що вже завантажена в LM Studio, інакше перша не-embedding."""
+    """Яку модель просити в LM Studio. Порядок: вибрана в налаштуваннях VidBox → уже завантажена → та, що була минулого
+    разу → перша в списку. Раніше без завантаженої моделі бралась перша зі списку — після того як докачалась Gemma 4
+    26B-A4B (18 ГБ) вона й завантажилась замість 12B, вилізла з 12 ГБ відеопам'яті, і драйвер AMD почав падати."""
     hdr = local_hdr() if hdr is None else hdr
     base = local_base(url)
     try:
@@ -2284,9 +2286,17 @@ def local_pick_model(url, hdr=None):
                 loaded.append(mid)
         if loaded:
             break
+    with CFG_LOCK:
+        C.cfg['local_models'] = ids[:40]
+    pin = (C.cfg.get('local_pin') or '').strip()
+    if pin and pin in ids:
+        return pin
     for m in loaded:
         if m in ids:
             return m
+    last = (C.cfg.get('local_model') or '').strip()
+    if last in ids:
+        return last
     return ids[0]
 
 
@@ -2957,6 +2967,7 @@ def ai_status():
         r = DB.one('SELECT title, folder FROM videos WHERE id=?', (it['id'],))
         it['title'] = r['title'] if r else '(файл зник)'
     return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True), 'harden': C.cfg.get('ai_harden', True), 'adultLocal': C.cfg.get('ai_adult_local', True), 'localPar': C.cfg.get('local_parallel') or 1,
+            'localPin': C.cfg.get('local_pin') or '', 'localModels': C.cfg.get('local_models') or [],
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
@@ -3128,6 +3139,8 @@ def ai_post(d):
                 C.cfg['ai_adult_local'] = d['adultLocal']
             if d.get('localPar') in (1, 2, 3):
                 C.cfg['local_parallel'] = d['localPar']
+            if isinstance(d.get('localPin'), str):
+                C.cfg['local_pin'] = d['localPin'].strip()[:200]
             if d.get('source') in ('subs', 'audio'):
                 C.cfg['ai_source'] = d['source']
         save_config()
@@ -4071,7 +4084,7 @@ DEFAULTS = {
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
     'local_url': '', 'local_key': '', 'local_model': '',
-    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1,
+    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1, 'local_pin': '', 'local_models': [],
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},
