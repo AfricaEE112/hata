@@ -2390,6 +2390,8 @@ ANALYZE_STEP = 220
 def llm_json(system, prompt, schema=None):
     """JSON-відповідь першої доступної мовної моделі з ланцюжка (локальна / Gemini). → (dict, назва) або (None, '')."""
     for name, key in tr_chain():
+        if name != 'local' and adult_local_only():
+            continue
         try:
             if name == 'local':
                 base, hdr = local_base(key), local_hdr()
@@ -2625,10 +2627,29 @@ def tr_harden(lines, out, batch=40):
     return out
 
 
+class TrWait(RuntimeError):
+    """18+ перекладає лише локальна модель, а ПК зараз недоступний — серію відкласти й повторити пізніше."""
+
+
+AI_WAIT_S = 120
+
+
+def adult_local_only():
+    """Тайтл 18+ і є локальна модель → не віддавати його Gemini/DeepL/Azure (відмовлять, пом'якшать, з'їдять ліміт)."""
+    return bool(tr_adult() and C.cfg.get('ai_adult_local', True) and (C.cfg.get('local_url') or '').strip())
+
+
 def translate_uk(lines, src, progress=None):
     """Переклад українською першим перекладачем, у якого не скінчився ліміт. → (тексти, назва перекладача)."""
     errs = []
-    for name, key in tr_chain():
+    chain = tr_chain()
+    if adult_local_only():
+        chain = [x for x in chain if x[0] == 'local']
+        try:
+            local_pick_model(chain[0][1])
+        except TrError as e:
+            raise TrWait(str(e))
+    for name, key in chain:
         try:
             fn = {'local': local_translate, 'gemini': gemini_translate, 'deepl': deepl_translate,
                   'azure': azure_translate}[name]
@@ -2640,6 +2661,8 @@ def translate_uk(lines, src, progress=None):
             return out, name
         except TrError as e:
             errs.append(str(e) if TR_NAMES[name] in str(e) else '%s: %s' % (TR_NAMES[name], e))
+            if adult_local_only() and e.quota:      # ПК зник посеред серії — відкласти, а не на Gemini
+                raise TrWait(str(e))
             if not e.quota:
                 raise RuntimeError('; '.join(errs))
         except RuntimeError as e:        # DeepL кидає RuntimeError: ліміт/ключ — пробуємо наступного
@@ -2683,6 +2706,8 @@ def ai_job(it):
             write_srt(os.path.join(out, 'uk.srt'), segs, uk)
             SUBS_CACHE.pop(vid, None)
             return ai_set(vid, state='done', p=1, err='', via=via)
+        except TrWait as e:
+            return ai_wait(vid, e)
         except Exception as e:
             SUBS_CACHE.pop(vid, None)
             return ai_set(vid, state='error', err=str(e)[-300:])
@@ -2701,6 +2726,8 @@ def ai_job(it):
             return ai_set(vid, state='done', p=1, err='', via=via)
         except ValueError:
             pass                         # субтитри порожні чи картинкові — розпізнаємо звук, як звичайно
+        except TrWait as e:
+            return ai_wait(vid, e)
         except Exception as e:
             SUBS_CACHE.pop(vid, None)
             return ai_set(vid, state='error', err=str(e)[-300:])
@@ -2764,6 +2791,8 @@ def ai_job(it):
             return ai_set(vid, state='done', p=1, err='', via=via)
         SUBS_CACHE.pop(vid, None)
         ai_set(vid, state='done', p=1, err='')
+    except TrWait as e:
+        ai_wait(vid, e)
     except Exception as e:
         SUBS_CACHE.pop(vid, None)
         ai_set(vid, state='error', err=str(e)[-300:])
@@ -2774,6 +2803,11 @@ def ai_job(it):
                 os.remove(f)
             except OSError:
                 pass
+
+
+def ai_wait(vid, e):
+    return ai_set(vid, state='queued', p=0, wait=time.time() + AI_WAIT_S,
+                  err='чекаю ПК з моделлю (18+ лише локально) — повторю за %d хв' % (AI_WAIT_S // 60))
 
 
 def ai_loop():
@@ -2787,7 +2821,8 @@ def ai_loop():
         AI_WAKE.wait(60)
         AI_WAKE.clear()
         while ai_ready():
-            it = next((x for x in ai_queue() if x['state'] == 'queued'), None)
+            now = time.time()
+            it = next((x for x in ai_queue() if x['state'] == 'queued' and (x.get('wait') or 0) <= now), None)
             if not it:
                 break
             AI['cur'] = it['id']
@@ -2802,7 +2837,7 @@ def ai_status():
     for it in q:
         r = DB.one('SELECT title, folder FROM videos WHERE id=?', (it['id'],))
         it['title'] = r['title'] if r else '(файл зник)'
-    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True), 'harden': C.cfg.get('ai_harden', True),
+    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True), 'harden': C.cfg.get('ai_harden', True), 'adultLocal': C.cfg.get('ai_adult_local', True),
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
@@ -2829,6 +2864,31 @@ def ai_post(d):
                     q.append({'id': vid, 'state': 'queued', 'p': 0, 'at': time.time()})
             ai_save_queue(q)
         AI_WAKE.set()
+    elif op == 'add_bulk':              # уся бібліотека аніме (або лише 18+): серії без українських субтитрів ШІ
+        scope = 'adult' if d.get('scope') == 'adult' else 'all'
+        ids, titles = [], 0
+        with AI_LOCK:
+            q = ai_queue()
+            have = {it['id']: it for it in q}
+            for sid, (top, rows) in anime_series().items():
+                sets = gloss_title_sets(sid)[0]
+                if scope == 'adult' and not any(gloss_sets().get(k, {}).get('adult') for k in sets):
+                    continue
+                new = [r['id'] for r in rows if not os.path.exists(os.path.join(C.data, 'aisubs', r['id'], 'uk.srt'))
+                       and (r['id'] not in have or have[r['id']]['state'] == 'error')]
+                if new:
+                    titles += 1
+                    ids += new
+            if not d.get('dry'):
+                for vid in ids:
+                    if vid in have:
+                        have[vid].update(state='queued', p=0, err='', cancel=False, wait=0)
+                    else:
+                        q.append({'id': vid, 'state': 'queued', 'p': 0, 'at': time.time()})
+                ai_save_queue(q)
+        if not d.get('dry'):
+            AI_WAKE.set()
+        return dict(ai_status(), ok=True, count=len(ids), titles=titles)
     elif op == 'remove':                # прибрати з черги; якщо саме обробляється — зупинити
         vid = d.get('id')
         with AI_LOCK:
@@ -2945,6 +3005,8 @@ def ai_post(d):
                 C.cfg['ai_context'] = d['context']
             if isinstance(d.get('harden'), bool):
                 C.cfg['ai_harden'] = d['harden']
+            if isinstance(d.get('adultLocal'), bool):
+                C.cfg['ai_adult_local'] = d['adultLocal']
             if d.get('source') in ('subs', 'audio'):
                 C.cfg['ai_source'] = d['source']
         save_config()
@@ -3888,7 +3950,7 @@ DEFAULTS = {
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
     'local_url': '', 'local_key': '', 'local_model': '',
-    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True,
+    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True,
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},

@@ -1727,6 +1727,10 @@ async function drawAiSet(st) {
         <div class="sc"><div class="seg" id="aiSrc"><button data-src="subs" class="${st.source !== 'audio' ? 'on' : ''}">англ. субтитри</button><button data-src="audio" class="${st.source === 'audio' ? 'on' : ''}">завжди звук</button></div></div></div>
       <div class="srow"><div class="sl"><b>Спершу прочитати серію</b><small>Перед перекладом модель (локальна або Gemini) читає всю серію: про що вона, хто з персонажів чоловік чи жінка (закінчення «втомився/втомилася»), як хто говорить, який сленг. Персонажі й терміни самі додаються в глосарій аніме — твої правки не змінюються. Плюс 1–3 запити на серію.</small></div>
         <div class="sc"><div class="seg" id="aiCtx"><button data-c="1" class="${st.context !== false ? 'on' : ''}">так</button><button data-c="0" class="${st.context === false ? 'on' : ''}">ні</button></div></div></div>
+      <div class="srow"><div class="sl"><b>Перекласти бібліотеку</b><small>Додає в чергу всі серії аніме без українських субтитрів ШІ — по порядку серій, тож глосарій кожного тайтлу накопичується від першої до останньої. Серія ≈ 5–7 хв на локальній моделі; сотня серій — це ніч.</small></div>
+        <div class="sc"><button class="btn" data-bulk="adult">Усі 18+</button><button class="btn ghost" data-bulk="all">Усе аніме</button></div></div>
+      <div class="srow"><div class="sl"><b>18+ лише локально</b><small>Тайтли з набором «Хентай 18+» перекладає тільки модель на ПК. Якщо ПК вимкнений чи спить — серія чекає й повторює спробу кожні 2 хв, а не йде в Gemini (той відмовить чи пом'якшить і витратить ліміт).</small></div>
+        <div class="sc"><div class="seg" id="aiAdl"><button data-al="1" class="${st.adultLocal !== false ? 'on' : ''}">так</button><button data-al="0" class="${st.adultLocal === false ? 'on' : ''}">ні</button></div></div></div>
       <div class="srow"><div class="sl"><b>Жорсткіше для 18+</b><small>Лише для аніме з набором «Хентай 18+». Після перекладу модель ще раз проходить репліки з грубою чи відвертою лексикою і прибирає пом'якшення: «до біса» → «до усрачки», «бовдур» → «дебіл». Плюс 1–3 запити на серію.</small></div>
         <div class="sc"><div class="seg" id="aiHard"><button data-h="1" class="${st.harden !== false ? 'on' : ''}">так</button><button data-h="0" class="${st.harden === false ? 'on' : ''}">ні</button></div></div></div>
       <div class="srow"><div class="sl"><b>Швидкість</b><small>Максимальна — усі 8 потоків процесора, і Хата на час розпізнавання вмикає режим продуктивності: швидше, але ноутбук гарячіший і вентилятор гучніший. Якість однакова.</small></div>
@@ -1745,6 +1749,15 @@ async function drawAiSet(st) {
   if ($('#aiInstall')) $('#aiInstall').onclick = async () => drawAiSet(await post({op: 'install'}));
   $$('#aiModel [data-m]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', model: b.dataset.m})));
   $$('#aiSpeed [data-s]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', speed: b.dataset.s})));
+  $$('#aiAdl [data-al]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', adultLocal: b.dataset.al === '1'})));
+  $$('[data-bulk]').forEach(b => b.onclick = async () => {
+    const scope = b.dataset.bulk, pre = await post({op: 'add_bulk', scope, dry: true});
+    if (!pre.ok) return;
+    if (!pre.count) return toast(scope === 'adult' ? 'Усі серії 18+ уже перекладені або в черзі' : 'Усі серії вже перекладені або в черзі');
+    if (!confirm(`Додати в чергу ${pre.count} ${plural(pre.count, 'серію', 'серії', 'серій')} з ${pre.titles} ${plural(pre.titles, 'тайтлу', 'тайтлів', 'тайтлів')}? Це ≈ ${pre.count * 6 < 60 ? pre.count * 6 + ' хв' : Math.round(pre.count * 6 / 60) + ' год'} на локальній моделі — ПК має бути ввімкнений.`)) return;
+    const r = await post({op: 'add_bulk', scope});
+    if (r.ok) { drawAiSet(r); toast(`Додав ${r.count} ${plural(r.count, 'серію', 'серії', 'серій')}`); }
+  });
   $$('#aiHard [data-h]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', harden: b.dataset.h === '1'})));
   $$('#aiCtx [data-c]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', context: b.dataset.c === '1'})));
   $$('#aiSrc [data-src]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', source: b.dataset.src})));
@@ -1931,7 +1944,7 @@ function glossPanel(host, sid, title) {
 
 const TRN = {local: 'Локальна', gemini: 'Gemini', deepl: 'DeepL', azure: 'Azure'};
 function trLocal(st) {
-  return `<div class="srow"><div class="sl"><b>Локальна модель (ПК)</b><small>${st.local ? `<b style="color:var(--acc)">Підключено: ${esc(st.localUrl)}${st.localModel ? ' · ' + esc(st.localModel) : ''}.</b> ` : ''}Модель на твоєму ПК через LM Studio: без лімітів і цензури, тексти нікуди не йдуть. У LM Studio: Model Server → «Serve on Local Network» → Start. Впиши адресу ПК у домашній мережі (порт 1234) і, якщо задав, API-токен. Коли ПК вимкнений — перекладе наступний перекладач.</small></div></div>
+  return `<div class="srow"><div class="sl"><b>Локальна модель (ПК)</b><small>${st.local ? `<b style="color:var(--acc)">Підключено: ${esc(st.localUrl)}${st.localModel ? ' · ' + esc(st.localModel) : ''}.</b> ` : ''}Модель на твоєму ПК через LM Studio: без лімітів і цензури, тексти нікуди не йдуть. У LM Studio: Model Server → «Serve on Local Network» → Start. Впиши адресу ПК у домашній мережі (порт 1234) і, якщо задав, API-токен. Коли ПК вимкнений — перекладе наступний перекладач (крім 18+, якщо «18+ лише локально»: ті серії чекають ПК).</small></div></div>
     <div class="fadd"><input id="key_local" autocomplete="off" value="${esc(st.localUrl ? st.localUrl.replace(/^https?:\/\//, '').replace(/\/v1$/, '') : '')}" placeholder="192.168.3.50:1234" aria-label="Адреса ПК з моделлю">
       <input id="key_localtok" type="password" autocomplete="off" style="max-width:190px" placeholder="${st.localToken ? '•••• токен збережено' : 'токен (якщо є)'}" aria-label="API-токен LM Studio">
       <button class="btn primary" data-savekey="local">Перевірити й зберегти</button>${st.local ? '<button class="btn ghost" data-forget="local">Забути</button>' : ''}</div>`;
