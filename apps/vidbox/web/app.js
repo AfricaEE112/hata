@@ -1749,6 +1749,7 @@ async function drawAiSet(st) {
   if ($('#aiInstall')) $('#aiInstall').onclick = async () => drawAiSet(await post({op: 'install'}));
   $$('#aiModel [data-m]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', model: b.dataset.m})));
   $$('#aiSpeed [data-s]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', speed: b.dataset.s})));
+  $$('#aiPar [data-par]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', localPar: +b.dataset.par})));
   $$('#aiAdl [data-al]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', adultLocal: b.dataset.al === '1'})));
   $$('[data-bulk]').forEach(b => b.onclick = async () => {
     const scope = b.dataset.bulk, pre = await post({op: 'add_bulk', scope, dry: true});
@@ -1947,7 +1948,9 @@ function trLocal(st) {
   return `<div class="srow"><div class="sl"><b>Локальна модель (ПК)</b><small>${st.local ? `<b style="color:var(--acc)">Підключено: ${esc(st.localUrl)}${st.localModel ? ' · ' + esc(st.localModel) : ''}.</b> ` : ''}Модель на твоєму ПК через LM Studio: без лімітів і цензури, тексти нікуди не йдуть. У LM Studio: Model Server → «Serve on Local Network» → Start. Впиши адресу ПК у домашній мережі (порт 1234) і, якщо задав, API-токен. Коли ПК вимкнений — перекладе наступний перекладач (крім 18+, якщо «18+ лише локально»: ті серії чекають ПК).</small></div></div>
     <div class="fadd"><input id="key_local" autocomplete="off" value="${esc(st.localUrl ? st.localUrl.replace(/^https?:\/\//, '').replace(/\/v1$/, '') : '')}" placeholder="192.168.3.50:1234" aria-label="Адреса ПК з моделлю">
       <input id="key_localtok" type="password" autocomplete="off" style="max-width:190px" placeholder="${st.localToken ? '•••• токен збережено' : 'токен (якщо є)'}" aria-label="API-токен LM Studio">
-      <button class="btn primary" data-savekey="local">Перевірити й зберегти</button>${st.local ? '<button class="btn ghost" data-forget="local">Забути</button>' : ''}</div>`;
+      <button class="btn primary" data-savekey="local">Перевірити й зберегти</button>${st.local ? '<button class="btn ghost" data-forget="local">Забути</button>' : ''}</div>` +
+    (st.local ? `<div class="srow"><div class="sl"><b>Одночасних запитів до ПК</b><small>Скільки шматків серії модель перекладає разом. На одному запиті відеокарта недовантажена — 2 зазвичай дають помітно більше реплік за хвилину. У LM Studio «Parallel» має бути не менше, а «Context Length» — ≈ 4 тис. на кожен запит (2 → 8192, 3 → 12288). Не влізе в контекст — VidBox перекладе ці репліки по одній.</small></div>
+      <div class="sc"><div class="seg" id="aiPar">${[1, 2, 3].map(n => `<button data-par="${n}" class="${(st.localPar || 1) === n ? 'on' : ''}">${n}</button>`).join('')}</div></div></div>` : '');
 }
 function trKey(k, has, hint) {
   return `<div class="srow"><div class="sl"><b>Ключ ${TRN[k]}</b><small>${has ? '<b style="color:var(--acc)">Ключ збережено.</b> ' : ''}${hint}</small></div></div>
