@@ -2239,10 +2239,13 @@ def tr_adult():
 
 SPEAKER_HINT = ('Subtitles do not say who speaks: infer the speaker and the addressee of every line from context and the '
                 'character list. Past-tense verbs, adjectives and vocatives must match their gender (я хотів / я хотіла, '
-                'дурню / дурепо); for a man and a woman together use «обоє», «ми з тобою». A woman speaking about herself '
-                'always uses feminine forms (я зрозуміла, не могла, знала, відчувала), a man — masculine (я зрозумів, знав); '
-                'a line said TO a woman uses feminine forms for her (ти хотіла, ти здрейфила). Do not inflect Japanese '
-                'names in the vocative: «Такуя!», «Юкі!» (not «Такує»).')
+                'дурню / дурепо); for a man and a woman together use «обоє», «ми з тобою». Two separate things: the '
+                'SPEAKER\'s own words about himself/herself (я …, мені …) follow the speaker\'s gender; «ти/ви» forms and '
+                'vocatives follow the LISTENER\'s gender. Never switch the speaker\'s forms because the listener is of the '
+                'other sex. Examples: a man to a woman — «Я такий збуджений», «Ти така мокра»; a woman to a man — «Я так і '
+                'знала», «Ти такий твердий», «щоб я подрочила тобі»; a mother to a little boy — «Ти голодний?». Drop '
+                'Japanese honorifics (-san, -kun, -chan, -sama, -nii, -nee) in Ukrainian: «Така», «Міюкі», «сестричко», '
+                '«братику». Do not inflect Japanese names in the vocative: «Такуя!», «Юкі!» (not «Такує»).')
 
 
 def local_base(url):
@@ -2315,6 +2318,20 @@ def local_pick_model(url, hdr=None):
     return ids[0]
 
 
+def tr_echo_norm(x):
+    return re.sub(r'[\W_]+', '', str(x or '').lower())
+
+
+def tr_echo_ok(echo, line):
+    """Чи «src» з відповіді моделі — справді початок цієї репліки. Нестрого: модель може прибрати заїкання («L-Like» →
+    «Like») чи лапки; порожнє — не перевіряємо. У живій серії модель переказала репліку 22 у 23-й («Все гаразд, він
+    міцно спить» → «Забий, він спить як убитий»), і далі вісім реплік з'їхало — дубль не дослівний, тож лише так."""
+    a, b = tr_echo_norm(echo), tr_echo_norm(line)
+    if not a or not b:
+        return True
+    return a[:6] in b[:16] or b[:6] in a[:16]
+
+
 def local_chunk(base, hdr, model, part, ctx, src, state):
     """Один шматок реплік → {номер: переклад}. Репліки пронумеровані, модель повертає пари {n, uk}: так вона не може
     непомітно злити дві репліки й зсунути решту (у живій серії «коли вже скуштував…» повторилось, і далі все з'їхало)."""
@@ -2322,16 +2339,19 @@ def local_chunk(base, hdr, model, part, ctx, src, state):
     gloss = gloss_prompt('\n'.join(ctx + part), src)
     items = [{'n': k + 1, 'en': t} for k, t in enumerate(part)]
     prompt = ('Translate every item of "lines" from %s into natural, spoken Ukrainian that fits the scene; keep names and '
-              'the tone. Return JSON {"lines": [{"n": <the same n>, "who": "<who says it>", "uk": "<translation>"}, ...]} — '
-              'exactly one item per input line, the same n, in the same order. Fill "who" first (a name from the '
-              'character list, or «man» / «woman» / «?»), then write "uk" with the grammatical gender of that speaker. Never merge, split, skip or repeat lines: if a sentence goes on '
+              'the tone. Return JSON {"lines": [{"n": <the same n>, "src": "<first two words of that line>", "who": "<speaker>", '
+              '"to": "<listener>", "uk": "<translation>"}, ...]} — exactly one item per input line, the same n, in the same '
+              'order. For every item: "src" — copy the first two words of line n exactly as written (this proves you are '
+              'on the right line; translate THAT line, not a neighbour); "who" — who says it, "to" — who it is said to '
+              '(names from the character list, or «man» / «woman» / «?»); then "uk" — the speaker\'s own forms by "who", '
+              '«ти»-forms and vocatives by "to". Never merge, split, skip or repeat lines: if a sentence goes on '
               'in the next line, translate each part in its own line.\n'
               '"context" holds the previous lines for reference only — do not translate them.\n%s\n%s\n%s'
               % (srcname, SPEAKER_HINT, (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') +
                  (('\nGlossary and notes from the viewer — follow them strictly (names, terms, how characters address '
                    'each other):\n' + gloss + '\n') if gloss else ''),
                  json.dumps({'context': ctx, 'lines': items}, ensure_ascii=False)))
-    body = {'model': model, 'temperature': 0.3, 'chat_template_kwargs': {'enable_thinking': False},
+    body = {'model': model, 'temperature': getattr(TR_CTX, 'temp', None) or 0.3, 'chat_template_kwargs': {'enable_thinking': False},
             'messages': [{'role': 'system', 'content': LOCAL_SYSTEM_ADULT if tr_adult() else LOCAL_SYSTEM_STD},
                          {'role': 'user', 'content': prompt}]}
     for n in range(3):
@@ -2339,9 +2359,10 @@ def local_chunk(base, hdr, model, part, ctx, src, state):
             body['response_format'] = {'type': 'json_schema', 'json_schema': {'name': 'subs', 'strict': True, 'schema': {
                 'type': 'object', 'required': ['lines'], 'properties': {'lines': {
                     'type': 'array', 'minItems': len(part), 'maxItems': len(part), 'items': {
-                        'type': 'object', 'required': ['n', 'who', 'uk'], 'properties': {    # «who» — до «uk»:
-                            'n': {'type': 'integer'}, 'who': {'type': 'string'},       # модель спершу вирішує, хто
-                            'uk': {'type': 'string'}}}}}}}}                            # говорить, і бере його рід
+                        'type': 'object', 'required': ['n', 'src', 'who', 'to', 'uk'], 'properties': {
+                            'n': {'type': 'integer'}, 'src': {'type': 'string'},       # src — перші слова оригіналу:
+                            'who': {'type': 'string'}, 'to': {'type': 'string'},       # не збіглися → репліку з'їхало;
+                            'uk': {'type': 'string'}}}}}}}}                            # who/to — до uk: спершу рід
         else:
             body.pop('response_format', None)
         try:
@@ -2380,6 +2401,8 @@ def local_chunk(base, hdr, model, part, ctx, src, state):
                 idx, t = k + 1, g
             else:
                 continue
+            if isinstance(g, dict) and 1 <= idx <= len(part) and not tr_echo_ok(g.get('src'), part[idx - 1]):
+                continue                 # «src» не з цієї репліки — модель з'їхала (переказала сусідню): перекладемо окремо
             if 1 <= idx <= len(part) and isinstance(t, str) and t.strip() and idx not in res_map:
                 res_map[idx] = t.strip()
         # дубль сусідньої репліки при різних оригіналах — ознака зсуву; такий рядок перекладемо окремо
@@ -2391,7 +2414,7 @@ def local_chunk(base, hdr, model, part, ctx, src, state):
     return {}
 
 
-TR_CTX_KEYS = ('gloss_sids', 'sets', 'ctx', 'auto_items')
+TR_CTX_KEYS = ('gloss_sids', 'sets', 'ctx', 'auto_items', 'temp')
 
 
 def local_translate(url, lines, src, progress=None):
@@ -2414,7 +2437,7 @@ def local_translate(url, lines, src, progress=None):
         part = lines[i:i + step]
         got = local_chunk(base, hdr, model, part, lines[max(0, i - 6):i], src, state)
         res = {i + k: got[k + 1] for k in range(len(part)) if k + 1 in got}
-        for k in [k for k in range(len(part)) if k + 1 not in got][:12]:    # пропущені / підозрілі — по одній
+        for k in [k for k in range(len(part)) if k + 1 not in got]:         # пропущені / з'їхалі — по одній
             j = i + k
             one = local_chunk(base, hdr, model, [lines[j]], lines[max(0, j - 4):j], src, state)
             if 1 in one:
@@ -2560,13 +2583,47 @@ ANALYZE_SCHEMA = {'type': 'object', 'required': ['summary', 'characters', 'terms
         't': {'type': 'string'}, 'tr': {'type': 'string'}, 'reg': {'type': 'string'}, 'note': {'type': 'string'}}}}}}
 
 
-def ai_analyze(lines, src, progress=None):
-    """→ {'summary', 'characters': [{name, uk, gender, speech}], 'terms': [[t, tr, reg, note]], 'via'} або None."""
+HON_EN_RE = re.compile(r'(?i)[-\s](san|kun|chan|tan|sama|dono|chin|senpai|nii|nee|nii-san|nee-san|nii-chan|nee-chan)$')
+HON_UK_RE = re.compile(r'(?i)-(сан|кун|чан|тян|сама|доно|ні|нії|нее|семпай|сенпай)$')
+
+
+def name_plain(en, uk=''):
+    """«Kazuya-kun» / «Казуя-кун» → «Kazuya» / «Казуя»: суфікс в імені з аналізу потрапляв у глосарій і перебивав
+    правило «суфікси прибирай» — у живих серіях усюди «Така-кун», «Міюкі-сан»."""
+    en2, uk2 = HON_EN_RE.sub('', (en or '').strip()), HON_UK_RE.sub('', (uk or '').strip())
+    return (en2 or en), (uk2 or uk)
+
+
+def title_chars(sid):
+    """Персонажі тайтлу з глосарію (з попередніх серій і твої правки) → {ім'я lower: {name, uk, gender}}.
+    Твої записи важливіші за автоматичні; стать — з примітки «жін.»/«чол.»."""
+    out = {}
+    if not sid:
+        return out
+    g = gloss_get(sid)
+    for it in g['auto'] + g['items']:     # items — пізніше, тож перекривають авто
+        if len(it) > 2 and it[2] == "ім'я":
+            note = (it[3] if len(it) > 3 else '').strip().lower()
+            gender = 'f' if note.startswith('жін') else 'm' if note.startswith('чол') else None
+            en, uk = name_plain(it[0], it[1])
+            out[en.lower()] = {'name': en, 'uk': uk, 'gender': gender or out.get(en.lower(), {}).get('gender')}
+    return out
+
+
+def ai_analyze(lines, src, progress=None, known_chars=None):
+    """→ {'summary', 'characters': [{name, uk, gender, speech}], 'terms': [[t, tr, reg, note]], 'via'} або None.
+    known_chars — персонажі тайтлу з попередніх серій: модель тримає їхній запис і стать (у живих серіях Нагаї в 2-й
+    серії раптом стала чоловіком)."""
     srcname = LANG_EN.get(src, 'the original language')
     summary, chars, terms, via = [], {}, {}, ''
+    prev = ''
+    if known_chars:
+        prev = ('Characters known from earlier episodes of this title (keep their spelling and gender unless these '
+                'subtitles clearly contradict it): ' + '; '.join('%s → %s (%s)' % (c['name'], c['uk'], {'f': 'female', 'm': 'male'}
+                .get(c.get('gender'), '?')) for c in list(known_chars.values())[:30]) + '\n')
     for i in range(0, len(lines), ANALYZE_STEP):
         part = lines[i:i + ANALYZE_STEP]
-        known = ''
+        known = prev
         if chars:
             known += 'Characters found so far: ' + '; '.join('%s (%s, %s)' % (c['name'], c['uk'], c['gender']) for c in chars.values()) + '\n'
         if summary:
@@ -2574,7 +2631,8 @@ def ai_analyze(lines, src, progress=None):
         prompt = ('These are %s subtitles of one episode (part %d of %d), to be translated into Ukrainian.\n%s'
                   'Return JSON with:\n'
                   '"summary": 2-3 sentences in Ukrainian — what happens in this part, relationships, tone;\n'
-                  '"characters": every named character — "name" as in the subtitles, "uk" Ukrainian spelling '
+                  '"characters": every named character — "name" as in the subtitles but WITHOUT honorifics (-san, -kun, '
+                  '-chan, -nii…), "uk" Ukrainian spelling, also without honorifics '
                   '(Japanese names by the Kovalenko system: Сакура, Сьота, Тідзуру), "gender" f/m/? (deduce from context — '
                   'Ukrainian verb endings depend on it), "speech" in Ukrainian — how they talk (shy, rude, formal, calls X "senpai"…);\n'
                   '"terms": up to 40 items worth a glossary — slang, swearing, sexual vocabulary, moans/interjections, Japanese '
@@ -2592,9 +2650,10 @@ def ai_analyze(lines, src, progress=None):
             summary.append(j['summary'].strip()[:500])
         for c in j.get('characters') or []:
             if isinstance(c, dict) and str(c.get('name') or '').strip():
-                k = c['name'].strip().lower()
+                nm, uk = name_plain(c['name'], str(c.get('uk') or ''))
+                k = nm.strip().lower()
                 old = chars.get(k, {})
-                chars[k] = {'name': c['name'].strip()[:60], 'uk': str(c.get('uk') or old.get('uk') or c['name']).strip()[:60],
+                chars[k] = {'name': nm.strip()[:60], 'uk': str(uk or old.get('uk') or nm).strip()[:60],
                             'gender': c.get('gender') if c.get('gender') in ('f', 'm') else old.get('gender', '?'),
                             'speech': str(c.get('speech') or old.get('speech') or '').strip()[:160]}
         for t in j.get('terms') or []:
@@ -2623,14 +2682,24 @@ def ai_context(vid, r, lines, src, set_state):
             ctx = json.load(f)
     except (OSError, ValueError):
         set_state(state='context', p=0)
-        ctx = ai_analyze(lines, src, lambda f: set_state(p=f))
+        ctx = ai_analyze(lines, src, lambda f: set_state(p=f), title_chars(video_sid(r)))
         if not ctx:
             return
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(ctx, f, ensure_ascii=False, indent=1)
-    chars = [c for c in ctx.get('characters') or []
-             if gloss_auto_ok([c.get('name', ''), c.get('uk', ''), "ім'я", c.get('speech', '')], name=True)]
+    mem = title_chars(video_sid(r))
+    chars = []
+    for c in ctx.get('characters') or []:     # старі context.json — теж без суфіксів; стать — як у тайтлі
+        c = dict(c)
+        c['name'], c['uk'] = name_plain(c.get('name', ''), c.get('uk', ''))
+        m = mem.get(c['name'].lower())
+        if m and m.get('gender'):
+            c['gender'] = m['gender']
+        if m and m.get('uk'):
+            c['uk'] = m['uk']
+        if gloss_auto_ok([c.get('name', ''), c.get('uk', ''), "ім'я", c.get('speech', '')], name=True):
+            chars.append(c)
     auto = [[c['name'], c['uk'], "ім'я", ' · '.join(x for x in (GENDER_UK.get(c.get('gender'), ''), c.get('speech', '')) if x)]
             for c in chars] + [t for t in ctx.get('terms') or [] if gloss_auto_ok(t)]
     TR_CTX.auto_items = gloss_clean(auto)
@@ -2668,7 +2737,8 @@ RU_WORDS = {'возьми', 'что', 'чтобы', 'сейчас', 'конеч�
 # Русизми й вигадані форми, що пролазили в живих серіях: «дразнять», «чортовски», «жалющий», «смоктає», «задоволити»,
 # «кормільця» → дражнять, чортівськи, жалюгідний, смокче, задовольнити, годувальниця.
 RU_STEMS = re.compile(r'^(дразн|чортовск|жалющ|кормил|кормільц|задоволи|смокта(ю|єш|є|ємо|єте|ють)$|'
-                      r'бюстєкс|бюстгалтер|здрейфил[иі]л)', re.I)
+                      r'бюстєкс|бюстгалтер|здрейфил[иі]л|заберемен|трога(ю|єш|є|ють)|завагітня(ти|ю|єш)$|глотн|бояю|'
+                      r'однокаліб|жобц)', re.I)
 
 
 def tr_foreign(src, out):
@@ -2711,9 +2781,12 @@ def tr_fix_foreign(fn, key, lines, out, src):
         for i in bad[:40]:
             words = sorted(set(tr_bad(lines[i], out[i])))
             TR_CTX.ctx = ctx0 + '\nIn the last line do NOT write: %s — these are wrong or non-Ukrainian; use a proper Ukrainian word.' % ', '.join('«%s»' % w for w in words)
-            for _ in range(2):
+            # З тією ж температурою модель видає те саме слово вдруге («Таку-ні», «Ладно тобі» в живих серіях пройшли
+            # обидві спроби) — тож щоразу різноманітніше, а остання спроба — сама репліка без сусідніх.
+            for temp, ctx_n in ((0.6, 2), (0.9, 2), (0.9, 0)):
+                TR_CTX.temp = temp
                 try:
-                    got = fn(key, lines[max(0, i - 2):i + 1], src)
+                    got = fn(key, lines[max(0, i - ctx_n):i + 1], src)
                 except Exception:
                     return out
                 if got and not tr_bad(lines[i], got[-1]) and got[-1] != lines[i]:
@@ -2721,7 +2794,57 @@ def tr_fix_foreign(fn, key, lines, out, src):
                     break
     finally:
         TR_CTX.ctx = ctx0
+        TR_CTX.temp = None
     return out
+
+
+# ── Остаточне прибирання без моделі — те, що модель вперто повторює: японські іменні суфікси, частотні русизми,
+# латинські уламки, приклеєні до українських слів («самиdep», «заing-а»).
+HON_KIN = [(re.compile(r"\b[НнОо]-[Оо]?[Нн]е{1,2}-?(чан|сан|тян)\b"), 'С-сестричко'),     # заїкання: «Н-Нее-чан!»
+           (re.compile(r"\b[НнОо]-[Оо]?[Нн]і[ії]?-?(чан|сан|тян)\b"), 'Б-братику'),
+           (re.compile(r"\b[Оо]?[Нн]е{1,2}-?(чан|сан|тян)\b"), 'сестричко'),
+           (re.compile(r"\b[Оо]?[Нн]і[ії]?-?(чан|сан|тян)\b"), 'братику'),
+           (re.compile(r"(?i)\b(мою|твою|свою) груд[ьи]\b"), None)]
+HON_RE = re.compile(r"\b([А-ЯІЇЄҐ][а-яіїєґʼ'’]+)-(?:(?:сан|кун|чан|тян|сама|доно)(?:е|у|а|ом|ові|і)?|ні|нії|нее)\b")
+RU_FIX = {'ладно': 'гаразд', 'вообще': 'взагалі', 'теперь': 'тепер', 'только': 'тільки', 'тогда': 'тоді', 'щас': 'зараз',
+          'конечно': 'звісно', 'хорошо': 'добре', 'спасибо': 'дякую', 'пожалуйста': 'будь ласка', 'тоже': 'теж',
+          'сейчас': 'зараз', 'очень': 'дуже', 'что': 'що', 'чтобы': 'щоб', 'грудь': 'груди', 'возьми': 'забирай',
+          'нужно': 'треба', 'нельзя': 'не можна', 'сегодня': 'сьогодні', 'всегда': 'завжди', 'здесь': 'тут'}
+RU_FIX_STEMS = [(re.compile(r'(?i)\bдразн'), 'дражн'), (re.compile(r'(?i)\bчортовск'), 'чортівськ'),
+                (re.compile(r'(?i)\bжалющ'), 'жалюгідн'), (re.compile(r'(?i)\bзадоволит'), 'задовольнит'),
+                (re.compile(r'(?i)\bбюстгалтер'), 'бюстгальтер'), (re.compile(r'(?i)\bкормільц\w*'), 'годувальниця'),
+                (re.compile(r'(?i)\bзавагітня(ти|ю)\b'), 'завагітніти'), (re.compile(r'(?i)\bсмокта(є|єш|ю)\b'), 'смокче')]
+
+
+def tr_case(src, new):
+    return new[:1].upper() + new[1:] if src[:1].isupper() else new
+
+
+def tr_cleanup_line(t):
+    if not t:
+        return t
+    for rx, rep_ in HON_KIN:
+        if rep_ is None:                  # «мою грудь» → «мої груди» (груди — лише множина)
+            t = rx.sub(lambda m: tr_case(m.group(1), {'мою': 'мої', 'твою': 'твої', 'свою': 'свої'}[m.group(1).lower()]) + ' груди', t)
+        else:
+            t = rx.sub(lambda m: rep_ if rep_[1:2] == '-' else tr_case(m.group(0), rep_), t)
+    t = HON_RE.sub(r'\1', t)
+    t = re.sub(r"[^\W\d_]+", lambda m: tr_case(m.group(0), RU_FIX[m.group(0).lower()]) if m.group(0).lower() in RU_FIX
+               else m.group(0), t)
+    for rx, rep_ in RU_FIX_STEMS:
+        t = rx.sub(lambda m: tr_case(m.group(0), rep_ if not rep_.endswith('н') and not rep_.endswith('т')
+                                     and not rep_.endswith('к') else rep_), t)
+    def mixed(m):                         # слово з кирилиці й латиниці разом — латинський уламок геть
+        w = m.group(0)
+        if re.search('[А-Яа-яІіЇїЄєҐґ]', w) and re.search('[A-Za-z]', w):
+            return re.sub('[A-Za-z]+', '', w).strip('-') or w
+        return w
+    t = re.sub(r"[^\W\d_]+(?:[-'’][^\W\d_]+)*", mixed, t)
+    return re.sub(r'  +', ' ', t)
+
+
+def tr_cleanup(lines, out):
+    return [o if o == l else tr_cleanup_line(o) for l, o in zip(lines, out)]
 
 
 # ── «Жорсткіше» для 18+: модель після «розблокування» вже не відмовляє, але за звичкою пом'якшує («до біса» замість
@@ -2809,7 +2932,7 @@ def translate_uk(lines, src, progress=None):
                 out = tr_fix_foreign(fn, key, lines, out, src)
                 if src == 'en':
                     out = tr_harden(lines, out)
-            return out, name
+            return tr_cleanup(lines, out), name
         except TrError as e:
             errs.append(str(e) if TR_NAMES[name] in str(e) else '%s: %s' % (TR_NAMES[name], e))
             if adult_local_only() and e.quota:      # ПК зник посеред серії — відкласти, а не на Gemini
