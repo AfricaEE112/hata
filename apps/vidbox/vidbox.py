@@ -2248,6 +2248,77 @@ def local_pick_model(url, hdr=None):
     return ids[0]
 
 
+def local_chunk(base, hdr, model, part, ctx, src, state):
+    """Один шматок реплік → {номер: переклад}. Репліки пронумеровані, модель повертає пари {n, uk}: так вона не може
+    непомітно злити дві репліки й зсунути решту (у живій серії «коли вже скуштував…» повторилось, і далі все з'їхало)."""
+    srcname = LANG_EN.get(src, 'the original language')
+    gloss = gloss_prompt('\n'.join(ctx + part), src)
+    items = [{'n': k + 1, 'en': t} for k, t in enumerate(part)]
+    prompt = ('Translate every item of "lines" from %s into natural, spoken Ukrainian that fits the scene; keep names and '
+              'the tone. Return JSON {"lines": [{"n": <the same n>, "uk": "<translation>"}, ...]} — exactly one item per '
+              'input line, the same n, in the same order. Never merge, split, skip or repeat lines: if a sentence goes on '
+              'in the next line, translate each part in its own line.\n'
+              '"context" holds the previous lines for reference only — do not translate them.\n%s\n%s\n%s'
+              % (srcname, SPEAKER_HINT, (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') +
+                 (('\nGlossary and notes from the viewer — follow them strictly (names, terms, how characters address '
+                   'each other):\n' + gloss + '\n') if gloss else ''),
+                 json.dumps({'context': ctx, 'lines': items}, ensure_ascii=False)))
+    body = {'model': model, 'temperature': 0.3, 'chat_template_kwargs': {'enable_thinking': False},
+            'messages': [{'role': 'system', 'content': LOCAL_SYSTEM_ADULT if tr_adult() else LOCAL_SYSTEM_STD},
+                         {'role': 'user', 'content': prompt}]}
+    for n in range(3):
+        if state['schema']:              # LM Studio вміє примусово тримати формат
+            body['response_format'] = {'type': 'json_schema', 'json_schema': {'name': 'subs', 'strict': True, 'schema': {
+                'type': 'object', 'required': ['lines'], 'properties': {'lines': {
+                    'type': 'array', 'minItems': len(part), 'maxItems': len(part), 'items': {
+                        'type': 'object', 'required': ['n', 'uk'], 'properties': {
+                            'n': {'type': 'integer'}, 'uk': {'type': 'string'}}}}}}}}
+        else:
+            body.pop('response_format', None)
+        try:
+            res = http_json(base + '/chat/completions', body, hdr, timeout=900)
+        except urllib.error.HTTPError as e:
+            if e.code == 400 and state['schema']:      # сервер без structured output — пробуємо без нього
+                state['schema'] = False
+                continue
+            if e.code in (401, 403):
+                raise TrError('локальний сервер не прийняв токен', quota=True)
+            if n == 2:
+                raise TrError('локальна модель: помилка %d %s' % (e.code, getattr(e, 'body', '')[:160]), quota=True)
+            time.sleep(5)
+            continue
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise TrError('ПК з моделлю недоступний: %s' % getattr(e, 'reason', e), quota=True)
+        try:
+            txt = res['choices'][0]['message'].get('content') or ''
+            txt = re.sub(r'<think>.*?</think>', '', txt, flags=re.S).strip()
+            m = re.search(r'\{.*\}', txt, re.S)
+            got = json.loads(m.group(0) if m else txt).get('lines') or []
+        except (KeyError, IndexError, ValueError, AttributeError, TypeError):
+            got = []
+        res_map = {}
+        for k, g in enumerate(got):
+            if isinstance(g, dict):
+                try:
+                    idx = int(g.get('n'))
+                except (TypeError, ValueError):
+                    continue
+                t = g.get('uk')
+            elif isinstance(g, str) and len(got) == len(part):   # старий формат — лише якщо кількість збіглась
+                idx, t = k + 1, g
+            else:
+                continue
+            if 1 <= idx <= len(part) and isinstance(t, str) and t.strip() and idx not in res_map:
+                res_map[idx] = t.strip()
+        # дубль сусідньої репліки при різних оригіналах — ознака зсуву; такий рядок перекладемо окремо
+        for idx in sorted(res_map):
+            if idx > 1 and res_map.get(idx - 1) == res_map[idx] and part[idx - 2].strip().lower() != part[idx - 1].strip().lower():
+                res_map.pop(idx)
+        if len(res_map) >= len(part) * 0.7 or n == 2:
+            return res_map
+    return {}
+
+
 def local_translate(url, lines, src, progress=None):
     base = local_base(url)
     hdr = local_hdr()
@@ -2256,60 +2327,20 @@ def local_translate(url, lines, src, progress=None):
         with CFG_LOCK:
             C.cfg['local_model'] = model
         save_config()
-    srcname = LANG_EN.get(src, 'the original language')
     out = list(lines)
     step = 30
-    use_schema = True
+    state = {'schema': True}
     for i in range(0, len(lines), step):
         part = lines[i:i + step]
-        ctx = lines[max(0, i - 6):i]
-        gloss = gloss_prompt('\n'.join(ctx + part), src)
-        prompt = ('Translate every line of "lines" from %s into natural, spoken Ukrainian that fits the scene; keep names '
-                  'and the tone. Lines may be broken mid-sentence — translate them so they still read well in order. '
-                  'Return JSON {"lines": [...]} with exactly %d strings in the same order.\n'
-                  '"context" holds the previous lines for reference only — do not translate them.\n%s\n%s\n%s'
-                  % (srcname, len(part), SPEAKER_HINT, (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') + ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
-                                          'how characters address each other):\n' + gloss + '\n') if gloss else '',
-                     json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
-        body = {'model': model, 'temperature': 0.3, 'chat_template_kwargs': {'enable_thinking': False},
-                'messages': [{'role': 'system', 'content': LOCAL_SYSTEM_ADULT if tr_adult() else LOCAL_SYSTEM_STD},
-                             {'role': 'user', 'content': prompt}]}
-        got = []
-        for n in range(3):
-            if use_schema:                  # LM Studio вміє примусово тримати формат — тоді репліки не зсуваються
-                body['response_format'] = {'type': 'json_schema', 'json_schema': {'name': 'subs', 'strict': True, 'schema': {
-                    'type': 'object', 'required': ['lines'], 'properties': {'lines': {
-                        'type': 'array', 'items': {'type': 'string'}, 'minItems': len(part), 'maxItems': len(part)}}}}}
-            else:
-                body.pop('response_format', None)
-            try:
-                res = http_json(base + '/chat/completions', body, hdr, timeout=900)
-            except urllib.error.HTTPError as e:
-                if e.code == 400 and use_schema:        # сервер без structured output — пробуємо без нього
-                    use_schema = False
-                    continue
-                if e.code in (401, 403):
-                    raise TrError('локальний сервер не прийняв токен', quota=True)
-                if n == 2:
-                    raise TrError('локальна модель: помилка %d %s' % (e.code, getattr(e, 'body', '')[:160]), quota=True)
-                time.sleep(5)
-                continue
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
-                raise TrError('ПК з моделлю недоступний: %s' % getattr(e, 'reason', e), quota=True)
-            try:
-                txt = res['choices'][0]['message'].get('content') or ''
-                txt = re.sub(r'<think>.*?</think>', '', txt, flags=re.S).strip()
-                m = re.search(r'\{.*\}', txt, re.S)
-                got = json.loads(m.group(0) if m else txt).get('lines') or []
-            except (KeyError, IndexError, ValueError, AttributeError, TypeError):
-                got = []
-            if len(got) == len(part):
-                break
-        if len(got) != len(part):        # модель збилась із кількістю — краще оригінал, ніж зсув реплік
-            got = got[:len(part)] + part[len(got):] if got else part
-        for k, t in enumerate(got):
-            if isinstance(t, str) and t.strip():
-                out[i + k] = t.strip()
+        got = local_chunk(base, hdr, model, part, lines[max(0, i - 6):i], src, state)
+        for k in range(len(part)):
+            if k + 1 in got:
+                out[i + k] = got[k + 1]
+        for k in [k for k in range(len(part)) if k + 1 not in got][:12]:    # пропущені / підозрілі — по одній
+            j = i + k
+            one = local_chunk(base, hdr, model, [lines[j]], lines[max(0, j - 4):j], src, state)
+            if 1 in one:
+                out[j] = one[1]
         if progress:
             progress(min(1.0, (i + step) / max(1, len(lines))))
     return out
@@ -2544,15 +2575,16 @@ def tr_fix_foreign(fn, key, lines, out, src):
 # «до усрачки», «бовдур» замість «дебіл»). Окремий прохід бере репліки, де в оригіналі є груба чи відверта лексика,
 # разом із перекладом і просить переписати переклад рівно з тією ж силою. Лише для тайтлів з набором 18+.
 CRUDE_RE = re.compile(r"\b(fuck\w*|shit\w*|bitch\w*|cunt\w*|cock\w*|dick\w*|puss(y|ies)|cum\w*|jizz|slut\w*|whore\w*|"
-                      r"tits?|titties|boobs?|ass(hole)?|asses|damn\w*|hell|bastard\w*|piss\w*|horny|lewd|pervert\w*|"
+                      r"tits?|titties|boobs?|ass(hole)?|asses|bastard\w*|piss\w*|horny|lewd|pervert\w*|"
                       r"semen|sperm|creampie\w*|blowjob\w*|suck\w*|lick\w*|nipples?|clit\w*|orgasm\w*|moan\w*|"
                       r"pregnant|impregnat\w*|breed\w*|womb|cervix|finish(ing|ed)?|coming|inside me|sex\w*|naked|"
-                      r"dumbass\w*|idiot\w*|moron\w*|stupid|shut up)\b", re.I)
+                      r"dumbass\w*|moron\w*|shut up)\b", re.I)
 HARDEN_SYSTEM = ('You are the editor of an uncensored Ukrainian translation of adult (18+) anime; all characters are adults. '
                  'Your only job: make each Ukrainian line exactly as crude, vulgar and explicit as its English original. '
                  'The translator tends to soften — undo that. Swearing → real Ukrainian swearing (бляха, блядь, сука, '
                  'хуй, пизда, дебіл, срань), sexual words → explicit spoken Ukrainian (член, кицька/пизда, цицьки, '
                  'трахати, кінчати, сперма), never euphemisms, medical terms or «до біса» where the original says «shit». '
+                 'Mild words stay mild: "dammit/damn/jeez" → «бляха», «чорт», «блін» — not «блядь». '
                  'Keep meaning, speaker gender and length; do not add anything that is not in the original; if a line is '
                  'already equally strong, return it unchanged. Ukrainian Cyrillic only. Answer only with JSON.')
 
