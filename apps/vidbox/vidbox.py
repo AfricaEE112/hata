@@ -3014,6 +3014,41 @@ def ai_done_list():
     return sorted(out, key=lambda t: -t['newest'])
 
 
+def ai_export_zip(sid='', ids=None, since=0):
+    """Готові субтитри ШІ одним архівом — оригінал (з чого перекладали), переклад і аналіз серії поруч:
+    «Тайтл/Серія.en.vtt», «Тайтл/Серія.uk.srt», «Тайтл/Серія.context.json». sid — один тайтл, ids — конкретні відео,
+    since — лише зроблені після цього часу. → (байти zip, кількість серій)."""
+    done = ai_done_files()
+    want = set(ids or [])
+    if sid:
+        ser = anime_series().get(str(sid))
+        want |= {r['id'] for r in (ser[1] if ser else [])}
+    pick = [vid for vid, mt in done.items() if (not want or vid in want) and (not since or mt >= since)]
+    names = {}
+    for s_, (top, rows) in anime_series().items():
+        for r in rows:
+            names[r['id']] = anime_title(top) if top else 'Без папки'
+    clean = lambda x: re.sub(r'[\\/:*?"<>|\x00-\x1f]+', '_', x).strip(' .')[:120] or '_'
+    buf, n = io.BytesIO(), 0
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        for vid in sorted(pick):
+            r = DB.one('SELECT * FROM videos WHERE id=?', (vid,))
+            if not r:
+                continue
+            base = clean(names.get(vid, 'Інше')) + '/' + clean(os.path.splitext(os.path.basename(r['path']))[0])
+            d = os.path.join(C.data, 'aisubs', vid)
+            z.write(os.path.join(d, 'uk.srt'), base + '.uk.srt')
+            src = ai_text_source(r)
+            vtt = subs_vtt(r, src) if src is not None else None
+            if vtt:
+                z.writestr(base + '.en.vtt', vtt)
+            for f in sorted(os.listdir(d)):   # розпізнане Whisper (*.srt) і аналіз серії
+                if f == 'context.json' or (f.endswith('.srt') and f != 'uk.srt' and not vtt):
+                    z.write(os.path.join(d, f), base + '.' + f)
+            n += 1
+    return buf.getvalue(), n
+
+
 def ai_status():
     q = ai_queue()
     for it in q:
@@ -4922,6 +4957,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.send_anime_cover(m.group(1))
                 if path == '/api/aisubs':
                     return self.send_json(ai_status())
+                if path == '/api/aisubs/export':      # архів «оригінал + переклад + аналіз» для перевірки якості
+                    ids = [x for x in (qs.get('ids', [''])[0]).split(',') if ID_RE.fullmatch(x)]
+                    try:
+                        since = float(qs.get('since', ['0'])[0] or 0)
+                    except ValueError:
+                        since = 0
+                    data, n = ai_export_zip(qs.get('sid', [''])[0], ids, since)
+                    if not n:
+                        return self.send_json({'error': 'Готових субтитрів ШІ за цим вибором немає'}, 404)
+                    name = 'subs-ai-%s.zip' % time.strftime('%Y-%m-%d-%H%M')
+                    return self.send_bytes(data, 'application/zip', extra={'Content-Disposition': 'attachment; filename="%s"' % name})
                 if path == '/api/manga':
                     return self.send_json(manga_list_json())
                 m = re.fullmatch(r'/api/manga/(t|ch)/(\w+)', path)
