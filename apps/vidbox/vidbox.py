@@ -3257,6 +3257,14 @@ def ai_post(d):
         done = ai_done_files()
         if op == 'redo':                 # заново — лише ті, де переклад справді був
             ids = [vid for vid in ids if vid in done]
+        cleared = 0
+        if op == 'redo':                 # тайтл переробляється весь — автоглосарій збереться наново з нового аналізу
+            redo = set(ids)              # (там лежать терміни й персонажі старої моделі); твої записи не чіпаємо
+            for s_, (top, rows) in anime_series().items():
+                mine = {r['id'] for r in rows} & set(done)
+                if mine and mine <= redo and gloss_get(s_)['auto']:
+                    gloss_put_auto(s_, [])
+                    cleared += 1
         n = 0
         for vid in ids:
             if AI['cur'] == vid:
@@ -3274,7 +3282,7 @@ def ai_post(d):
             ai_save_queue(q)
         if op == 'redo':
             AI_WAKE.set()
-        return dict(ai_status(), ok=True, count=n)
+        return dict(ai_status(), ok=True, count=n, glossCleared=cleared)
     elif op == 'gloss_get':
         sid = str(d.get('sid') or '_')
         return dict(gloss_get(sid), ok=True, **gloss_sets_info(sid))

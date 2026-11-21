@@ -1122,9 +1122,9 @@ async function renderAnimeTitle(sid) {
         <div class="srow"><div class="sl"><b>Субтитри ШІ цього аніме</b><small>Оригінальні субтитри у відео не зачіпаються.</small></div><div class="sc"><button class="btn ghost" id="aiRedoAll" title="Видалити й одразу перекласти заново — разом з аналізом серій">Перекласти заново</button><button class="btn ghost" id="aiDelAll">${I.trash}Видалити для всіх серій</button></div></div></div></section>`);
       glossPanel($('#aglossBody'), t.sid, t.title);
       $('#aiRedoAll').onclick = async () => {
-        if (!confirm('Видалити готові субтитри ШІ цього аніме й одразу перекласти їх заново (разом з аналізом серій)?')) return;
+        if (!confirm('Видалити готові субтитри ШІ цього аніме й одразу перекласти їх заново? Аналіз серій і «Знайдено автоматично» в глосарії зберуться наново; твої записи в глосарії лишаться.')) return;
         const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify({op: 'redo', sid: t.sid})});
-        toast(!r.ok ? 'Не вдалося' : r.count ? `${r.count} ${plural(r.count, 'серія', 'серії', 'серій')} знову в черзі` : 'Готових субтитрів ШІ тут ще немає');
+        toast(!r.ok ? 'Не вдалося' : r.count ? `${r.count} ${plural(r.count, 'серія', 'серії', 'серій')} знову в черзі` + (r.glossCleared ? ' · автоглосарій очищено' : '') : 'Готових субтитрів ШІ тут ще немає');
       };
       $('#aiDelAll').onclick = async () => {
         if (!confirm('Видалити українські й інші субтитри ШІ всіх серій цього аніме? Оригінальні субтитри у відео не зачіпаються.')) return;
@@ -1818,11 +1818,11 @@ async function aiDoneDraw(post) {
       <div style="display:flex;gap:6px"><a class="btn ghost icon" href="/api/aisubs/export?${t.sid ? 'sid=' + encodeURIComponent(t.sid) : 'ids=' + t.ids.join(',')}" download title="Завантажити оригінал і переклад архівом" aria-label="Завантажити">⤓</a><button class="btn ghost" data-dt="${k}" data-act="redo" title="Видалити й одразу перекласти заново">Заново</button>
       <button class="btn ghost icon" data-dt="${k}" data-act="delete" title="Видалити субтитри ШІ тайтлу" aria-label="Видалити">${I.trash}</button></div></div>`).join('')}</div>`;
   const go = async (b, what, n) => {
-    if (!confirm(b.op === 'redo' ? `Видалити субтитри ШІ ${what} (${n} ${plural(n, 'серія', 'серії', 'серій')}) і одразу перекласти заново? Аналіз серії теж зробиться наново.`
+    if (!confirm(b.op === 'redo' ? `Видалити субтитри ШІ ${what} (${n} ${plural(n, 'серія', 'серії', 'серій')}) і одразу перекласти заново? Аналіз серії теж зробиться наново, а в тайтлах, що переробляються повністю, — і «Знайдено автоматично» в глосарії (твої записи лишаться).`
       : `Видалити субтитри ШІ ${what} (${n} ${plural(n, 'серія', 'серії', 'серій')})? Оригінальні субтитри у відео не зачіпаються.`)) return;
     const r = await post(b);
     if (!r.ok) return;
-    toast(b.op === 'redo' ? `${r.count} ${plural(r.count, 'серія', 'серії', 'серій')} знову в черзі` : `Видалено: ${r.count}`);
+    toast(b.op === 'redo' ? `${r.count} ${plural(r.count, 'серія', 'серії', 'серій')} знову в черзі` + (r.glossCleared ? ` · автоглосарій очищено в ${r.glossCleared} ${plural(r.glossCleared, 'тайтлі', 'тайтлах', 'тайтлах')}` : '') : `Видалено: ${r.count}`);
     drawAiSet(r).then(() => aiDoneDraw(post));
   };
   $$('[data-dt]', box).forEach(b => b.onclick = () => {
