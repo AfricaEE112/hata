@@ -1749,6 +1749,7 @@ async function drawAiSet(st) {
   if ($('#aiInstall')) $('#aiInstall').onclick = async () => drawAiSet(await post({op: 'install'}));
   $$('#aiModel [data-m]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', model: b.dataset.m})));
   $$('#aiSpeed [data-s]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', speed: b.dataset.s})));
+  $$('#aiPar [data-par]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', localPar: +b.dataset.par})));
   $$('#aiAdl [data-al]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', adultLocal: b.dataset.al === '1'})));
   $$('[data-bulk]').forEach(b => b.onclick = async () => {
     const scope = b.dataset.bulk, pre = await post({op: 'add_bulk', scope, dry: true});
@@ -1790,7 +1791,7 @@ async function drawAiSet(st) {
 const GL_REG = ['вульгарне', 'розмовне', 'нейтральне', 'ніжне', 'вигук', 'запозичення', "ім'я"];
 function glossPanel(host, sid, title) {
   if (!host) return;
-  const G = {notes: '', items: [], auto: [], autoOpen: false, q: '', more: 120, file: null, sets: [], setsAuto: true, adultAuto: null, avail: [], view: ''};
+  const G = {notes: '', items: [], auto: [], autoBad: [], autoOpen: false, q: '', more: 120, file: null, sets: [], setsAuto: true, adultAuto: null, avail: [], view: ''};
   const post = async b => { const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify(Object.assign({sid}, b))}); if (r.ok === false) toast(r.error || 'Не вдалося'); return r; };
   const save = async () => { const r = await post({op: 'gloss', notes: G.notes, items: G.items}); if (r.ok) { G.items = r.items; G.notes = r.notes; } return r; };
   const list = () => { const q = G.q.toLowerCase(); return q ? G.items.filter(it => it.some(x => x.toLowerCase().includes(q))) : G.items; };
@@ -1818,11 +1819,18 @@ function glossPanel(host, sid, title) {
       <div class="gl-head"><b>Термін</b><b>Переклад</b><b>Регістр</b><b>Примітка</b><i></i></div>
       <div class="gl-list">${a.items.map(it => `<div class="gl-row ro"><b>${esc(it[0])}</b><span class="gl-tr">${esc(it[1])}</span>${it[2] ? `<i class="gl-reg">${esc(it[2])}</i>` : '<i></i>'}<small>${esc(it[3])}</small><i></i></div>`).join('')}</div></div>`;
   };
+  const exportCsv = (list, suffix) => {
+    const cell = x => /[;"\n]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x;
+    const csv = '﻿Термін;Переклад;Регістр;Примітка\n' + list.map(it => it.map(cell).join(';')).join('\n') + '\n';
+    const u = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'}));
+    const l = document.createElement('a'); l.href = u; l.download = `глосарій ${sid === '_' ? 'загальний' : (title || sid).replace(/[\\/:*?"<>|]+/g, ' ').trim()}${suffix}.csv`;
+    document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(u), 2000);
+  };
   const autoHtml = () => {
     if (sid === '_' || !G.auto.length) return '';
-    return `<div class="srow" style="align-items:flex-start"><div class="sl"><b>Знайдено автоматично · ${G.auto.length}</b><small>Персонажі й терміни, які модель знайшла, читаючи серії. Вони найменш важливі — набори й твої записи їх перекривають. Правильне — ✓ переносить у твій глосарій, хибне — прибери.</small></div>
-      <div class="sc"><button class="btn ghost" data-gla="toggle">${G.autoOpen ? 'Сховати' : 'Показати'}</button><button class="btn ghost" data-gla="clear">${I.trash}Очистити</button></div></div>
-      ${G.autoOpen ? `<div class="gl-list">${G.auto.map(it => `<div class="gl-row ro"><b>${esc(it[0])}</b><span class="gl-tr">${esc(it[1])}</span>${it[2] ? `<i class="gl-reg">${esc(it[2])}</i>` : '<i></i>'}<small>${esc(it[3])}</small>
+    return `<div class="srow" style="align-items:flex-start"><div class="sl"><b>Знайдено автоматично · ${G.auto.length}</b><small>Персонажі й терміни, які модель знайшла, читаючи серії. Вони найменш важливі — набори й твої записи їх перекривають. Правильне — ✓ переносить у твій глосарій, хибне — прибери.${G.autoBad.length ? ` Перекреслені (${G.autoBad.length}) схожі на помилки моделі — латиниця, задовгі фрази чи звертання замість імені — і в переклад не йдуть.` : ''}</small></div>
+      <div class="sc"><button class="btn ghost" data-gla="toggle">${G.autoOpen ? 'Сховати' : 'Показати'}</button><button class="btn ghost" data-gla="export">${I.download}Експорт .csv</button><button class="btn ghost" data-gla="clear">${I.trash}Очистити</button></div></div>
+      ${G.autoOpen ? `<div class="gl-list">${G.auto.map(it => `<div class="gl-row ro${G.autoBad.includes(it[0]) ? ' bad' : ''}"${G.autoBad.includes(it[0]) ? ' title="Схоже на помилку моделі — у переклад не йде"' : ''}><b>${esc(it[0])}</b><span class="gl-tr">${esc(it[1])}</span>${it[2] ? `<i class="gl-reg">${esc(it[2])}</i>` : '<i></i>'}<small>${esc(it[3])}</small>
         <span class="gl-act"><button class="btn ghost icon" data-glpro="${esc(it[0])}" title="У мій глосарій" aria-label="Перенести ${esc(it[0])} у мій глосарій">✓</button><button class="btn ghost icon" data-gldel="${esc(it[0])}" title="Прибрати" aria-label="Прибрати ${esc(it[0])}">${I.trash}</button></span></div>`).join('')}</div>` : ''}`;
   };
   const draw = () => {
@@ -1882,10 +1890,11 @@ function glossPanel(host, sid, title) {
     };
     const autoAct = async (act, term) => {
       const r = await post({op: 'gloss_auto', act, term});
-      if (r.ok) { Object.assign(G, {items: r.items, auto: r.auto || []}); draw(); }
+      if (r.ok) { Object.assign(G, {items: r.items, auto: r.auto || [], autoBad: r.autoBad || []}); draw(); }
     };
     $$('[data-gla]', host).forEach(b => b.onclick = () => {
       if (b.dataset.gla === 'toggle') { G.autoOpen = !G.autoOpen; return draw(); }
+      if (b.dataset.gla === 'export') return exportCsv(G.auto, ' (авто)');
       if (confirm(`Прибрати всі ${G.auto.length} автоматично знайдених термінів? Твої записи й набори не зміняться.`)) autoAct('clear');
     });
     $$('[data-glpro]', host).forEach(b => b.onclick = () => autoAct('promote', b.dataset.glpro));
@@ -1910,14 +1919,7 @@ function glossPanel(host, sid, title) {
         const was = G.items.length; Object.assign(G, {items: r.items, notes: r.notes, file: null, q: ''}); draw();
         return toast(a === 'merge' ? `Додано ${Math.max(0, r.items.length - was)} нових, усього ${r.items.length}` : `Завантажено ${r.items.length} термінів`);
       }
-      if (a === 'export') {
-        const cell = x => /[;"\n]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x;
-        const csv = '﻿Термін;Переклад;Регістр;Примітка\n' + G.items.map(it => it.map(cell).join(';')).join('\n') + '\n';
-        const u = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'}));
-        const l = document.createElement('a'); l.href = u; l.download = `глосарій ${sid === '_' ? 'загальний' : (title || sid).replace(/[\\/:*?"<>|]+/g, ' ').trim()}.csv`;
-        document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(u), 2000);
-        return;
-      }
+      if (a === 'export') return exportCsv(G.items, '');
       if (a === 'clear') {
         if (!confirm(`Прибрати всі ${G.items.length} термінів? Правила лишаться. Порада: спершу «Експорт .csv».`)) return;
         G.items = []; if ((await save()).ok) draw(); return;
@@ -1939,7 +1941,7 @@ function glossPanel(host, sid, title) {
   host.ondragleave = e => { if (!host.contains(e.relatedTarget)) host.classList.remove('gl-over'); };
   host.ondrop = e => { e.preventDefault(); host.classList.remove('gl-over'); pick(e.dataTransfer.files[0]); };
   host.innerHTML = '<p class="note">Завантажую…</p>';
-  post({op: 'gloss_get'}).then(r => { if (r.ok) Object.assign(G, {items: r.items, notes: r.notes, auto: r.auto || [], sets: r.sets || [], setsAuto: r.setsAuto !== false, adultAuto: r.adultAuto, avail: r.setsAvail || []}); draw(); });
+  post({op: 'gloss_get'}).then(r => { if (r.ok) Object.assign(G, {items: r.items, notes: r.notes, auto: r.auto || [], autoBad: r.autoBad || [], sets: r.sets || [], setsAuto: r.setsAuto !== false, adultAuto: r.adultAuto, avail: r.setsAvail || []}); draw(); });
 }
 
 const TRN = {local: 'Локальна', gemini: 'Gemini', deepl: 'DeepL', azure: 'Azure'};
@@ -1947,7 +1949,9 @@ function trLocal(st) {
   return `<div class="srow"><div class="sl"><b>Локальна модель (ПК)</b><small>${st.local ? `<b style="color:var(--acc)">Підключено: ${esc(st.localUrl)}${st.localModel ? ' · ' + esc(st.localModel) : ''}.</b> ` : ''}Модель на твоєму ПК через LM Studio: без лімітів і цензури, тексти нікуди не йдуть. У LM Studio: Model Server → «Serve on Local Network» → Start. Впиши адресу ПК у домашній мережі (порт 1234) і, якщо задав, API-токен. Коли ПК вимкнений — перекладе наступний перекладач (крім 18+, якщо «18+ лише локально»: ті серії чекають ПК).</small></div></div>
     <div class="fadd"><input id="key_local" autocomplete="off" value="${esc(st.localUrl ? st.localUrl.replace(/^https?:\/\//, '').replace(/\/v1$/, '') : '')}" placeholder="192.168.3.50:1234" aria-label="Адреса ПК з моделлю">
       <input id="key_localtok" type="password" autocomplete="off" style="max-width:190px" placeholder="${st.localToken ? '•••• токен збережено' : 'токен (якщо є)'}" aria-label="API-токен LM Studio">
-      <button class="btn primary" data-savekey="local">Перевірити й зберегти</button>${st.local ? '<button class="btn ghost" data-forget="local">Забути</button>' : ''}</div>`;
+      <button class="btn primary" data-savekey="local">Перевірити й зберегти</button>${st.local ? '<button class="btn ghost" data-forget="local">Забути</button>' : ''}</div>` +
+    (st.local ? `<div class="srow"><div class="sl"><b>Одночасних запитів до ПК</b><small>Скільки шматків серії модель перекладає разом. На одному запиті відеокарта недовантажена — 2 зазвичай дають помітно більше реплік за хвилину. У LM Studio «Parallel» має бути не менше, а «Context Length» — ≈ 4 тис. на кожен запит (2 → 8192, 3 → 12288). Не влізе в контекст — VidBox перекладе ці репліки по одній.</small></div>
+      <div class="sc"><div class="seg" id="aiPar">${[1, 2, 3].map(n => `<button data-par="${n}" class="${(st.localPar || 1) === n ? 'on' : ''}">${n}</button>`).join('')}</div></div></div>` : '');
 }
 function trKey(k, has, hint) {
   return `<div class="srow"><div class="sl"><b>Ключ ${TRN[k]}</b><small>${has ? '<b style="color:var(--acc)">Ключ збережено.</b> ' : ''}${hint}</small></div></div>

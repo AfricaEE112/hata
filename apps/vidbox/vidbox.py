@@ -15,6 +15,7 @@ ffmpeg — необов'язковий: з ним будуть прев'юшки
 """
 import argparse
 import collections
+import concurrent.futures
 import csv
 import glob
 import io
@@ -1935,6 +1936,24 @@ def gloss_put(sid, notes, items):
     return {'notes': notes, 'items': items, 'auto': gloss_clean(keep.get('auto'))}
 
 
+HONORIFIC_RE = re.compile(r"^(o?nee|o?nii|onee|onii|ane|ani)([\s-]?(chan|san|sama|kun|tan))?$|^(sis|bro|sister|brother|"
+                          r"mom|mommy|mother|mama|dad|daddy|papa|father|master|sensei|senpai|teacher)$", re.I)
+
+
+def gloss_auto_ok(it, name=False):
+    """Чи годиться авто-термін з аналізу серії: без «каші» абеток і русизмів, короткий, не звертання замість імені.
+    Мала модель приносить і таке: «sucking my tits → ssиш мої груди», «I'll come right away → Я зараз вибрюшу»."""
+    t, tr, note = it[0], it[1], it[3] if len(it) > 3 else ''
+    if not t or not tr or len(t.split()) > 4 or len(tr.split()) > 6:
+        return False
+    note_bad = [w for w in tr_foreign(t, note) if not (w.isascii() and w.isalpha())]   # «senpai» у примітці — можна
+    if tr_foreign(t, tr) or note_bad or re.search(r'[A-Za-z]', tr):
+        return False
+    if HONORIFIC_RE.match(t.strip()) and (name or "ім'я" in (it[2] if len(it) > 2 else '')):
+        return False
+    return True
+
+
 def gloss_put_auto(sid, auto):
     """Авто-терміни з аналізу серій — окремо від записів користувача і з найнижчим пріоритетом: помилка моделі
     («кічка», «втікаєш від сміливості») не закріплюється над наборами й правками."""
@@ -2015,7 +2034,7 @@ def gloss_set_sets(sid, sets):
 
 def gloss_sets_info(sid):
     sets, auto = gloss_title_sets(sid)
-    return {'sets': sets, 'setsAuto': auto, 'adultAuto': title_adult(sid) if sid and sid != '_' else None,
+    return {'autoBad': [it[0] for it in gloss_get(sid).get('auto') or [] if not gloss_auto_ok(it)] if sid and sid != '_' else [],'sets': sets, 'setsAuto': auto, 'adultAuto': title_adult(sid) if sid and sid != '_' else None,
             'setsAvail': [{'id': k, 'name': v['name'], 'adult': v['adult'], 'desc': v['desc'], 'n': len(v['items'])}
                           for k, v in gloss_sets().items()]}
 
@@ -2055,10 +2074,11 @@ def gloss_prompt(text, src, limit=150):
     """Глосарій для одного запиту: правила + терміни, що трапляються в text (для англ. джерела);
     для інших мов (Whisper японською тощо) збіг не перевіриш — тоді імена/запозичення першими, до limit."""
     sids = getattr(TR_CTX, 'gloss_sids', None) or []
-    notes, items = [], {it[0].lower(): it for it in getattr(TR_CTX, 'auto_items', None) or []}
+    notes, items = [], {it[0].lower(): it for it in getattr(TR_CTX, 'auto_items', None) or [] if gloss_auto_ok(it)}
     for sid in sids:                     # авто-терміни тайтлу з попередніх серій — найнижчий пріоритет
         for it in gloss_get(sid).get('auto') or []:
-            items[it[0].lower()] = it
+            if gloss_auto_ok(it):        # старе сміття з попередніх версій теж не пускаємо в запит
+                items[it[0].lower()] = it
     for k in getattr(TR_CTX, 'sets', None) or []:
         st = gloss_sets().get(k)
         if st:
@@ -2278,6 +2298,9 @@ def local_chunk(base, hdr, model, part, ctx, src, state):
         try:
             res = http_json(base + '/chat/completions', body, hdr, timeout=900)
         except urllib.error.HTTPError as e:
+            body_ = getattr(e, 'body', '') or ''
+            if e.code == 400 and re.search(r'context|n_ctx|exceed|too long|too many tokens', body_, re.I):
+                return {}                # не влізло в контекст (паралельні запити) — ці репліки підуть по одній
             if e.code == 400 and state['schema']:      # сервер без structured output — пробуємо без нього
                 state['schema'] = False
                 continue
@@ -2319,6 +2342,9 @@ def local_chunk(base, hdr, model, part, ctx, src, state):
     return {}
 
 
+TR_CTX_KEYS = ('gloss_sids', 'sets', 'ctx', 'auto_items')
+
+
 def local_translate(url, lines, src, progress=None):
     base = local_base(url)
     hdr = local_hdr()
@@ -2330,19 +2356,42 @@ def local_translate(url, lines, src, progress=None):
     out = list(lines)
     step = 30
     state = {'schema': True}
-    for i in range(0, len(lines), step):
+    starts = list(range(0, len(lines), step))
+    snap = {k: getattr(TR_CTX, k, None) for k in TR_CTX_KEYS}
+
+    def work(i):
+        for k, v in snap.items():           # TR_CTX — свій у кожному потоці: передаємо глосарій і контекст серії
+            setattr(TR_CTX, k, v)
         part = lines[i:i + step]
         got = local_chunk(base, hdr, model, part, lines[max(0, i - 6):i], src, state)
-        for k in range(len(part)):
-            if k + 1 in got:
-                out[i + k] = got[k + 1]
+        res = {i + k: got[k + 1] for k in range(len(part)) if k + 1 in got}
         for k in [k for k in range(len(part)) if k + 1 not in got][:12]:    # пропущені / підозрілі — по одній
             j = i + k
             one = local_chunk(base, hdr, model, [lines[j]], lines[max(0, j - 4):j], src, state)
             if 1 in one:
-                out[j] = one[1]
-        if progress:
-            progress(min(1.0, (i + step) / max(1, len(lines))))
+                res[j] = one[1]
+        return res
+
+    # Одночасні запити: на одному запиті відеокарта недовантажена (на RX 6700 XT ~85 % GPU і ~20 % пам'яті), а LM Studio
+    # тримає кілька слотів — 2 шматки разом дають більше реплік за хвилину. Шматки незалежні (контекст — з оригіналу).
+    par = max(1, min(3, int(C.cfg.get('local_parallel') or 1)))
+    done = 0
+    if par == 1:
+        for i in starts:
+            for j, t in work(i).items():
+                out[j] = t
+            done += 1
+            if progress:
+                progress(min(1.0, done / max(1, len(starts))))
+        return out
+    with concurrent.futures.ThreadPoolExecutor(par) as ex:
+        futs = [ex.submit(work, i) for i in starts]
+        for f in concurrent.futures.as_completed(futs):
+            for j, t in f.result().items():
+                out[j] = t
+            done += 1
+            if progress:
+                progress(min(1.0, done / max(1, len(starts))))
     return out
 
 
@@ -2507,9 +2556,10 @@ def ai_context(vid, r, lines, src, set_state):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(ctx, f, ensure_ascii=False, indent=1)
-    chars = ctx.get('characters') or []
+    chars = [c for c in ctx.get('characters') or []
+             if gloss_auto_ok([c.get('name', ''), c.get('uk', ''), "ім'я", c.get('speech', '')], name=True)]
     auto = [[c['name'], c['uk'], "ім'я", ' · '.join(x for x in (GENDER_UK.get(c.get('gender'), ''), c.get('speech', '')) if x)]
-            for c in chars] + (ctx.get('terms') or [])
+            for c in chars] + [t for t in ctx.get('terms') or [] if gloss_auto_ok(t)]
     TR_CTX.auto_items = gloss_clean(auto)
     sid = video_sid(r)
     if sid:                              # у глосарій тайтлу — тільки те, чого там ще нема (і нема в загальному)
@@ -2837,7 +2887,7 @@ def ai_status():
     for it in q:
         r = DB.one('SELECT title, folder FROM videos WHERE id=?', (it['id'],))
         it['title'] = r['title'] if r else '(файл зник)'
-    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True), 'harden': C.cfg.get('ai_harden', True), 'adultLocal': C.cfg.get('ai_adult_local', True),
+    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True), 'harden': C.cfg.get('ai_harden', True), 'adultLocal': C.cfg.get('ai_adult_local', True), 'localPar': C.cfg.get('local_parallel') or 1,
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
@@ -3007,6 +3057,8 @@ def ai_post(d):
                 C.cfg['ai_harden'] = d['harden']
             if isinstance(d.get('adultLocal'), bool):
                 C.cfg['ai_adult_local'] = d['adultLocal']
+            if d.get('localPar') in (1, 2, 3):
+                C.cfg['local_parallel'] = d['localPar']
             if d.get('source') in ('subs', 'audio'):
                 C.cfg['ai_source'] = d['source']
         save_config()
@@ -3950,7 +4002,7 @@ DEFAULTS = {
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
     'local_url': '', 'local_key': '', 'local_model': '',
-    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True,
+    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1,
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},
