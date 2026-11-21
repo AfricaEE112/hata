@@ -2394,26 +2394,50 @@ def local_translate(url, lines, src, progress=None):
                 res[j] = one[1]
         return res
 
-    # Одночасні запити: на одному запиті відеокарта недовантажена (на RX 6700 XT ~85 % GPU і ~20 % пам'яті), а LM Studio
-    # тримає кілька слотів — 2 шматки разом дають більше реплік за хвилину. Шматки незалежні (контекст — з оригіналу).
-    par = max(1, min(3, int(C.cfg.get('local_parallel') or 1)))
-    done = 0
-    if par == 1:
-        for i in starts:
-            for j, t in work(i).items():
-                out[j] = t
-            done += 1
-            if progress:
-                progress(min(1.0, done / max(1, len(starts))))
-        return out
-    with concurrent.futures.ThreadPoolExecutor(par) as ex:
-        futs = [ex.submit(work, i) for i in starts]
-        for f in concurrent.futures.as_completed(futs):
+    # Одночасні запити (налаштування 1–3). На RX 6700 XT 12 ГБ два запити не влізли у відеопам'ять (кеш LM Studio
+    # виліз в оперативку, рушій падав з «Channel Error»), тож: кількість перечитується перед кожним шматком — зміна
+    # в налаштуваннях діє одразу, — а після помилки на кількох запитах до кінця серії лишається один.
+    lock = threading.Lock()
+    gate = threading.Condition(lock)
+    st = {'running': 0, 'solo': False, 'done': 0}
+
+    def limit():
+        return 1 if st['solo'] else max(1, min(3, int(C.cfg.get('local_parallel') or 1)))
+
+    def guarded(i):
+        with gate:
+            while st['running'] >= limit():
+                gate.wait(1)
+            st['running'] += 1
+            many = st['running'] > 1
+        try:
+            return work(i)
+        except TrError:
+            if not many:
+                raise
+            with gate:                       # упало на кількох — далі по одному, цей шматок ще раз
+                st['solo'] = True
+            with gate:
+                while st['running'] > 1:
+                    gate.wait(1)
+            return work(i)
+        finally:
+            with gate:
+                st['running'] -= 1
+                gate.notify_all()
+
+    if max(1, min(3, int(C.cfg.get('local_parallel') or 1))) == 1:
+        workers = 1
+    else:
+        workers = 3
+    with concurrent.futures.ThreadPoolExecutor(workers) as ex:
+        futs = [ex.submit(guarded, i) for i in starts]
+        for f in (futs if workers == 1 else concurrent.futures.as_completed(futs)):
             for j, t in f.result().items():
                 out[j] = t
-            done += 1
+            st['done'] += 1
             if progress:
-                progress(min(1.0, done / max(1, len(starts))))
+                progress(min(1.0, st['done'] / max(1, len(starts))))
     return out
 
 
