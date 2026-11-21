@@ -1,0 +1,15 @@
+Nov 21 18:53:26 runnervmeozm8 systemd[1]: Started gazda.service - Hata: gazda — системні дії для панелі (root, білий список).
+Nov 21 18:53:26 runnervmeozm8 python3[4774]: gazda слухає /run/hata/gazda.sock
+Nov 21 18:53:27 runnervmeozm8 systemd[1]: Started hata-screen.service - Hata: статус і QR-код на екрані ноутбука (tty1).
+Nov 21 18:53:27 runnervmeozm8 systemd[1]: Started hata.service - Hata: панель домашнього сервера.
+Nov 21 18:53:27 runnervmeozm8 systemd[1]: hata-screen.service: Deactivated successfully.
+Nov 21 18:53:27 runnervmeozm8 python3[4843]: Hata: панель на порту 80
+Nov 21 18:53:30 runnervmeozm8 systemd[1]: hata-screen.service: Scheduled restart job, restart counter is at 1.
+Nov 21 18:53:30 runnervmeozm8 systemd[1]: Started hata-screen.service - Hata: статус і QR-код на екрані ноутбука (tty1).
+Nov 21 18:53:30 runnervmeozm8 python3[4888]: hata-screen: старт, stdout=/dev/tty1
+Nov 21 18:54:10 runnervmeozm8 systemd[1]: Started vidbox.service - Hata: VidBox — домашній відеосервер.
+Nov 21 18:54:10 runnervmeozm8 systemd[1]: Stopping vidbox.service - Hata: VidBox — домашній відеосервер...
+Nov 21 18:54:10 runnervmeozm8 systemd[1]: vidbox.service: Deactivated successfully.
+Nov 21 18:54:10 runnervmeozm8 systemd[1]: Stopped vidbox.service - Hata: VidBox — домашній відеосервер.
+Nov 21 18:54:10 runnervmeozm8 systemd[1]: Started vidbox.service - Hata: VidBox — домашній відеосервер.
+Nov 21 18:54:15 runnervmeozm8 python3[4843]: Копії: готово — 2026-11-21 18-54, 14 файлів
