@@ -1812,8 +1812,10 @@ async function aiDoneDraw(post) {
   box.innerHTML = `<div class="srow"><div class="sl"><b>Усі ${all} ${plural(all, 'серія', 'серії', 'серій')}</b><small>Лише зроблені до:</small></div>
       <div class="sc"><input type="date" id="aiBefore" aria-label="Зроблені до цієї дати" value="${new Date().toISOString().slice(0, 10)}">
       <button class="btn" data-dall="redo">Перекласти заново</button><button class="btn ghost" data-dall="delete">${I.trash}Видалити</button></div></div>
+    <div class="srow"><div class="sl"><b>Завантажити архівом</b><small>Оригінальні субтитри (з яких перекладали), переклад і аналіз серії — одним .zip, по теках тайтлів. Зручно, щоб перевірити якість чи віддати на розбір.</small></div>
+      <div class="sc"><button class="btn" data-zip="today">Зроблені сьогодні</button><button class="btn ghost" data-zip="all">Усі</button></div></div>
     <div class="flist">${T.map((t, k) => `<div class="frow"><div><b>${esc(t.title)}</b><small style="color:var(--mute)">${t.n} з ${t.total} ${plural(t.total, 'серії', 'серій', 'серій')} · ${when(t)}</small></div>
-      <div style="display:flex;gap:6px"><button class="btn ghost" data-dt="${k}" data-act="redo" title="Видалити й одразу перекласти заново">Заново</button>
+      <div style="display:flex;gap:6px"><a class="btn ghost icon" href="/api/aisubs/export?${t.sid ? 'sid=' + encodeURIComponent(t.sid) : 'ids=' + t.ids.join(',')}" download title="Завантажити оригінал і переклад архівом" aria-label="Завантажити">⤓</a><button class="btn ghost" data-dt="${k}" data-act="redo" title="Видалити й одразу перекласти заново">Заново</button>
       <button class="btn ghost icon" data-dt="${k}" data-act="delete" title="Видалити субтитри ШІ тайтлу" aria-label="Видалити">${I.trash}</button></div></div>`).join('')}</div>`;
   const go = async (b, what, n) => {
     if (!confirm(b.op === 'redo' ? `Видалити субтитри ШІ ${what} (${n} ${plural(n, 'серія', 'серії', 'серій')}) і одразу перекласти заново? Аналіз серії теж зробиться наново.`
@@ -1826,6 +1828,12 @@ async function aiDoneDraw(post) {
   $$('[data-dt]', box).forEach(b => b.onclick = () => {
     const t = T[+b.dataset.dt];
     go(Object.assign({op: b.dataset.act}, t.sid ? {sid: t.sid} : {ids: t.ids}), `«${t.title}»`, t.n);
+  });
+  $$('[data-zip]', box).forEach(b => b.onclick = () => {
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    const a = document.createElement('a');
+    a.href = '/api/aisubs/export' + (b.dataset.zip === 'today' ? '?since=' + d.getTime() / 1000 : '');
+    a.download = ''; document.body.appendChild(a); a.click(); a.remove();
   });
   $$('[data-dall]', box).forEach(b => b.onclick = () => {
     const v = $('#aiBefore').value, before = v ? new Date(v + 'T23:59:59').getTime() / 1000 : 0;
