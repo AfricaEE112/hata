@@ -1700,9 +1700,9 @@ async function drawAiSet(st) {
   const box = $('#aiBody');
   if (!box) return;
   st = st || await api('/api/aisubs').catch(() => null);
-  if (!st || !$('#aiBody')) return;
+  if (!st || !st.queue || !$('#aiBody')) return;
   const busy = st.install === 'run' || st.queue.some(x => !['done', 'error'].includes(x.state));
-  box.innerHTML = `<p class="note" style="margin-top:0">VidBox сам слухає відео (Whisper — прямо на цьому комп’ютері) і робить субтитри, а українською їх перекладає DeepL. Серія на 24 хв — орієнтовно 15–40 хв, усе у фоні з низьким пріоритетом. Запустити — у плеєрі (кнопка CC → «Українські (ШІ)») або на сторінці аніме для всіх серій.</p>` +
+  box.innerHTML = `<p class="note" style="margin-top:0">VidBox сам слухає відео (Whisper — прямо на цьому комп’ютері) і робить субтитри, а українською їх перекладає вибраний перекладач (Gemini, DeepL або Azure). Серія на 24 хв — орієнтовно 15–40 хв, усе у фоні з низьким пріоритетом. Запустити — у плеєрі (кнопка CC → «Українські (ШІ)») або на сторінці аніме для всіх серій.</p>` +
     (!st.linux ? `<p class="warn">Поки працює лише на Linux (на Хаті).</p>`
     : !st.ready ? (st.install === 'run' ? `<p class="note">⏳ ${esc(st.log || 'Встановлюю…')} Це кілька хвилин.</p>`
       : `${st.install === 'error' ? `<p class="warn">${esc(st.log)}</p>` : ''}<button class="btn primary" id="aiInstall">${I.plus}Встановити розпізнавання</button><p class="note">Завантажиться ≈ 400 МБ, а з першим відео — модель ще ≈ 1,5 ГБ (швидша — ≈ 0,5 ГБ).</p>`)
@@ -1710,24 +1710,33 @@ async function drawAiSet(st) {
         <div class="sc"><div class="seg" id="aiModel"><button data-m="large-v3-turbo" class="${st.model === 'large-v3-turbo' ? 'on' : ''}">точніша</button><button data-m="small" class="${st.model === 'small' ? 'on' : ''}">швидша</button></div></div></div>
       <div class="srow"><div class="sl"><b>Швидкість</b><small>Максимальна — усі 8 потоків процесора, і Хата на час розпізнавання вмикає режим продуктивності: швидше, але ноутбук гарячіший і вентилятор гучніший. Якість однакова.</small></div>
         <div class="sc"><div class="seg" id="aiSpeed"><button data-s="normal" class="${st.speed !== 'max' ? 'on' : ''}">звичайна</button><button data-s="max" class="${st.speed === 'max' ? 'on' : ''}">максимальна</button></div></div></div>
-      <div class="srow"><div class="sl"><b>Ключ DeepL</b><small>${st.deepl ? 'Ключ збережено. ' : 'Без ключа будуть лише субтитри мовою оригіналу. '}Безкоштовний ключ — на <a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener">deepl.com/pro-api</a> → вкладка API → план Developer: 1 млн символів одноразово (не щомісяця). Серія аніме японською забирає ≈ 2 тис. символів — це кількасот серій.</small><small id="aiUsage"></small></div></div>
-      <div class="fadd"><input id="aiKey" type="password" autocomplete="off" placeholder="${st.deepl ? '•••••••• (вставити новий, щоб замінити)' : 'Ключ DeepL API, наприклад xxxxxxxx-…:fx'}" aria-label="Ключ DeepL API">
-        <button class="btn primary" id="aiKeySave">Зберегти</button>${st.deepl ? '<button class="btn" id="aiUse">Скільки лишилось</button>' : ''}</div>`) +
+      <div class="srow"><div class="sl"><b>Перекладач</b><small>Перекладає основний; коли в нього скінчився ліміт — наступний, у якого є ключ. ${!(st.gemini || st.deepl || st.azure) ? 'Без жодного ключа будуть лише субтитри мовою оригіналу.' : ''}</small></div>
+        <div class="sc"><div class="seg" id="aiMain">${['gemini', 'deepl', 'azure'].map(k => `<button data-tm="${k}" class="${st.trMain === k ? 'on' : ''}">${TRN[k]}</button>`).join('')}</div></div></div>
+      ${trKey('gemini', st.gemini, `Безкоштовно і без картки: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> → «Create API key». Мовна модель — краще тримає тон діалогів. На безкоштовному тарифі Google може використовувати тексти для навчання.${st.geminiModel ? ` Модель: ${esc(st.geminiModel)}.` : ''}`)}
+      ${trKey('deepl', st.deepl, `<a href="https://www.deepl.com/pro-api" target="_blank" rel="noopener">deepl.com/pro-api</a> → вкладка API → план Developer: 1 млн символів одноразово. Серія аніме японською ≈ 2 тис. символів.<small id="aiUsage"></small>`)}
+      ${trKey('azure', st.azure, `Microsoft Translator: 2 млн символів щомісяця безкоштовно (тариф F0). Ключ і регіон — у ресурсі Translator на portal.azure.com → «Keys and Endpoint».`)}</div>`) +
     (st.queue.length ? `<h3 style="margin:16px 0 6px">Черга</h3><div class="flist">${st.queue.map(x => `<div class="frow"><div><b>${esc(x.title)}</b>
-        <small style="color:var(${x.state === 'error' ? '--red, #e66' : '--mute'})">${esc(aiStateText(x))}${x.err ? ' — ' + esc(x.err) : ''}</small></div>
+        <small style="color:var(${x.state === 'error' ? '--red, #e66' : '--mute'})">${esc(aiStateText(x))}${x.via && x.state === 'done' ? ' · ' + TRN[x.via] : ''}${x.err ? ' — ' + esc(x.err) : ''}</small></div>
         <button class="btn ghost icon" data-airm="${esc(x.id)}" title="${['done', 'error'].includes(x.state) ? 'Прибрати зі списку' : 'Скасувати'}" aria-label="Прибрати">${I.trash}</button></div>`).join('')}</div>
       ${st.queue.some(x => ['done', 'error'].includes(x.state)) ? '<button class="btn ghost" id="aiClear" style="margin-top:8px">Прибрати готові</button>' : ''}` : '');
   const post = async b => { const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify(b)}); if (r.ok === false && r.error) toast(r.error); return r; };
   if ($('#aiInstall')) $('#aiInstall').onclick = async () => drawAiSet(await post({op: 'install'}));
   $$('#aiModel [data-m]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', model: b.dataset.m})));
   $$('#aiSpeed [data-s]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', speed: b.dataset.s})));
-  if ($('#aiKeySave')) $('#aiKeySave').onclick = async () => {
-    const k = $('#aiKey').value.trim();
-    if (!k) { $('#aiKey').focus(); return toast('Встав ключ DeepL'); }
-    drawAiSet(await post({op: 'save', key: k}));
-    const u = await post({op: 'usage'});
-    toast(u.ok ? 'Ключ працює' : 'Ключ збережено, але DeepL відповів: ' + u.error);
-  };
+  $$('#aiMain [data-tm]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', main: b.dataset.tm})));
+  $$('[data-savekey]').forEach(b => b.onclick = async () => {
+    const k = b.dataset.savekey, v = $('#key_' + k).value.trim();
+    if (!v) { $('#key_' + k).focus(); return toast('Встав ключ ' + TRN[k]); }
+    const body = {op: 'save', [k === 'deepl' ? 'key' : k]: v};
+    if (k === 'azure') body.region = $('#key_region').value.trim();
+    b.disabled = true; b.textContent = 'Перевіряю…';
+    const r = await post(body);
+    if (!r || r.ok !== true) { b.disabled = false; b.textContent = 'Зберегти'; if (r && r.ok !== false) toast(r.error || 'Не вдалося зберегти'); return; }
+    drawAiSet(r);
+    if (k === 'deepl') { const u = await post({op: 'usage'}); toast(u.ok ? 'Ключ DeepL працює' : 'Ключ збережено, але DeepL відповів: ' + u.error); }
+    else toast(k === 'gemini' ? `Ключ Gemini працює (${r.geminiModel})` : 'Ключ Azure збережено');
+  });
+  $$('[data-forget]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', forget: [b.dataset.forget + '_key']})));
   if ($('#aiUse')) $('#aiUse').onclick = async () => {
     const u = await post({op: 'usage'});
     $('#aiUsage').textContent = u.ok ? `Цього місяця використано ${u.used.toLocaleString('uk-UA')} з ${u.limit.toLocaleString('uk-UA')} символів.` : u.error;
@@ -1737,6 +1746,13 @@ async function drawAiSet(st) {
   if (busy) aiSetT = setTimeout(() => { if ($('#aiBody') && !$('#aiBody').contains(document.activeElement)) drawAiSet(); else if ($('#aiBody')) aiSetT = setTimeout(drawAiSet, 4000); }, 4000);
 }
 
+const TRN = {gemini: 'Gemini', deepl: 'DeepL', azure: 'Azure'};
+function trKey(k, has, hint) {
+  return `<div class="srow"><div class="sl"><b>Ключ ${TRN[k]}</b><small>${has ? '<b style="color:var(--acc)">Ключ збережено.</b> ' : ''}${hint}</small></div></div>
+    <div class="fadd"><input id="key_${k}" type="password" autocomplete="off" placeholder="${has ? '•••••••• (вставити новий, щоб замінити)' : `Ключ ${TRN[k]}`}" aria-label="Ключ ${TRN[k]}">
+      ${k === 'azure' ? '<input id="key_region" style="max-width:150px" placeholder="регіон, напр. westeurope" aria-label="Регіон Azure">' : ''}
+      <button class="btn primary" data-savekey="${k}">Зберегти</button>${has ? `<button class="btn ghost" data-forget="${k}">Забути</button>` : ''}${k === 'deepl' && has ? '<button class="btn" id="aiUse">Скільки лишилось</button>' : ''}</div>`;
+}
 function subName(t) {
   let n = '';
   try { if (t.lang) n = new Intl.DisplayNames(['uk'], {type: 'language'}).of(t.lang); } catch (e) {}

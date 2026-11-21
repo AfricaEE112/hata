@@ -1740,6 +1740,174 @@ def deepl_translate(key, lines, src, progress=None):
     return out
 
 
+# ── Інші перекладачі. Помилка з quota=True — «ліміт/ключ», тоді переходимо до наступного перекладача.
+TR_NAMES = {'gemini': 'Gemini', 'deepl': 'DeepL', 'azure': 'Azure'}
+LANG_EN = {'ja': 'Japanese', 'en': 'English', 'ko': 'Korean', 'zh': 'Chinese', 'ru': 'Russian', 'de': 'German',
+           'fr': 'French', 'es': 'Spanish', 'it': 'Italian', 'pl': 'Polish', 'pt': 'Portuguese'}
+
+
+class TrError(RuntimeError):
+    def __init__(self, msg, quota=False):
+        super().__init__(msg)
+        self.quota = quota
+
+
+def http_json(url, data=None, headers=None, timeout=90):
+    req = urllib.request.Request(url, data=json.dumps(data).encode() if data is not None else None,
+                                 headers=dict({'Content-Type': 'application/json', 'User-Agent': 'VidBox'}, **(headers or {})))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode('utf-8', 'replace')
+        except Exception:
+            body = ''
+        e.body = body
+        raise
+
+
+def gemini_pick_model(key):
+    """Найкраща доступна легка модель Gemini для цього ключа (назви моделей у Google часто міняються)."""
+    try:
+        j = http_json('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', headers={'x-goog-api-key': key})
+    except urllib.error.HTTPError as e:
+        raise TrError('Gemini не прийняв ключ' if e.code in (400, 401, 403) else 'ліміт Gemini вичерпано' if e.code == 429
+                      else 'Gemini: помилка %d' % e.code, quota=True)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+        raise TrError('Gemini недоступний: %s' % getattr(e, 'reason', e), quota=True)
+    names = [m['name'].split('/', 1)[-1] for m in j.get('models', []) if 'generateContent' in (m.get('supportedGenerationMethods') or [])]
+    def score(n):
+        v = [int(x) for x in re.findall(r'\d+', n.split('-')[1] if n.count('-') else '0')] or [0]
+        return (('flash-lite' in n) * 2 + ('flash' in n), 'preview' not in n and 'exp' not in n, v, -len(n))
+    good = [n for n in names if n.startswith('gemini-') and 'flash' in n and not re.search(r'tts|image|audio|live|embedding|thinking', n)]
+    if not good:
+        raise TrError('Для цього ключа немає моделі Gemini Flash', quota=True)
+    return max(good, key=score)
+
+
+def gemini_translate(key, lines, src, progress=None):
+    model = C.cfg.get('gemini_model')
+    if not model:
+        model = gemini_pick_model(key)
+        with CFG_LOCK:
+            C.cfg['gemini_model'] = model
+        save_config()
+    srcname = LANG_EN.get(src, 'the original language')
+    out = list(lines)
+    step = 50
+    for i in range(0, len(lines), step):
+        part = lines[i:i + step]
+        ctx = lines[max(0, i - 6):i]
+        prompt = ('You translate subtitles of anime and films from %s into Ukrainian.\n'
+                  'Translate every line of "lines" into natural, spoken Ukrainian that fits the scene; keep names, '
+                  'keep the tone (casual, rude, polite), do not add explanations. Lines may be broken mid-sentence — '
+                  'translate them so they still read well in order. Return JSON {"lines": [...]} with exactly %d '
+                  'strings in the same order.\n"context" holds the previous lines for reference only — do not translate them.\n\n%s'
+                  % (srcname, len(part), json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
+        body = {'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
+                'generationConfig': {'temperature': 0.3, 'responseMimeType': 'application/json'}}
+        res = None
+        for n in range(4):
+            try:
+                res = http_json('https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent' % model, body,
+                                {'x-goog-api-key': key}, timeout=180)
+                break
+            except urllib.error.HTTPError as e:
+                b = getattr(e, 'body', '')
+                if e.code == 404 and n == 0:              # модель прибрали — беремо іншу
+                    model = gemini_pick_model(key)
+                    with CFG_LOCK:
+                        C.cfg['gemini_model'] = model
+                    save_config()
+                    continue
+                if e.code == 429:
+                    if 'PerDay' in b or 'per day' in b.lower() or n == 3:
+                        raise TrError('ліміт Gemini на сьогодні вичерпано', quota=True)
+                    m = re.search(r'"retryDelay":\s*"(\d+)', b)
+                    time.sleep(min(90, int(m.group(1)) + 2 if m else 20 * (n + 1)))
+                    continue
+                if e.code in (400, 401, 403) and ('API key' in b or 'PERMISSION' in b):
+                    raise TrError('Gemini не прийняв ключ', quota=True)
+                if e.code >= 500 and n < 3:
+                    time.sleep(10)
+                    continue
+                raise TrError('Gemini: помилка %d %s' % (e.code, b[:160]))
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                if n == 3:
+                    raise TrError('Gemini недоступний: %s' % e)
+                time.sleep(10)
+        try:
+            txt = ''.join(p.get('text', '') for p in res['candidates'][0]['content']['parts'])
+            got = json.loads(txt).get('lines') or []
+        except (KeyError, IndexError, ValueError, AttributeError):
+            got = []
+        if len(got) != len(part):        # модель збилась із кількістю — краще оригінал, ніж зсув реплік
+            got = got[:len(part)] + part[len(got):] if got else part
+        for k, t in enumerate(got):
+            if isinstance(t, str) and t.strip():
+                out[i + k] = t.strip()
+        if progress:
+            progress(min(1.0, (i + step) / max(1, len(lines))))
+        time.sleep(4.5)                  # безкоштовний тариф — ~15 запитів на хвилину
+    return out
+
+
+def azure_translate(key, lines, src, progress=None):
+    region = (C.cfg.get('azure_region') or '').strip()
+    hdr = {'Ocp-Apim-Subscription-Key': key}
+    if region:
+        hdr['Ocp-Apim-Subscription-Region'] = region
+    out = list(lines)
+    for i in range(0, len(lines), 100):
+        part = lines[i:i + 100]
+        url = 'https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&to=uk' + ('&from=' + src if src in LANG_EN else '')
+        for n in range(3):
+            try:
+                res = http_json(url, [{'Text': t} for t in part], hdr)
+                break
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403):
+                    raise TrError('Azure не прийняв ключ (перевір і регіон)', quota=True)
+                if e.code == 429 and n < 2:
+                    time.sleep(30)
+                    continue
+                if e.code in (403, 429):
+                    raise TrError('ліміт Azure вичерпано', quota=True)
+                raise TrError('Azure: помилка %d' % e.code)
+        for k, r_ in enumerate(res):
+            t = ((r_.get('translations') or [{}])[0].get('text') or '').strip()
+            if t:
+                out[i + k] = t
+        if progress:
+            progress(min(1.0, (i + 100) / max(1, len(lines))))
+    return out
+
+
+def tr_chain():
+    """[(назва, ключ)] у порядку: основний, далі решта з ключами."""
+    keys = {'gemini': C.cfg.get('gemini_key'), 'deepl': C.cfg.get('deepl_key'), 'azure': C.cfg.get('azure_key')}
+    first = C.cfg.get('tr_main') if C.cfg.get('tr_main') in keys else 'gemini'
+    order = [first] + [k for k in ('gemini', 'deepl', 'azure') if k != first]
+    return [(k, keys[k].strip()) for k in order if (keys[k] or '').strip()]
+
+
+def translate_uk(lines, src, progress=None):
+    """Переклад українською першим перекладачем, у якого не скінчився ліміт. → (тексти, назва перекладача)."""
+    errs = []
+    for name, key in tr_chain():
+        try:
+            fn = {'gemini': gemini_translate, 'deepl': deepl_translate, 'azure': azure_translate}[name]
+            return fn(key, lines, src, progress), name
+        except TrError as e:
+            errs.append(str(e) if TR_NAMES[name] in str(e) else '%s: %s' % (TR_NAMES[name], e))
+            if not e.quota:
+                raise RuntimeError('; '.join(errs))
+        except RuntimeError as e:        # DeepL кидає RuntimeError: ліміт/ключ — пробуємо наступного
+            errs.append(str(e) if TR_NAMES[name] in str(e) else '%s: %s' % (TR_NAMES[name], e))
+    raise RuntimeError('; '.join(errs) or 'немає ключа перекладача')
+
+
 def ai_audio_stream(path):
     """Номер звукової доріжки: «за замовчуванням», інакше перша."""
     try:
@@ -1761,16 +1929,16 @@ def ai_job(it):
         return ai_set(vid, state='error', err='Файл не знайдено')
     out = os.path.join(C.data, 'aisubs', vid)
     wav = os.path.join(C.data, 'aisubs', 'tmp-%s.wav' % vid)
-    key = (C.cfg.get('deepl_key') or '').strip()
+    key = bool(tr_chain())
     have = [f for f in (os.listdir(out) if os.path.isdir(out) else []) if f.endswith('.srt') and f != 'uk.srt']
     if have and key and not os.path.exists(os.path.join(out, 'uk.srt')):
         try:                             # розпізнане вже є (раніше не було ключа) — лише перекласти
             segs = read_srt(os.path.join(out, have[0]))
             ai_set(vid, state='translate', p=0)
-            uk = deepl_translate(key, [x['t'] for x in segs], have[0][:-4], lambda f: ai_set(vid, p=f))
+            uk, via = translate_uk([x['t'] for x in segs], have[0][:-4], lambda f: ai_set(vid, p=f))
             write_srt(os.path.join(out, 'uk.srt'), segs, uk)
             SUBS_CACHE.pop(vid, None)
-            return ai_set(vid, state='done', p=1, err='')
+            return ai_set(vid, state='done', p=1, err='', via=via)
         except Exception as e:
             SUBS_CACHE.pop(vid, None)
             return ai_set(vid, state='error', err=str(e)[-300:])
@@ -1825,10 +1993,12 @@ def ai_job(it):
         if lang != 'uk':
             if not key:
                 SUBS_CACHE.pop(vid, None)
-                return ai_set(vid, state='done', p=1, err='Без перекладу: немає ключа DeepL — є субтитри мовою оригіналу')
+                return ai_set(vid, state='done', p=1, err='Без перекладу: немає ключа перекладача — є субтитри мовою оригіналу')
             ai_set(vid, state='translate', p=0)
-            uk = deepl_translate(key, [x['t'] for x in segs], lang, lambda f: ai_set(vid, p=f))
+            uk, via = translate_uk([x['t'] for x in segs], lang, lambda f: ai_set(vid, p=f))
             write_srt(os.path.join(out, 'uk.srt'), segs, uk)
+            SUBS_CACHE.pop(vid, None)
+            return ai_set(vid, state='done', p=1, err='', via=via)
         SUBS_CACHE.pop(vid, None)
         ai_set(vid, state='done', p=1, err='')
     except Exception as e:
@@ -1870,7 +2040,9 @@ def ai_status():
         r = DB.one('SELECT title, folder FROM videos WHERE id=?', (it['id'],))
         it['title'] = r['title'] if r else '(файл зник)'
     return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal',
-            'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'linux': sys.platform.startswith('linux'), 'queue': q}
+            'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
+            'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
+            'geminiModel': C.cfg.get('gemini_model') or '', 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
 
 
 def ai_post(d):
@@ -1909,9 +2081,25 @@ def ai_post(d):
         with AI_LOCK:
             ai_save_queue([it for it in ai_queue() if it['state'] not in ('done', 'error')])
     elif op == 'save':
+        if str(d.get('gemini') or '').strip():          # новий ключ Gemini — одразу перевіряємо й вибираємо модель
+            try:
+                model = gemini_pick_model(str(d['gemini']).strip())
+            except TrError as e:
+                return {'ok': False, 'error': str(e)}
+            with CFG_LOCK:
+                C.cfg['gemini_key'], C.cfg['gemini_model'] = str(d['gemini']).strip()[:200], model
         with CFG_LOCK:
             if 'key' in d:
                 C.cfg['deepl_key'] = str(d.get('key') or '').strip()[:200]
+            if 'azure' in d:
+                C.cfg['azure_key'] = str(d.get('azure') or '').strip()[:200]
+            if 'region' in d:
+                C.cfg['azure_region'] = re.sub(r'[^a-z0-9]', '', str(d.get('region') or '').lower())[:40]
+            if d.get('main') in TR_NAMES:
+                C.cfg['tr_main'] = d['main']
+            for k in d.get('forget') or []:
+                if k in ('deepl_key', 'gemini_key', 'azure_key'):
+                    C.cfg.pop(k, None)
             if d.get('model') in AI_MODELS:
                 C.cfg['ai_model'] = d['model']
             if d.get('speed') in ('normal', 'max'):
