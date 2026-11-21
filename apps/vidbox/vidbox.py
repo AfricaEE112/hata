@@ -1913,17 +1913,17 @@ def gloss_get(sid):
     v = gloss_load().get(sid)
     if isinstance(v, str):
         items, notes = gloss_parse_lines(v)
-        return {'notes': '\n'.join(notes), 'items': gloss_clean(items)}
+        return {'notes': '\n'.join(notes), 'items': gloss_clean(items), 'auto': []}
     if isinstance(v, dict):
-        return {'notes': str(v.get('notes') or ''), 'items': gloss_clean(v.get('items'))}
-    return {'notes': '', 'items': []}
+        return {'notes': str(v.get('notes') or ''), 'items': gloss_clean(v.get('items')), 'auto': gloss_clean(v.get('auto'))}
+    return {'notes': '', 'items': [], 'auto': []}
 
 
 def gloss_put(sid, notes, items):
     g = gloss_load()
     notes, items = str(notes or '').strip()[:4000], gloss_clean(items)
     old = g.get(sid) if isinstance(g.get(sid), dict) else {}
-    keep = {k: old[k] for k in ('sets',) if k in old}          # вибір наборів для тайтлу не губимо
+    keep = {k: old[k] for k in ('sets', 'auto') if k in old}   # вибір наборів і авто-терміни не губимо
     if notes or items or keep:
         g[sid] = dict(keep, notes=notes, items=items)
     else:
@@ -1932,7 +1932,22 @@ def gloss_put(sid, notes, items):
     with open(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), 'w', encoding='utf-8') as f:
         json.dump(g, f, ensure_ascii=False, indent=1)
     os.replace(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), os.path.join(C.data, 'aisubs', 'glossary.json'))
-    return {'notes': notes, 'items': items}
+    return {'notes': notes, 'items': items, 'auto': gloss_clean(keep.get('auto'))}
+
+
+def gloss_put_auto(sid, auto):
+    """Авто-терміни з аналізу серій — окремо від записів користувача і з найнижчим пріоритетом: помилка моделі
+    («кічка», «втікаєш від сміливості») не закріплюється над наборами й правками."""
+    g = gloss_load()
+    v = dict(g.get(sid) if isinstance(g.get(sid), dict) else gloss_get(sid))
+    v['auto'] = gloss_clean(auto)[-GLOSS_MAX:]
+    if not v['auto']:
+        v.pop('auto')
+    g[sid] = v
+    os.makedirs(os.path.join(C.data, 'aisubs'), exist_ok=True)
+    with open(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), 'w', encoding='utf-8') as f:
+        json.dump(g, f, ensure_ascii=False, indent=1)
+    os.replace(os.path.join(C.data, 'aisubs', 'glossary.json.tmp'), os.path.join(C.data, 'aisubs', 'glossary.json'))
 
 
 # ── Набори глосаріїв (apps/vidbox/glossaries/*.json): «Аніме», «Хентай 18+»… Ідуть разом із VidBox, вмикаються
@@ -2009,11 +2024,41 @@ def gloss_counts():
     return {sid: len(gloss_get(sid)['items']) for sid in gloss_load()}
 
 
+def gloss_term_re(term):
+    """Регулярка для англ. терміна: інші форми слова (shoot → shooting, come → coming) і до двох слів між словами
+    терміна («shoot inside» ловить «shoot it inside»)."""
+    toks = re.findall(r"[a-z0-9']+", term.lower())
+    if not toks or not re.fullmatch(r"[a-z0-9'\s.,!?-]+", term.lower()):
+        return None
+    parts = []
+    for t in toks:
+        alts = [re.escape(t)]
+        if len(t) >= 4:
+            if t.endswith('e'):
+                alts.append(re.escape(t[:-1]) + 'ing')
+            alts = ["(?:%s)(?:s|es|d|ed|ing|in')?" % '|'.join(alts)]
+        parts.append(alts[0])
+    return re.compile(r"(?<![\w'])" + r"\W+(?:[\w']+\W+){0,2}?".join(parts) + r"(?![\w'])", re.I)
+
+
+GLOSS_RE_CACHE = {}
+
+
+def gloss_hit(term, low):
+    rx = GLOSS_RE_CACHE.get(term)
+    if rx is None:
+        rx = GLOSS_RE_CACHE[term] = gloss_term_re(term) or False
+    return bool(rx.search(low)) if rx else term.lower() in low
+
+
 def gloss_prompt(text, src, limit=150):
     """Глосарій для одного запиту: правила + терміни, що трапляються в text (для англ. джерела);
     для інших мов (Whisper японською тощо) збіг не перевіриш — тоді імена/запозичення першими, до limit."""
     sids = getattr(TR_CTX, 'gloss_sids', None) or []
     notes, items = [], {it[0].lower(): it for it in getattr(TR_CTX, 'auto_items', None) or []}
+    for sid in sids:                     # авто-терміни тайтлу з попередніх серій — найнижчий пріоритет
+        for it in gloss_get(sid).get('auto') or []:
+            items[it[0].lower()] = it
     for k in getattr(TR_CTX, 'sets', None) or []:
         st = gloss_sets().get(k)
         if st:
@@ -2029,8 +2074,7 @@ def gloss_prompt(text, src, limit=150):
             items[it[0].lower()] = it
     low = str(text or '').lower()
     if src == 'en':
-        hit = [it for k, it in items.items()
-               if (re.search(r'(?<![\w])' + re.escape(k) + r'(?![\w])', low) if re.match(r'^[\w\s\'-]+$', k) else k in low)]
+        hit = [it for k, it in items.items() if gloss_hit(it[0], low)]
     else:
         hit = sorted(items.values(), key=lambda it: it[2] not in ("ім'я", 'імʼя', 'name', 'запозичення'))
     hit = hit[:limit]
@@ -2437,11 +2481,11 @@ def ai_context(vid, r, lines, src, set_state):
     sid = video_sid(r)
     if sid:                              # у глосарій тайтлу — тільки те, чого там ще нема (і нема в загальному)
         g = gloss_get(sid)
-        have = {it[0].lower() for it in g['items'] + gloss_get('_')['items']}
+        have = {it[0].lower() for it in g['items'] + g['auto'] + gloss_get('_')['items']}
         have |= {it[0].lower() for k in getattr(TR_CTX, 'sets', None) or [] for it in gloss_sets().get(k, {}).get('items', [])}
         new = [it for it in TR_CTX.auto_items if it[0].lower() not in have]
         if new:
-            gloss_put(sid, g['notes'], g['items'] + new)
+            gloss_put_auto(sid, g['auto'] + new)
     lines_ = []
     if ctx.get('summary'):
         lines_.append('About this episode: ' + ctx['summary'])
@@ -2461,6 +2505,10 @@ def tr_chain():
     return [(k, keys[k].strip()) for k in order if (keys[k] or '').strip()]
 
 
+RU_WORDS = {'возьми', 'что', 'чтобы', 'сейчас', 'конечно', 'хорошо', 'ничего', 'тоже', 'пожалуйста', 'спасибо', 'очень',
+            'нужно', 'можно', 'нельзя', 'сегодня', 'всегда', 'когда', 'потому', 'здесь', 'девушка', 'мальчик', 'говорю'}
+
+
 def tr_foreign(src, out):
     """Слова перекладу з не-кириличними літерами, яких нема в оригіналі: «розglів», «비교є», «заваangيتي».
     Латинське слово, що є в оригіналі (OK, Wi-Fi, ім'я латиницею), — не помилка."""
@@ -2468,6 +2516,8 @@ def tr_foreign(src, out):
     for w in re.findall(r"[^\W\d_]+(?:['’ʼ-][^\W\d_]+)*", out or ''):
         letters = [ch for ch in w if ch.isalpha()]
         if all('Ѐ' <= ch <= 'ӿ' for ch in letters):
+            if re.search('[ыэъёЫЭЪЁ]', w) or w.lower() in RU_WORDS:   # русизм: «Чорт возьми», «что», «сейчас»
+                bad.append(w)
             continue
         if not any('Ѐ' <= ch <= 'ӿ' for ch in letters) and w.lower() in low:
             continue
@@ -2781,6 +2831,22 @@ def ai_post(d):
             return {'ok': False, 'error': 'Тайтл не знайдено'}
         sets = d.get('sets')
         gloss_set_sets(sid, None if sets is None else [str(x) for x in sets if isinstance(x, str)])
+        return dict(gloss_get(sid), ok=True, **gloss_sets_info(sid))
+    elif op == 'gloss_auto':            # авто-терміни тайтлу: promote (у свої), delete, clear
+        sid = str(d.get('sid') or '')
+        if sid not in anime_series():
+            return {'ok': False, 'error': 'Тайтл не знайдено'}
+        g = gloss_get(sid)
+        term = str(d.get('term') or '').lower()
+        act = d.get('act')
+        if act == 'clear':
+            auto = []
+        else:
+            hit = [it for it in g['auto'] if it[0].lower() == term]
+            auto = [it for it in g['auto'] if it[0].lower() != term]
+            if act == 'promote' and hit:
+                gloss_put(sid, g['notes'], g['items'] + hit)
+        gloss_put_auto(sid, auto)
         return dict(gloss_get(sid), ok=True, **gloss_sets_info(sid))
     elif op == 'gloss_set_view':        # вміст набору — подивитись
         st = gloss_sets().get(str(d.get('id') or ''))

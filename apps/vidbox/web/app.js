@@ -1777,7 +1777,7 @@ async function drawAiSet(st) {
 const GL_REG = ['вульгарне', 'розмовне', 'нейтральне', 'ніжне', 'вигук', 'запозичення', "ім'я"];
 function glossPanel(host, sid, title) {
   if (!host) return;
-  const G = {notes: '', items: [], q: '', more: 120, file: null, sets: [], setsAuto: true, adultAuto: null, avail: [], view: ''};
+  const G = {notes: '', items: [], auto: [], autoOpen: false, q: '', more: 120, file: null, sets: [], setsAuto: true, adultAuto: null, avail: [], view: ''};
   const post = async b => { const r = await api('/api/aisubs', {method: 'POST', body: JSON.stringify(Object.assign({sid}, b))}); if (r.ok === false) toast(r.error || 'Не вдалося'); return r; };
   const save = async () => { const r = await post({op: 'gloss', notes: G.notes, items: G.items}); if (r.ok) { G.items = r.items; G.notes = r.notes; } return r; };
   const list = () => { const q = G.q.toLowerCase(); return q ? G.items.filter(it => it.some(x => x.toLowerCase().includes(q))) : G.items; };
@@ -1805,6 +1805,13 @@ function glossPanel(host, sid, title) {
       <div class="gl-head"><b>Термін</b><b>Переклад</b><b>Регістр</b><b>Примітка</b><i></i></div>
       <div class="gl-list">${a.items.map(it => `<div class="gl-row ro"><b>${esc(it[0])}</b><span class="gl-tr">${esc(it[1])}</span>${it[2] ? `<i class="gl-reg">${esc(it[2])}</i>` : '<i></i>'}<small>${esc(it[3])}</small><i></i></div>`).join('')}</div></div>`;
   };
+  const autoHtml = () => {
+    if (sid === '_' || !G.auto.length) return '';
+    return `<div class="srow" style="align-items:flex-start"><div class="sl"><b>Знайдено автоматично · ${G.auto.length}</b><small>Персонажі й терміни, які модель знайшла, читаючи серії. Вони найменш важливі — набори й твої записи їх перекривають. Правильне — ✓ переносить у твій глосарій, хибне — прибери.</small></div>
+      <div class="sc"><button class="btn ghost" data-gla="toggle">${G.autoOpen ? 'Сховати' : 'Показати'}</button><button class="btn ghost" data-gla="clear">${I.trash}Очистити</button></div></div>
+      ${G.autoOpen ? `<div class="gl-list">${G.auto.map(it => `<div class="gl-row ro"><b>${esc(it[0])}</b><span class="gl-tr">${esc(it[1])}</span>${it[2] ? `<i class="gl-reg">${esc(it[2])}</i>` : '<i></i>'}<small>${esc(it[3])}</small>
+        <span class="gl-act"><button class="btn ghost icon" data-glpro="${esc(it[0])}" title="У мій глосарій" aria-label="Перенести ${esc(it[0])} у мій глосарій">✓</button><button class="btn ghost icon" data-gldel="${esc(it[0])}" title="Прибрати" aria-label="Прибрати ${esc(it[0])}">${I.trash}</button></span></div>`).join('')}</div>` : ''}`;
+  };
   const draw = () => {
     host.innerHTML = setsHtml() + `<p class="note" style="margin-top:${G.avail.length ? 14 : 0}px">${sid === '_' ? 'Діє для всіх відео.' : `Тільки для «${esc(title || '')}» — разом із загальним із Налаштувань; переклади тут важливіші.`} Gemini й локальна модель отримують правила і ті терміни, що трапляються в репліках, які саме перекладаються, тож глосарій може бути великим. DeepL і Azure глосарій не використовують.</p>
       <div class="gl-tools"><input type="search" id="glQ_${sid}" placeholder="Пошук у ${G.items.length} ${plural(G.items.length, 'терміні', 'термінах', 'термінах')}…" value="${esc(G.q)}" aria-label="Пошук у глосарії">
@@ -1820,6 +1827,7 @@ function glossPanel(host, sid, title) {
         <input id="glG_${sid}" list="glRegs" placeholder="регістр" aria-label="Регістр" style="max-width:140px"><input id="glN_${sid}" placeholder="примітка" aria-label="Примітка">
         <button class="btn primary" data-gl="add">${I.plus}Додати</button></div>
       <datalist id="glRegs">${GL_REG.map(x => `<option value="${esc(x)}">`).join('')}</datalist>
+      ${autoHtml()}
       <div class="srow" style="align-items:flex-start"><div class="sl"><b>Правила</b><small>Вільним текстом, для всього перекладу: «звертання -san/-chan лишати», «героїня говорить на «ви»», «стогони не перекладати дослівно».</small></div></div>
       <div class="fadd" style="align-items:flex-start"><textarea id="glNotes_${sid}" rows="3" style="flex:1;min-height:70px;resize:vertical" placeholder="Звертання -san/-chan не перекладати">${esc(G.notes)}</textarea><button class="btn primary" data-gl="notes">Зберегти</button></div>`;
     bind();
@@ -1859,6 +1867,16 @@ function glossPanel(host, sid, title) {
       const r = await post({op: 'gloss_sets', sets: null});
       if (r.ok) { Object.assign(G, {sets: r.sets, setsAuto: r.setsAuto, adultAuto: r.adultAuto}); draw(); }
     };
+    const autoAct = async (act, term) => {
+      const r = await post({op: 'gloss_auto', act, term});
+      if (r.ok) { Object.assign(G, {items: r.items, auto: r.auto || []}); draw(); }
+    };
+    $$('[data-gla]', host).forEach(b => b.onclick = () => {
+      if (b.dataset.gla === 'toggle') { G.autoOpen = !G.autoOpen; return draw(); }
+      if (confirm(`Прибрати всі ${G.auto.length} автоматично знайдених термінів? Твої записи й набори не зміняться.`)) autoAct('clear');
+    });
+    $$('[data-glpro]', host).forEach(b => b.onclick = () => autoAct('promote', b.dataset.glpro));
+    $$('[data-gldel]', host).forEach(b => b.onclick = () => autoAct('delete', b.dataset.gldel));
     $$('[data-glview]', host).forEach(b => b.onclick = async () => {
       if (G.view === b.dataset.glview) { G.view = ''; return draw(); }
       const r = await post({op: 'gloss_set_view', id: b.dataset.glview});
@@ -1908,7 +1926,7 @@ function glossPanel(host, sid, title) {
   host.ondragleave = e => { if (!host.contains(e.relatedTarget)) host.classList.remove('gl-over'); };
   host.ondrop = e => { e.preventDefault(); host.classList.remove('gl-over'); pick(e.dataTransfer.files[0]); };
   host.innerHTML = '<p class="note">Завантажую…</p>';
-  post({op: 'gloss_get'}).then(r => { if (r.ok) Object.assign(G, {items: r.items, notes: r.notes, sets: r.sets || [], setsAuto: r.setsAuto !== false, adultAuto: r.adultAuto, avail: r.setsAvail || []}); draw(); });
+  post({op: 'gloss_get'}).then(r => { if (r.ok) Object.assign(G, {items: r.items, notes: r.notes, auto: r.auto || [], sets: r.sets || [], setsAuto: r.setsAuto !== false, adultAuto: r.adultAuto, avail: r.setsAvail || []}); draw(); });
 }
 
 const TRN = {local: 'Локальна', gemini: 'Gemini', deepl: 'DeepL', azure: 'Azure'};
