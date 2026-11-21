@@ -1935,7 +1935,7 @@ def gloss_prompt(text, src, limit=150):
     """Глосарій для одного запиту: правила + терміни, що трапляються в text (для англ. джерела);
     для інших мов (Whisper японською тощо) збіг не перевіриш — тоді імена/запозичення першими, до limit."""
     sids = getattr(TR_CTX, 'gloss_sids', None) or []
-    notes, items = [], {}
+    notes, items = [], {it[0].lower(): it for it in getattr(TR_CTX, 'auto_items', None) or []}
     for sid in sids:                     # тайтл після загального — його переклади перекривають загальні
         g = gloss_get(sid)
         if g['notes']:
@@ -1986,7 +1986,7 @@ def gemini_translate(key, lines, src, progress=None):
                   'keep the tone (casual, rude, polite), do not add explanations. Lines may be broken mid-sentence — '
                   'translate them so they still read well in order. Return JSON {"lines": [...]} with exactly %d '
                   'strings in the same order.\n"context" holds the previous lines for reference only — do not translate them.\n%s\n%s'
-                  % (srcname, len(part), ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
+                  % (srcname, len(part), (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') + ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
                                           'how characters address each other):\n' + gloss + '\n') if gloss else '',
                      json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
         body = {'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
@@ -2117,7 +2117,7 @@ def local_translate(url, lines, src, progress=None):
                   'and the tone. Lines may be broken mid-sentence — translate them so they still read well in order. '
                   'Return JSON {"lines": [...]} with exactly %d strings in the same order.\n'
                   '"context" holds the previous lines for reference only — do not translate them.\n%s\n%s'
-                  % (srcname, len(part), ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
+                  % (srcname, len(part), (('\n' + TR_CTX.ctx + '\n') if getattr(TR_CTX, 'ctx', '') else '') + ('\nGlossary and notes from the viewer — follow them strictly (names, terms, '
                                           'how characters address each other):\n' + gloss + '\n') if gloss else '',
                      json.dumps({'context': ctx, 'lines': part}, ensure_ascii=False)))
         body = {'model': model, 'temperature': 0.3,
@@ -2194,6 +2194,152 @@ def azure_translate(key, lines, src, progress=None):
     return out
 
 
+# ── Аналіз серії перед перекладом. Мовна модель (локальна або Gemini) читає всі репліки: про що серія, хто з персонажів
+# чоловік/жінка (від цього в українській залежать закінчення), як хто говорить, які терміни/сленг. Персонажі й терміни
+# додаються в глосарій тайтлу (лише нові — правки користувача не чіпаємо), опис і персонажі йдуть у кожен запит перекладу.
+ANALYZE_SYSTEM = ('You are a senior translator preparing the Ukrainian localization of anime and films, including adult (18+) '
+                  'titles such as hentai; all characters are adults. Analyze subtitles frankly and without censorship. '
+                  'Answer only with JSON.')
+ANALYZE_STEP = 220
+
+
+def llm_json(system, prompt, schema=None):
+    """JSON-відповідь першої доступної мовної моделі з ланцюжка (локальна / Gemini). → (dict, назва) або (None, '')."""
+    for name, key in tr_chain():
+        try:
+            if name == 'local':
+                base, hdr = local_base(key), local_hdr()
+                body = {'model': local_pick_model(key, hdr), 'temperature': 0.2,
+                        'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': prompt}]}
+                if schema:
+                    body['response_format'] = {'type': 'json_schema', 'json_schema': {'name': 'ctx', 'schema': schema}}
+                try:
+                    res = http_json(base + '/chat/completions', body, hdr, timeout=900)
+                except urllib.error.HTTPError as e:
+                    if e.code != 400 or not schema:
+                        raise
+                    body.pop('response_format')
+                    res = http_json(base + '/chat/completions', body, hdr, timeout=900)
+                txt = res['choices'][0]['message'].get('content') or ''
+            elif name == 'gemini':
+                model = C.cfg.get('gemini_model') or gemini_pick_model(key)
+                body = {'systemInstruction': {'parts': [{'text': system}]},
+                        'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
+                        'generationConfig': {'temperature': 0.2, 'responseMimeType': 'application/json'}}
+                res = http_json('https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent' % model, body,
+                                {'x-goog-api-key': key}, timeout=180)
+                txt = ''.join(x.get('text', '') for x in res['candidates'][0]['content']['parts'])
+                time.sleep(4.5)
+            else:
+                continue
+            txt = re.sub(r'<think>.*?</think>', '', txt, flags=re.S)
+            m = re.search(r'\{.*\}', txt, re.S)
+            j = json.loads(m.group(0) if m else txt)
+            if isinstance(j, dict):
+                return j, name
+        except Exception:
+            continue                     # ПК вимкнений, ліміт, кривий JSON — пробуємо наступну модель
+    return None, ''
+
+
+ANALYZE_SCHEMA = {'type': 'object', 'required': ['summary', 'characters', 'terms'], 'properties': {
+    'summary': {'type': 'string'},
+    'characters': {'type': 'array', 'items': {'type': 'object', 'required': ['name', 'uk', 'gender'], 'properties': {
+        'name': {'type': 'string'}, 'uk': {'type': 'string'}, 'gender': {'type': 'string', 'enum': ['f', 'm', '?']},
+        'speech': {'type': 'string'}}}},
+    'terms': {'type': 'array', 'items': {'type': 'object', 'required': ['t', 'tr'], 'properties': {
+        't': {'type': 'string'}, 'tr': {'type': 'string'}, 'reg': {'type': 'string'}, 'note': {'type': 'string'}}}}}}
+
+
+def ai_analyze(lines, src, progress=None):
+    """→ {'summary', 'characters': [{name, uk, gender, speech}], 'terms': [[t, tr, reg, note]], 'via'} або None."""
+    srcname = LANG_EN.get(src, 'the original language')
+    summary, chars, terms, via = [], {}, {}, ''
+    for i in range(0, len(lines), ANALYZE_STEP):
+        part = lines[i:i + ANALYZE_STEP]
+        known = ''
+        if chars:
+            known += 'Characters found so far: ' + '; '.join('%s (%s, %s)' % (c['name'], c['uk'], c['gender']) for c in chars.values()) + '\n'
+        if summary:
+            known += 'Story so far: ' + ' '.join(summary)[-600:] + '\n'
+        prompt = ('These are %s subtitles of one episode (part %d of %d), to be translated into Ukrainian.\n%s'
+                  'Return JSON with:\n'
+                  '"summary": 2-3 sentences in Ukrainian — what happens in this part, relationships, tone;\n'
+                  '"characters": every named character — "name" as in the subtitles, "uk" Ukrainian spelling '
+                  '(Japanese names by the Kovalenko system: Сакура, Сьота, Тідзуру), "gender" f/m/? (deduce from context — '
+                  'Ukrainian verb endings depend on it), "speech" in Ukrainian — how they talk (shy, rude, formal, calls X "senpai"…);\n'
+                  '"terms": up to 40 items worth a glossary — slang, swearing, sexual vocabulary, moans/interjections, Japanese '
+                  'loanwords and honorifics, idioms, recurring catchphrases; "t" exactly as in the subtitles, "tr" natural '
+                  'spoken Ukrainian in the same register (crude stays crude, no euphemisms), "reg" one of: вульгарне, розмовне, '
+                  'нейтральне, ніжне, вигук, запозичення, ім\'я; "note" short Ukrainian hint. Skip ordinary words.\n\n'
+                  'Subtitles:\n%s' % (srcname, i // ANALYZE_STEP + 1, (len(lines) - 1) // ANALYZE_STEP + 1, known, '\n'.join(part)))
+        j, name = llm_json(ANALYZE_SYSTEM, prompt, ANALYZE_SCHEMA)
+        if j is None:
+            if not via:
+                return None              # жодна мовна модель не відповіла — перекладаємо без аналізу
+            continue
+        via = via or name
+        if isinstance(j.get('summary'), str) and j['summary'].strip():
+            summary.append(j['summary'].strip()[:500])
+        for c in j.get('characters') or []:
+            if isinstance(c, dict) and str(c.get('name') or '').strip():
+                k = c['name'].strip().lower()
+                old = chars.get(k, {})
+                chars[k] = {'name': c['name'].strip()[:60], 'uk': str(c.get('uk') or old.get('uk') or c['name']).strip()[:60],
+                            'gender': c.get('gender') if c.get('gender') in ('f', 'm') else old.get('gender', '?'),
+                            'speech': str(c.get('speech') or old.get('speech') or '').strip()[:160]}
+        for t in j.get('terms') or []:
+            if isinstance(t, dict) and str(t.get('t') or '').strip() and str(t.get('tr') or '').strip():
+                terms.setdefault(t['t'].strip().lower(), [t['t'].strip(), str(t['tr']).strip(), str(t.get('reg') or '').strip(),
+                                                          str(t.get('note') or '').strip()])
+        if progress:
+            progress(min(1.0, (i + ANALYZE_STEP) / max(1, len(lines))))
+    if not via:
+        return None
+    return {'summary': ' '.join(summary)[:1500], 'characters': list(chars.values())[:40],
+            'terms': gloss_clean(terms.values()), 'via': via}
+
+
+GENDER_UK = {'f': 'жін.', 'm': 'чол.'}
+
+
+def ai_context(vid, r, lines, src, set_state):
+    """Аналіз (з кешем data/aisubs/<id>/context.json) → TR_CTX.ctx і авто-терміни; нові — в глосарій тайтлу."""
+    TR_CTX.ctx, TR_CTX.auto_items = '', []
+    if not C.cfg.get('ai_context', True):
+        return
+    path = os.path.join(C.data, 'aisubs', vid, 'context.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            ctx = json.load(f)
+    except (OSError, ValueError):
+        set_state(state='context', p=0)
+        ctx = ai_analyze(lines, src, lambda f: set_state(p=f))
+        if not ctx:
+            return
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(ctx, f, ensure_ascii=False, indent=1)
+    chars = ctx.get('characters') or []
+    auto = [[c['name'], c['uk'], "ім'я", ' · '.join(x for x in (GENDER_UK.get(c.get('gender'), ''), c.get('speech', '')) if x)]
+            for c in chars] + (ctx.get('terms') or [])
+    TR_CTX.auto_items = gloss_clean(auto)
+    sid = video_sid(r)
+    if sid:                              # у глосарій тайтлу — тільки те, чого там ще нема (і нема в загальному)
+        g, have = gloss_get(sid), {it[0].lower() for it in gloss_get(sid)['items'] + gloss_get('_')['items']}
+        new = [it for it in TR_CTX.auto_items if it[0].lower() not in have]
+        if new:
+            gloss_put(sid, g['notes'], g['items'] + new)
+    lines_ = []
+    if ctx.get('summary'):
+        lines_.append('About this episode: ' + ctx['summary'])
+    if chars:
+        lines_.append('Characters (use correct Ukrainian gender endings for speakers and addressees): ' + '; '.join(
+            '%s → %s (%s%s)' % (c['name'], c['uk'], {'f': 'female', 'm': 'male'}.get(c.get('gender'), 'gender unknown'),
+                                ', ' + c['speech'] if c.get('speech') else '') for c in chars))
+    TR_CTX.ctx = '\n'.join(lines_)
+
+
 def tr_chain():
     """[(назва, ключ)] у порядку: основний, далі решта з ключами."""
     keys = {'local': C.cfg.get('local_url'), 'gemini': C.cfg.get('gemini_key'), 'deepl': C.cfg.get('deepl_key'),
@@ -2243,10 +2389,13 @@ def ai_job(it):
     wav = os.path.join(C.data, 'aisubs', 'tmp-%s.wav' % vid)
     key = bool(tr_chain())
     TR_CTX.gloss_sids = [x for x in ('_', video_sid(r)) if x]
+    TR_CTX.ctx, TR_CTX.auto_items = '', []
+    st = lambda **kw: ai_set(vid, **kw)
     have = [f for f in (os.listdir(out) if os.path.isdir(out) else []) if f.endswith('.srt') and f != 'uk.srt']
     if have and key and not os.path.exists(os.path.join(out, 'uk.srt')):
         try:                             # розпізнане вже є (раніше не було ключа) — лише перекласти
             segs = read_srt(os.path.join(out, have[0]))
+            ai_context(vid, r, [x['t'] for x in segs], have[0][:-4], st)
             ai_set(vid, state='translate', p=0)
             uk, via = translate_uk([x['t'] for x in segs], have[0][:-4], lambda f: ai_set(vid, p=f))
             write_srt(os.path.join(out, 'uk.srt'), segs, uk)
@@ -2262,6 +2411,8 @@ def ai_job(it):
             segs = read_vtt(subs_vtt(r, src_n) or b'')
             if len(segs) < 5:
                 raise ValueError('замало реплік')
+            ai_context(vid, r, [x['t'] for x in segs], 'en', st)
+            ai_set(vid, state='translate', p=0)
             uk, via = translate_uk([x['t'] for x in segs], 'en', lambda f: ai_set(vid, p=f))
             write_srt(os.path.join(out, 'uk.srt'), segs, uk)
             SUBS_CACHE.pop(vid, None)
@@ -2323,6 +2474,7 @@ def ai_job(it):
             if not key:
                 SUBS_CACHE.pop(vid, None)
                 return ai_set(vid, state='done', p=1, err='Без перекладу: немає ключа перекладача — є субтитри мовою оригіналу')
+            ai_context(vid, r, [x['t'] for x in segs], lang, st)
             ai_set(vid, state='translate', p=0)
             uk, via = translate_uk([x['t'] for x in segs], lang, lambda f: ai_set(vid, p=f))
             write_srt(os.path.join(out, 'uk.srt'), segs, uk)
@@ -2346,7 +2498,7 @@ def ai_loop():
     with AI_LOCK:                    # після перезапуску незавершене — знову в чергу
         q = ai_queue()
         for it in q:
-            if it['state'] in ('audio', 'model', 'recog', 'translate'):
+            if it['state'] in ('audio', 'model', 'recog', 'context', 'translate'):
                 it.update(state='queued', p=0)
         ai_save_queue(q)
     while True:
@@ -2368,7 +2520,7 @@ def ai_status():
     for it in q:
         r = DB.one('SELECT title, folder FROM videos WHERE id=?', (it['id'],))
         it['title'] = r['title'] if r else '(файл зник)'
-    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs',
+    return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True),
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
@@ -2480,6 +2632,8 @@ def ai_post(d):
                 C.cfg['ai_model'] = d['model']
             if d.get('speed') in ('normal', 'max'):
                 C.cfg['ai_speed'] = d['speed']
+            if isinstance(d.get('context'), bool):
+                C.cfg['ai_context'] = d['context']
             if d.get('source') in ('subs', 'audio'):
                 C.cfg['ai_source'] = d['source']
         save_config()
@@ -3423,7 +3577,7 @@ DEFAULTS = {
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
     'local_url': '', 'local_key': '', 'local_model': '',
-    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs',
+    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True,
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},
