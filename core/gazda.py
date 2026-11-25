@@ -17,6 +17,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import socket
 import socketserver
 import subprocess
@@ -35,6 +36,8 @@ SERVICES = {'vidbox', 'hata', 'hata-screen'}
 NAME_RE = re.compile(r'^[a-z0-9][a-z0-9_-]{0,31}$')
 UUID_RE = re.compile(r'^[A-Za-z0-9-]{4,64}$')
 LOCK = threading.Lock()
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+HEALTH = None          # сховище ТО (core/health.py), запускається в serve()
 
 
 def run(cmd, timeout=60, check=False):
@@ -443,10 +446,29 @@ JOURNAL_UNITS = ('hata', 'vidbox', 'gazda', 'hata-screen')
 
 
 def do_journal(a):
-    """Останні рядки журналу служб Hata — для блоку «журнал» у панелі."""
-    n = min(max(int(a.get('n') or 14), 1), 100)
+    """Останні рядки журналу служб Hata й події ТО (диски, USB, світло, інтернет…) — для блоку «журнал» у панелі.
+    src: '' — усе; назва служби — лише її; 'події' — лише події ТО."""
+    n = min(max(int(a.get('n') or 14), 1), 300)
+    src = a.get('src') or ''
+    if src and src not in JOURNAL_UNITS and src != 'події':
+        raise Fail('Невідоме джерело журналу')
+    lines = [] if src == 'події' else journal_lines(n, [src] if src else JOURNAL_UNITS)
+    if HEALTH is not None and src in ('', 'події'):
+        try:
+            import health
+            HEALTH.flush()
+            evs = health.events(HEALTH, '1y', None, n)
+            lines = [l for l in lines if not (l['unit'] == 'gazda' and 'заснув після' in l['msg'])]
+            lines += [{'t': e['ts'], 'unit': 'події', 'msg': e['text'], 'lvl': e['lvl'], 'kind': e['kind']} for e in evs]
+        except Exception as e:
+            print('gazda: події ТО для журналу:', repr(e), flush=True)
+    lines.sort(key=lambda l: l['t'])
+    return {'lines': lines[-n:]}
+
+
+def journal_lines(n, units):
     cmd = ['journalctl', '--no-pager', '-o', 'json', '-n', str(n)]
-    for u in JOURNAL_UNITS:
+    for u in units:
         cmd += ['-u', u]
     lines = []
     for raw in run(cmd, 20).stdout.splitlines():
@@ -462,8 +484,8 @@ def do_journal(a):
             unit = j.get('UNIT') or unit
         unit = unit.replace('.service', '')
         lines.append({'t': int(j.get('__REALTIME_TIMESTAMP', 0)) // 1000000, 'unit': unit,
-                      'msg': str(msg or '')[:300]})
-    return {'lines': lines}
+                      'msg': str(msg or '')[:1000], 'lvl': 'red' if str(j.get('PRIORITY', '6')) <= '3' else 'yel' if str(j.get('PRIORITY', '6')) == '4' else ''})
+    return lines
 
 
 # ───────────────────────── пароль (лише з термінала) ─────────────────────────
@@ -569,6 +591,7 @@ SLEEP_CHOICES = (-1, 0, 10, 20, 30, 60, 120)
 KEEPALIVE_EVERY = 50
 TUNED = {}        # sda → (серійник, чи прийняв диск команду) — кому вже вимкнули власний таймер
 PINGED = {}       # sda → коли востаннє «торкались»
+TOUCHED = {}      # sda → скільки секторів прочитали ми самі (ТО не рахує це чужою роботою)
 LC_HIST = {}      # пристрій → [(час, паркувань головок)] за останні ~2 год — щоб бачити, чи паркування вщухло
 
 
@@ -752,6 +775,7 @@ def disk_care(now):
             PINGED[kname] = now
             try:
                 touch_disk(dev, d['size'])
+                TOUCHED[kname] = TOUCHED.get(kname, 0) + 8
                 st[0] = disk_io(kname)            # своє читання за роботу не рахуємо
                 if (SMART.get(dev) or {}).get('state') == 'standby':
                     SMART[dev]['state'] = 'active'
@@ -819,6 +843,27 @@ def do_disk_health(a):
 
 
 KEEPER_SAID = {}
+
+
+def do_health(a):
+    """ТО: зведення, графіки, події, таблиця за період, пороги, експорт (core/health.py)."""
+    import health
+    if HEALTH is None:
+        raise Fail('ТО ще запускається — спробуй за хвилину')
+    op = a.get('op') or 'summary'
+    if op == 'set_limits':
+        with LOCK:
+            st = load_state()
+            if a.get('reset'):
+                st.pop('health_limits', None)
+            else:
+                st['health_limits'] = dict(st.get('health_limits') or {}, **health.clean_limits(a.get('limits')))
+            save_state(st)
+        op = 'limits'
+    try:
+        return health.handle(HEALTH, dict(a, op=op), sys.modules[__name__])
+    except ValueError as e:
+        raise Fail(str(e))
 
 
 # Режим продуктивності на час субтитрів ШІ: VidBox у режимі «максимальна швидкість» кладе файл з PID розпізнавання;
@@ -1194,6 +1239,7 @@ ACTIONS = {
     'static_ip': do_static_ip,
     'share': do_share,
     'disk_health': do_disk_health,
+    'health': do_health,
 }
 
 
@@ -1257,6 +1303,19 @@ def serve():
     if st.get('battery_limit'):
         apply_battery_limit(st['battery_limit'])
     threading.Thread(target=keeper, daemon=True).start()
+    global HEALTH
+    try:
+        import health
+        HEALTH = health.start(sys.modules[__name__])
+
+        def bye(*_):
+            try:
+                health.stop()          # дописати буфер і позначити, що вимкнулись як слід
+            finally:
+                os._exit(0)
+        signal.signal(signal.SIGTERM, bye)
+    except Exception as e:     # без ТО gazda однаково має працювати
+        print('gazda: ТО не запустилось:', repr(e), flush=True)
     srv = Server(SOCK, Handler)
     gid = USER_IDS()[1]
     os.chown(SOCK, 0, gid)

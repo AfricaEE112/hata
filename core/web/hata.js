@@ -317,13 +317,14 @@ const SVC = {vidbox: 'відео й аніме', hata: 'ця панель', 'hat
 const HIST = {cpu: [], net: [], lastNet: null};
 let panelTimer, liveTimer, LAST = null, UPD = null;
 
-function stopPanel() { clearTimeout(panelTimer); clearTimeout(liveTimer); clearTimeout(houseTimer); clearTimeout(disksTimer); }
+function stopPanel() { clearTimeout(panelTimer); clearTimeout(liveTimer); clearTimeout(houseTimer); clearTimeout(disksTimer); clearTimeout(toTimer); }
 
 function panelTop(s) {
   bar.hidden = false;
   const b = s.battery;
   bar.innerHTML = `${who()}<nav aria-label="Розділи">${SECTIONS.map(([k, l, id]) => `<a href="#${id}" data-k="${k}"><span>${k}</span>${l}</a>`).join('')}` +
     `<a href="#files" data-k="7" data-files><span>7</span>файли</a><a href="#house" data-k="8" data-house><span>8</span>будинок</a>` +
+    `<a href="#to" data-k="9" data-to><span>9</span>то<i class="tdot" id="toDot" hidden></i></a>` +
     `<a class="ext" href="${esc(vidboxUrl(s))}">VidBox ↗</a></nav><span class="sp"></span>
     <dl class="stats"><div><dt>cpu</dt><dd id="tCpu">—</dd></div><div><dt>ram</dt><dd id="tRam">—</dd></div><div><dt>t°</dt><dd id="tTemp">—</dd></div>` +
     (b ? `<div><dt>бат</dt><dd style="display:flex;gap:6px;align-items:center">${segs(b.pct, 10).replace('class="segs ', 'style="width:52px;flex:none" class="segs ')}${b.pct}%</dd></div>` : '') +
@@ -338,6 +339,7 @@ async function goSection(k) {
   if (k === '2') return disksPage();
   if (k === '7') return filesPage();
   if (k === '8') return housePage();
+  if (k === '9') return toPage();
   const s = SECTIONS.find(x => x[0] === k);
   if (!s) return;
   if (!$('#sys')) await panel();
@@ -369,7 +371,7 @@ async function panel(soft) {
     <dl class="kv"><dt>хост</dt><dd>${esc(s.host)}${(s.ips || []).length ? ' · ' + s.ips.map(esc).join(', ') : ''}</dd>
       <dt>працює</dt><dd>${uptime(s.uptime)}</dd><dt>система</dt><dd>${esc(s.os)} · Хата ${esc(ver)}</dd></dl>
     <div class="gh"><span>${esc(((s.cpu_model || '').match(/i[3579]-\w+|Ryzen \d+ \w+|Celeron \w+|Pentium \w+|N\d{3,4}/) || ['cpu'])[0])} · ${s.cpus} потоків</span><b id="cpuNow">—</b></div><div class="graph" id="cpuG" aria-hidden="true"></div>
-    <div class="meters" style="margin-top:14px" id="mem"></div>`;
+    <div class="meters" style="margin-top:14px" id="mem"></div><p class="to-line" id="toLine"></p>`;
 
   const disks = [{name: 'система', path: '/', mounted: true, ...(s.root || {})}].concat(s.disks || []);
   const dsk = `<div class="disks"><div class="drow h"><span>диск</span><span>заповнено</span><span style="text-align:right">зайнято</span></div>` +
@@ -409,7 +411,7 @@ async function panel(soft) {
   if (soft) {
     const swap = (id, html) => { const b = $(`#${id} .wbody`); if (b && b.dataset.html !== html) { b.innerHTML = html; b.dataset.html = html; } };
     swap('disks', dsk); swap('svc', svc); swap('pwr', pwr);
-    bindPanel(); netInfo(); journal(); live();
+    bindPanel(); netInfo(); journal(); live(); toWarn();
     panelTimer = setTimeout(nextPanel, 30000);
     return;
   }
@@ -442,6 +444,7 @@ async function panel(soft) {
   live();
   journal();
   diskWarn();
+  toWarn();
   if (!UPD) checkUpdates();
   panelTimer = setTimeout(nextPanel, 30000);
 }
@@ -641,17 +644,35 @@ function drawLive(l) {
     (l.temp != null ? `<span>t°</span>${segs(Math.min(100, l.temp))}<span class="v">${Math.round(l.temp)} °C</span>` : '');
 }
 
+// Журнал: служби Хати й події ТО (диски, USB, світло, інтернет). Фільтр за джерелом, дата в кожному рядку, довгі рядки переносяться.
+const LOG = {src: localStorage.getItem('hata_logsrc') || '', n: 40};
+const LOGSRC = [['', 'усе'], ['події', 'події'], ['gazda', 'gazda'], ['hata', 'hata'], ['vidbox', 'vidbox'], ['hata-screen', 'екран']];
+const logTime = t => { const d = new Date(t * 1000), now = new Date();
+  const day = d.toDateString() === now.toDateString() ? '' : d.toLocaleDateString('uk-UA', {day: '2-digit', month: '2-digit'}) + ' ';
+  return day + d.toLocaleTimeString('uk-UA'); };
 async function journal() {
-  const r = await api('/api/journal');
+  const r = await api(`/api/journal?n=${LOG.n}&src=${encodeURIComponent(LOG.src)}`);
   if (!$('#log')) return;
   const lines = (r.lines || []).slice().reverse();
-  const col = u => u === 'gazda' ? 'yel' : u === 'hata' ? 'vio' : u === 'vidbox' ? 'acc' : 'dim';
+  const col = u => u === 'gazda' ? 'yel' : u === 'hata' ? 'vio' : u === 'vidbox' ? 'acc' : u === 'події' ? 'fg' : 'dim';
   const box = $('#log .wbody');
-  const html = lines.length ? `<ol class="log">${lines.map(l => `<li><span class="t">${new Date(l.t * 1000).toLocaleTimeString('uk-UA')}</span>` +
-    `<span class="u" style="color:var(--${col(l.unit)})">${esc(l.unit)}</span><span>${esc(l.msg)}</span></li>`).join('')}</ol>`
-    : `<p class="note" style="margin:0">${esc(r.error || 'Журнал порожній.')}</p>`;
   if (r.ok === false && box.dataset.html) return;    // на мить не відповів — лишаємо, що було
-  if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
+  if (!$('#logBar')) {
+    box.innerHTML = `<div class="logbar" id="logBar" role="group" aria-label="Що показувати">${LOGSRC.map(([k, l]) => `<button class="chip${LOG.src === k ? ' on' : ''}" data-logsrc="${esc(k)}">${l}</button>`).join('')}</div><div id="logList"></div>`;
+    $$('[data-logsrc]').forEach(b => b.onclick = () => {
+      LOG.src = b.dataset.logsrc; LOG.n = 40; localStorage.setItem('hata_logsrc', LOG.src);
+      $$('[data-logsrc]').forEach(x => x.classList.toggle('on', x === b)); delete $('#logList').dataset.html; journal();
+    });
+  }
+  const html = lines.length ? `<ol class="log wrapl">${lines.map(l => `<li class="${l.lvl ? 'l-' + l.lvl : ''}"><span class="t">${logTime(l.t)}</span>` +
+    `<span class="u" style="color:var(--${col(l.unit)})">${esc(l.unit)}</span><span class="m">${esc(l.msg)}</span></li>`).join('')}</ol>` +
+    (lines.length >= LOG.n && LOG.n < 300 ? `<div class="acts" style="margin-top:10px"><button class="btn ghost" id="logMore">Показати більше</button></div>` : '')
+    : `<p class="note" style="margin:0">${esc(r.error || (LOG.src === 'події' ? 'Подій ще немає — ТО збирає їх щохвилини.' : 'Журнал порожній.'))}</p>`;
+  const list = $('#logList');
+  if (list.dataset.html !== html) {
+    list.innerHTML = html; list.dataset.html = html;
+    if ($('#logMore')) $('#logMore').onclick = () => { LOG.n = LOG.n < 120 ? 120 : 300; journal(); };
+  }
 }
 
 // Оновлення: що нового на GitHub, і кнопка, яка оновлює з відкатом.
@@ -973,6 +994,7 @@ function diskCard(d, choices) {
     </div>
     ${usage ? `<div class="meters" style="margin-top:14px">${usage}</div>` : ''}
     ${rows.length ? `<dl class="kv dk-kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd class="${bad(k) ? 'bad' : ''}">${esc(v)}</dd>`).join('')}</dl>` : ''}
+    ${dayLine(d)}
     ${d.sleepable ? `<p class="note" style="margin-top:16px">засинати без роботи через</p>
       <div class="seg dk-sleep" role="group" aria-label="Засинати без роботи">${choices.map(m => `<button data-sleep="${m}" data-dev="${esc(d.dev)}" class="${d.sleep === m ? 'on' : ''}">${minsText(m)}</button>`).join('')}</div>
       <p class="note">${sleepNote(d)}</p>` : ''}
@@ -980,6 +1002,20 @@ function diskCard(d, choices) {
       ${d.names.filter(n => n !== 'система').map(n => `<button class="btn ghost" data-fopen="${esc(n)}">Файли: ${esc(n)}</button>`).join('')}
       <span class="sp"></span><span class="note" style="margin:0">${s.at ? 'перевірено ' + agoText(s.at) : ''}</span></div>`,
     {c: lvl === 'red' ? 'red' : lvl === 'yel' ? 'yel' : 'acc', cls: 'dk', badge: lvl === 'red' ? 'увага' : ''});
+}
+
+// Підсумок ТО за добу для картки диска: розкрутки, паркування, хто будив, підключення.
+function dayLine(d) {
+  const id = (d.serial || '').replace(/[^A-Za-z0-9]/g, '').slice(-14) || (d.dev || '').replace('/dev/', '');
+  const r = ((DK.to || {}).disks || []).find(x => x.id === id);
+  if (!r) return '';
+  const lc = (r.c.load_cycles || {}).d, bits = [];
+  if (d.rot && !d.system) bits.push(`прокидався ${r.wakes} ${razy(r.wakes)}`, `не спав ${r.awake != null ? r.awake.toString().replace('.', ',') : '—'}% часу`);
+  if (lc != null) bits.push(`паркувань +${lc.toLocaleString('uk-UA')}`);
+  if ((r.wokeBy || []).length && r.wokeBy[0].who) bits.push(`будив найчастіше: ${r.wokeBy[0].who}`);
+  if (r.usbEvents) bits.push(`збоїв USB: ${r.usbEvents}`);
+  const br = r.bridge ? `<br>підключення: ${esc(r.bridge.name || 'USB')} · ${r.bridge.speed >= 5000 ? 'USB 3' : r.bridge.speed ? '<span class="bad">USB 2.0 — повільно</span>' : 'USB'}` : '';
+  return bits.length || br ? `<p class="note dk-day">за добу: ${esc(bits.join(' · '))}${br} <button class="linkbtn" data-goto-to>у ТО</button></p>` : '';
 }
 
 function backupHTML() {
@@ -1021,9 +1057,9 @@ async function disksPage() {
     app.innerHTML = `<div class="wrap wide">${prompt('~/диски', 'smartctl -a /dev/sd*')}<div id="dkBody"><p class="note"><span class="spin"></span></p></div></div>`;
     window.scrollTo(0, 0);
   }
-  const [h, b] = await Promise.all([api('/api/disks/health'), api('/api/backup')]);
+  const [h, b, t] = await Promise.all([api('/api/disks/health'), api('/api/backup'), api('/api/health?op=table&range=24h')]);
   if (!$('#dkBody')) return;
-  DK.health = h; DK.bk = b;
+  DK.health = h; DK.bk = b; DK.to = t.ok === false ? null : t;
   drawDisks();
   clearTimeout(disksTimer);
   disksTimer = setTimeout(() => { if ($('#dkBody') && !typing() && !DK.picking) disksPage(); else if ($('#dkBody')) disksTimer = setTimeout(disksPage, 30000); },
@@ -1057,6 +1093,7 @@ function bindDisks() {
   });
   $$('[data-fopen]').forEach(b => b.onclick = () => filesPage((DK.bk && DK.bk.root || '/srv/disks') + '/' + b.dataset.fopen));
   $$('[data-fpath]').forEach(b => b.onclick = () => filesPage(b.dataset.fpath));
+  $$('[data-goto-to]').forEach(b => b.onclick = () => goSection('9'));
   $('#dkFind').onclick = () => openFromPanel(2);
   const save = async d => { const r = await api('/api/backup', {op: 'save', ...d}); if (r.ok === false) toast(r.error); await disksPage(); return r; };
   $('#bkTarget').onchange = e => save({target: e.target.value}).then(r => r.ok && toast(e.target.value ? `Копії йтимуть на «${e.target.value}»` : 'Копії вимкнено'));
@@ -1294,10 +1331,352 @@ function bindHouseKey() {
   };
 }
 
-// Клавіші 1–6 — до розділу панелі, як у btop.
+// ───────────────────────── ТО: стан сервера в часі ─────────────────────────
+// gazda щохвилини збирає датчики ноутбука, диски, мережу, живлення й події (core/health.py).
+// Тут: що погіршується, графіки, таблиця за період (по кожному диску й системі), хто будить диски, події, пороги, експорт.
+const TO = {range: localStorage.getItem('hata_torange') || '7d', group: localStorage.getItem('hata_togroup') || 'heat', evf: 'imp',
+  sum: null, table: null, keys: null, ser: null, ev: null, lim: null, at: 0, showLim: false};
+let toTimer;
+const TRANGES = [['6h', '6 год'], ['24h', 'доба'], ['7d', 'тиждень'], ['30d', 'місяць'], ['90d', '3 міс'], ['1y', 'рік']];
+const trName = () => (TRANGES.find(r => r[0] === TO.range) || ['', ''])[1];
+const nf = (v, d = 0) => v == null ? '—' : Number(v).toLocaleString('uk-UA', {maximumFractionDigits: d, minimumFractionDigits: 0});
+const tdur = s => !s ? '0' : s < 90 ? `${Math.round(s)} с` : s < 5400 ? `${Math.round(s / 60)} хв` : s < 172800 ? `${Math.floor(s / 3600)} год ${Math.round(s % 3600 / 60)} хв` : `${Math.floor(s / 86400)} дн ${Math.round(s % 86400 / 3600)} год`;
+const tdate = t => new Date(t * 1000).toLocaleString('uk-UA', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'});
+const lvlCol = l => ({red: 'red', yel: 'yel', acc: 'acc', vio: 'vio'})[l] || 'dim';
+
+// Назви й одиниці показників
+const TSHORT = {acpi: 'плата', nvme: 'SSD', wifi: 'Wi-Fi', pch: 'чипсет', bat: 'батарея', gpu: 'відеокарта', cpu: 'процесор', drive: 'диск'};
+function tName(k) {
+  if (k === 'cpu.temp') return 'процесор';
+  if (k.startsWith('t.')) { const [, chip, lab] = k.split('.'); return (TSHORT[chip] || chip) + (lab ? ' · ' + lab : ''); }
+  if (k.startsWith('fan.')) { const fans = ((TO.keys && TO.keys.keys) || []).filter(x => x.startsWith('fan.')); return fans.length > 1 ? 'кулер ' + k.slice(4).replace(/^asus/, '') : 'кулер'; }
+  if (k.startsWith('disk.')) { const [, id, m] = k.split('.'); const d = (TO.keys && TO.keys.disks || {})[id] || {}; return (d.names || [id]).join(' · ') + ({temp: '', awake: '', busy: '', io: '', load_cycles: '', used: ''}[m] ?? ' ' + m); }
+  return ({'cpu.load': 'процесор', 'mem.used': 'пам’ять', 'swap.used': 'swap', 'cpu.w': 'процесор', 'bat.w': 'з батареї', 'cpu.freq': 'частота',
+    'bat.pct': 'заряд', 'bat.health': 'ємність від заводської', 'net.rx': '↓ отримано', 'net.tx': '↑ відправлено', 'net.ping': 'пінг', 'wifi.signal': 'сигнал Wi-Fi',
+    'vb.queue': 'у черзі', 'log.err': 'помилки', 'boost': 'режим продуктивності'})[k] || k;
+}
+const tUnit = k => /temp$|^t\./.test(k) ? '°C' : k.startsWith('fan.') ? 'об/хв' : /^(cpu\.load|mem\.used|swap\.used|bat\.pct|bat\.health)$|\.(busy|used|awake)$/.test(k) ? '%'
+  : /\.w$/.test(k) ? 'Вт' : k === 'cpu.freq' ? 'МГц' : k === 'net.ping' ? 'мс' : k === 'wifi.signal' ? 'дБм' : /^net\.(rx|tx)$|\.io$/.test(k) ? 'Б/с' : '';
+const tFmt = (v, k) => v == null ? '—' : /^net\.(rx|tx)$|\.io$/.test(k) ? short(v) + '/с' : Math.abs(v) >= 100 || k.startsWith('fan.') ? nf(v) : nf(v, 1);
+
+// Групи графіків. Для кожного диска — окремі: температура, сон, паркування головок, навантаження.
+function toGroups() {
+  const ks = (TO.keys && TO.keys.keys) || [], has = k => ks.includes(k), pre = p => ks.filter(k => k.startsWith(p));
+  const g = [
+    ['heat', 'тепло', ['cpu.temp', ...pre('t.')]], ['fans', 'кулери', pre('fan.')], ['load', 'навантаження', ['cpu.load', 'mem.used', 'swap.used'].filter(has)],
+    ['watt', 'споживання', ['cpu.w', 'bat.w'].filter(has)], ['freq', 'частота', ['cpu.freq'].filter(has)], ['bat', 'батарея', ['bat.pct', 'bat.health'].filter(has)],
+    ['net', 'трафік', ['net.rx', 'net.tx'].filter(has)], ['ping', 'пінг', ['net.ping'].filter(has)], ['wifi', 'Wi-Fi', ['wifi.signal'].filter(has)]];
+  const dm = (TO.keys && TO.keys.disks) || {};
+  const dids = Object.keys(dm).filter(id => ks.some(k => k.startsWith(`disk.${id}.`))).sort((a, b) => (dm[a].system ? 1 : 0) - (dm[b].system ? 1 : 0));
+  if (dids.length) g.push(['dtemp', 't° дисків', dids.map(id => `disk.${id}.temp`).filter(has)]);
+  const rot = dids.filter(id => dm[id].rot && !dm[id].system);
+  if (rot.length) {
+    g.push(['dawake', 'диски не сплять', rot.map(id => `disk.${id}.awake`).filter(has)]);
+    g.push(['dpark', 'паркування головок', rot.map(id => `disk.${id}.load_cycles`).filter(has)]);
+  }
+  if (dids.length) g.push(['dbusy', 'зайнятість дисків', dids.map(id => `disk.${id}.busy`).filter(has)]);
+  if (has('vb.queue')) g.push(['vb', 'субтитри ШІ', ['vb.queue']]);
+  return g.filter(x => x[2].length);
+}
+
+async function toWarn() {
+  const r = await api('/api/health?op=summary');
+  const line = $('#toLine'), dot = $('#toDot');
+  if (r.ok === false || !r.items) { if (line) line.innerHTML = ''; return; }
+  const bad = r.items.filter(i => i.lvl === 'red' || i.lvl === 'yel');
+  if (dot) { dot.hidden = !bad.length; dot.style.background = `var(--${r.level === 'red' ? 'red' : 'yel'})`; }
+  if (line) line.innerHTML = bad.length ? `<span style="color:var(--${lvlCol(r.level)})">▲ ТО: ${bad.length} ${pl(bad.length, 'зауваження', 'зауваження', 'зауважень')}</span> — ${esc(bad[0].text)} <button class="linkbtn" data-goto>детальніше</button>`
+    : `<span style="color:var(--acc)">✓ ТО: усе стабільно</span> <button class="linkbtn" data-goto>графіки й таблиця</button>`;
+  line?.querySelector('[data-goto]')?.addEventListener('click', () => goSection('9'));
+}
+
+async function toPage() {
+  stopPanel(); fromPanel = false;
+  if (!$('.top nav a[data-house]')) { bar.hidden = false; if (LAST) panelTop(LAST); }
+  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === '9'));
+  if (!$('#toBody')) {
+    app.innerHTML = `<div class="wrap wide">${prompt('~/то', 'hata health --since ' + TO.range)}<div id="toBody"><p class="note"><span class="spin"></span> Збираю дані…</p></div></div>`;
+    window.scrollTo(0, 0);
+  }
+  await toLoad(true);
+}
+
+async function toLoad(all) {
+  clearTimeout(toTimer);
+  if (!$('#toBody')) return;
+  if (!document.hidden) {
+    const q = op => api(`/api/health?op=${op}&range=${TO.range}`);
+    const [sum, table, keys, ev, lim] = await Promise.all([q('summary'), q('table'), all || !TO.keys ? q('keys') : null, q('events&limit=3000'), TO.lim ? null : q('limits')]);
+    if (!$('#toBody')) return;
+    if (sum.ok === false) { $('#toBody').innerHTML = win('то', `<p class="err">${esc(sum.error)}</p>`, {c: 'red'}); toTimer = setTimeout(() => toLoad(true), 30000); return; }
+    TO.sum = sum; TO.table = table; TO.ev = ev; if (keys) TO.keys = keys; if (lim) TO.lim = lim;
+    const groups = toGroups();
+    if (!groups.find(g => g[0] === TO.group) && groups.length) TO.group = groups[0][0];
+    await toSeries();
+    drawTO();
+  }
+  toTimer = setTimeout(() => toLoad(false), 60000);
+}
+
+async function toSeries() {
+  const g = toGroups().find(x => x[0] === TO.group);
+  TO.ser = g ? await api(`/api/health?op=series&range=${TO.range}&keys=${encodeURIComponent(g[2].join(','))}`) : null;
+}
+
+function drawTO() {
+  const box = $('#toBody');
+  if (!box) return;
+  if (!$('#toSum')) {
+    box.innerHTML = `<div class="cols">${win('стан', '', {n: '⁹', id: 'toSum', cls: 'w2'})}${win('період', '', {c: 'vio', id: 'toCtl'})}</div>
+      ${win('графіки', '<div id="toChips"></div><div class="hchart" id="toChart"></div><div class="hlegend" id="toLeg"></div>', {c: 'acc', id: 'toGraph'})}
+      ${win('диски за період', '', {c: 'yel', id: 'toDisks'})}
+      <div class="cols">${win('система за період', '', {c: 'vio', id: 'toSys', cls: 'w2'})}${win('події', '', {c: 'red', id: 'toEv'})}</div>
+      <div id="toLimBox"></div>`;
+  }
+  const set = (sel, html, bind) => { const b = $(sel); if (b && b.dataset.html !== html) { b.innerHTML = html; b.dataset.html = html; bind && bind(); } };
+  set('#toSum .wbody', toSumHTML());
+  set('#toCtl .wbody', toCtlHTML(), bindToCtl);
+  set('#toChips', toChipsHTML(), bindToChips);
+  toChart();
+  set('#toDisks .wbody', toDisksHTML());
+  set('#toSys .wbody', toSysHTML());
+  set('#toEv .wbody', toEvHTML(), bindToEv);
+  set('#toLimBox', TO.showLim ? win('пороги тривоги', toLimHTML(), {c: 'dim', id: 'toLim'}) : '', bindToLim);
+  const dot = $('#toDot'), bad = (TO.sum.items || []).filter(i => i.lvl === 'red' || i.lvl === 'yel');
+  if (dot) { dot.hidden = !bad.length; dot.style.background = `var(--${TO.sum.level === 'red' ? 'red' : 'yel'})`; }
+}
+
+function toSumHTML() {
+  const s = TO.sum, items = s.items || [];
+  const bad = items.filter(i => i.lvl !== 'dim'), info = items.filter(i => i.lvl === 'dim');
+  const head = !bad.length ? `<p class="to-verdict acc">Усе стабільно — нічого не погіршується.</p>`
+    : `<p class="to-verdict ${s.level === 'red' ? 'red' : 'yel'}">${s.level === 'red' ? 'Потрібна увага' : 'Варто стежити'}: ${bad.length} ${pl(bad.length, 'зауваження', 'зауваження', 'зауважень')}</p>`;
+  const list = items.length ? `<ul class="to-items">${items.map(i => `<li class="${lvlCol(i.lvl)}"><span aria-hidden="true">${i.lvl === 'dim' ? '·' : '▲'}</span>${esc(i.text)}</li>`).join('')}</ul>` : '';
+  const sys = (TO.table || {}).system || {}, t = sys['cpu.temp'] || {};
+  const facts = [
+    t.avg != null && ['процесор', `${nf(t.avg)}° у сер., до ${nf(t.max)}°`],
+    sys.outages && ['світло', sys.outages.n ? `${sys.outages.n} ${pl(sys.outages.n, 'відключення', 'відключення', 'відключень')}, разом ${tdur(sys.outages.d)}` : 'без відключень'],
+    sys.inet && ['інтернет', sys.inet.n ? `зникав ${sys.inet.n} ${razy(sys.inet.n)}, разом ${tdur(sys.inet.d)}` : 'був весь час'],
+    sys.online != null && ['працював', `${nf(sys.online, 1)}% часу`],
+  ].filter(Boolean);
+  const since = s.since ? `Дані збираються з ${new Date(s.since * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'long'})}.` : '';
+  return head + list + (facts.length ? `<dl class="kv" style="margin-top:14px">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : '') +
+    `<p class="note">${since} Цифри в «системі» й «дисках» — за ${trName()}.</p>`;
+}
+
+function toCtlHTML() {
+  return `<div class="seg to-range" role="group" aria-label="Період">${TRANGES.map(([k, l]) => `<button data-tr="${k}" class="${TO.range === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <p class="note">Графіки, таблиці й події — за вибраний період. Сирі заміри щохвилини зберігаються 8 днів, далі — по годинах (мін/сер/макс) і по добах.</p>
+    <div class="acts"><a class="btn" href="/api/health/export?range=${TO.range}&fmt=csv" download>Таблиця .csv</a><a class="btn ghost" href="/api/health/export?range=${TO.range}&fmt=json" download>Усе .json</a>
+      <button class="btn ghost" id="toLimBtn">${TO.showLim ? 'Сховати пороги' : 'Пороги'}</button></div>
+    <p class="note">CSV відкривається в Excel чи Google Таблицях; JSON зручно скинути Claude на розбір.</p>`;
+}
+function bindToCtl() {
+  $$('[data-tr]').forEach(b => b.onclick = async () => {
+    TO.range = b.dataset.tr; localStorage.setItem('hata_torange', TO.range);
+    $$('[data-tr]').forEach(x => x.classList.toggle('on', x === b));
+    const p = $('.prompt .c'); if (p) p.textContent = 'hata health --since ' + TO.range;
+    await toLoad(true);
+  });
+  $('#toLimBtn').onclick = () => { TO.showLim = !TO.showLim; drawTO(); if (TO.showLim) $('#toLim')?.scrollIntoView({behavior: 'smooth', block: 'start'}); };
+}
+
+function toChipsHTML() {
+  return `<div class="hbar"><div class="hchips">${toGroups().map(([id, l]) => `<button class="chip${TO.group === id ? ' on' : ''}" data-tg="${id}">${esc(l)}</button>`).join('')}</div></div>`;
+}
+function bindToChips() {
+  $$('[data-tg]').forEach(b => b.onclick = async () => {
+    TO.group = b.dataset.tg; localStorage.setItem('hata_togroup', TO.group);
+    $$('[data-tg]').forEach(x => x.classList.toggle('on', x === b));
+    await toSeries(); toChart();
+  });
+}
+
+// Графік ТО: лінії з тінню мін–макс (або стовпчики для лічильників — паркувань за проміжок), позначки подій.
+const TCOL = ['acc', 'yel', 'vio', 'red', 'fg', 'dim'];
+function toChart() {
+  const el = $('#toChart'), S = TO.ser;
+  if (!el) return;
+  if (!S || S.ok === false || !S.series) { el.innerHTML = `<p class="note" style="margin:0;padding:40px 0;text-align:center">${esc(S && S.error || 'Немає даних.')}</p>`; $('#toLeg').innerHTML = ''; return; }
+  const keys = Object.keys(S.series), from = S.from, to = S.to, W = 1000, H = 300;
+  const pct = k => /\.awake$/.test(k) ? 100 : 1;
+  const pts = k => (S.series[k].points || []).map(p => p.map((v, i) => i && v != null ? v * pct(k) : v));
+  const sig = JSON.stringify([TO.range, TO.group, keys.map(k => (S.series[k].points || []).length), to - to % 60, (TO.ev.events || []).length]);
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  const any = keys.some(k => (S.series[k].points || []).length);
+  if (!any) { el.innerHTML = `<p class="note" style="margin:0;padding:40px 0;text-align:center">За ${trName()} замірів немає — ТО щойно почало збирати дані.</p>`; $('#toLeg').innerHTML = ''; return; }
+  const bars = keys.every(k => S.series[k].counter);
+  let lo = Infinity, hi = -Infinity;
+  for (const k of keys) for (const p of pts(k)) { lo = Math.min(lo, p[2] ?? p[1]); hi = Math.max(hi, p[3] ?? p[1]); }
+  if (bars || /awake|busy|load|used|pct|health/.test(keys[0])) lo = Math.min(lo, 0);
+  if (/awake/.test(keys[0])) hi = 100;
+  const span0 = hi - lo, padY = Math.max(Math.abs(hi) * 0.04 || 1, span0 * 0.1);
+  if (!bars && !/awake/.test(keys[0])) { hi += padY; if (lo !== 0) lo -= padY; }
+  if (hi === lo) hi = lo + 1;
+  const raw = (hi - lo) / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))), step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(x => x >= raw);
+  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+  const X = t => (t - from) / (to - from) * W, Y = v => H - (v - lo) / (hi - lo) * H;
+  const gapMax = Math.max(180, S.step * 2.5);
+  const path = p => { let d = '', prev = null; for (const q of p) { d += (prev && q[0] - prev > gapMax ? ' M' : d ? ' L' : 'M') + X(q[0]).toFixed(1) + ' ' + Y(q[1]).toFixed(1); prev = q[0]; } return d; };
+  const band = p => p.length && p[0].length > 2 ? 'M' + p.map(q => `${X(q[0]).toFixed(1)} ${Y(q[3]).toFixed(1)}`).join(' L') + ' L' + p.slice().reverse().map(q => `${X(q[0]).toFixed(1)} ${Y(q[2]).toFixed(1)}`).join(' L') + ' Z' : '';
+  const bw = Math.max(1.5, S.step / (to - from) * W * 0.8 / keys.length);
+  const series = keys.map((k, i) => {
+    const p = pts(k), c = TCOL[i % TCOL.length];
+    if (bars) return p.map(q => `<rect x="${(X(q[0]) + i * bw).toFixed(1)}" y="${Y(q[1]).toFixed(1)}" width="${bw.toFixed(1)}" height="${(Y(lo) - Y(q[1])).toFixed(1)}" class="tbar" style="--c:var(--${c})"/>`).join('');
+    return `<path d="${band(p)}" class="hband" style="--c:var(--${c})"/><path d="${path(p)}" class="hline" style="--c:var(--${c})"/>`;
+  }).join('');
+  // події: відключення світла й інтернету — заштриховані проміжки, режим продуктивності — тонована смуга, збої — червоні риски
+  const evs = (TO.ev.events || []).slice().reverse();
+  const spans = [];
+  const pair = (a, b, kind) => { let open = null; for (const e of evs) { if (e.kind === a) open = e.ts; else if (e.kind === b) { const st = open ?? (e.dur ? e.ts - e.dur : null); if (st != null) spans.push([st, e.ts, kind]); open = null; } } if (open != null) spans.push([open, to, kind]); };
+  pair('ac_off', 'ac_on', 'power'); pair('inet_down', 'inet_up', 'inet'); pair('boost_on', 'boost_off', 'boost');
+  const rects = spans.filter(s => s[1] > from).map(([a, b, kind]) => { const x1 = X(Math.max(from, a)), x2 = X(Math.min(to, b));
+    return `<rect x="${x1.toFixed(1)}" y="0" width="${Math.max(2, x2 - x1).toFixed(1)}" height="${H}" ${kind === 'boost' ? 'class="tboost"' : `fill="url(#h-${kind})"`}><title>${kind === 'power' ? 'без світла' : kind === 'inet' ? 'без інтернету' : 'режим продуктивності'}: ${tdate(a)} — ${tdate(b)} (${tdur(b - a)})</title></rect>`; }).join('');
+  const marks = evs.filter(e => e.ts > from && (e.lvl === 'red' || ['boot', 'crash', 'usb_off', 'usb_reset'].includes(e.kind))).map(e =>
+    `<line x1="${X(e.ts).toFixed(1)}" x2="${X(e.ts).toFixed(1)}" y1="0" y2="${H}" class="tmark ${e.lvl === 'red' || e.kind === 'crash' ? 'bad' : e.kind === 'boot' ? 'boot' : 'warn'}"><title>${tdate(e.ts)} — ${esc(e.text)}</title></line>`).join('');
+  const yt = []; for (let v = lo; v <= hi + step / 2; v += step) yt.push(v);
+  const tstep = {'6h': 3600, '24h': 3 * 3600, '7d': 86400, '30d': 5 * 86400, '90d': 15 * 86400, '1y': 61 * 86400}[TO.range] * (el.clientWidth < 560 ? 2 : 1);
+  const tz = new Date().getTimezoneOffset() * 60, xt = [];
+  for (let t = Math.ceil((from - tz) / tstep) * tstep + tz; t <= to; t += tstep) xt.push(t);
+  const xl = t => ['6h', '24h'].includes(TO.range) ? hclock(t) : TO.range === '7d' ? new Date(t * 1000).toLocaleDateString('uk-UA', {weekday: 'short', day: 'numeric'}) : new Date(t * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'short'});
+  const k0 = keys[0], unit = tUnit(k0) === '%' || /awake/.test(k0) ? '%' : bars ? '' : tUnit(k0);
+  const yfmt = v => /^net\.|\.io$/.test(k0) ? short(v) : nf(v, Math.abs(step) < 1 ? 1 : 0);
+  el.innerHTML = `<div class="hplot"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      <defs><pattern id="h-power" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" class="hp-bg power"/><line x1="0" y1="0" x2="0" y2="8" class="hp power"/></pattern>
+        <pattern id="h-inet" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)"><rect width="8" height="8" class="hp-bg inet"/><line x1="0" y1="0" x2="0" y2="8" class="hp inet"/></pattern></defs>
+      ${yt.map(v => `<line x1="0" x2="${W}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" class="hgrid"/>`).join('')}${rects}${series}${marks}
+      <line class="hcur" id="tcur" x1="0" x2="0" y1="0" y2="${H}" visibility="hidden"/></svg>
+    ${yt.map(v => `<span class="hy" style="top:${(Y(v) / H * 100).toFixed(2)}%">${yfmt(v)}</span>`).join('')}
+    ${xt.map(t => `<span class="hx" style="left:${(X(t) / W * 100).toFixed(2)}%">${esc(xl(t))}</span>`).join('')}
+    <div class="htip" id="ttip" hidden></div></div>`;
+  const kinds = new Set(spans.filter(s => s[1] > from).map(s => s[2]));
+  const per = bars ? ` за ${S.step >= 86400 ? 'добу' : S.step >= 3600 ? (S.step / 3600 === 1 ? 'годину' : S.step / 3600 + ' год') : Math.round(S.step / 60) + ' хв'}` : '';
+  $('#toLeg').innerHTML = keys.map((k, i) => `<span><i style="background:var(--${TCOL[i % TCOL.length]})"></i>${esc(tName(k))}${/awake/.test(k) ? ', % часу без сну' : bars ? ', паркувань' + per : unit ? ', ' + (tUnit(k) || unit) : ''}</span>`).join('') +
+    (kinds.has('power') ? '<span><i class="hsw power"></i>без світла</span>' : '') + (kinds.has('inet') ? '<span><i class="hsw inet"></i>без інтернету</span>' : '') +
+    (kinds.has('boost') ? '<span><i class="hsw tboostsw"></i>режим продуктивності</span>' : '') + (marks ? '<span><i class="hsw tmarksw"></i>збої й увімкнення</span>' : '');
+  const plot = $('.hplot', el), tip = $('#ttip'), cur = $('#tcur');
+  const show = e => {
+    const r = plot.getBoundingClientRect(), x = Math.min(Math.max(0, (e.clientX - r.left) / r.width), 1), t = from + x * (to - from);
+    const rows = keys.map((k, i) => { let best = null; for (const p of pts(k)) if (!best || Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+      return best && Math.abs(best[0] - t) < gapMax ? `<span style="color:var(--${TCOL[i % TCOL.length]})">${esc(tName(k))}</span> ${bars ? nf(best[1]) : /awake/.test(k) ? nf(best[1]) + '%' : tFmt(best[1], k) + (/^net\.|\.io$/.test(k) ? '' : ' ' + tUnit(k))}${best[3] != null && !bars && best[3] !== best[2] && !/awake/.test(k) ? ` <span style="color:var(--faint)">(${tFmt(best[2], k)}…${tFmt(best[3], k)})</span>` : ''}` : ''; }).filter(Boolean);
+    const ev = evs.filter(e => Math.abs(e.ts - t) < (to - from) / 120 && e.lvl !== 'dim').slice(0, 2).map(e => `<span style="color:var(--${lvlCol(e.lvl)})">● ${esc(e.text)}</span>`);
+    if (!rows.length && !ev.length) { tip.hidden = true; cur.setAttribute('visibility', 'hidden'); return; }
+    cur.setAttribute('x1', x * W); cur.setAttribute('x2', x * W); cur.setAttribute('visibility', 'visible');
+    tip.hidden = false;
+    tip.innerHTML = `<b>${['6h', '24h'].includes(TO.range) ? hclock(t) : tdate(t)}</b>${rows.concat(ev).join('<br>')}`;
+    tip.style.left = Math.min(r.width - tip.offsetWidth - 4, Math.max(4, x * r.width + 12)) + 'px';
+  };
+  plot.onpointermove = show; plot.onpointerdown = show;
+  plot.onpointerleave = () => { tip.hidden = true; cur.setAttribute('visibility', 'hidden'); };
+}
+
+// Таблиця дисків: рядки — показники, стовпці — диски (так 2–4 диски влазять і на телефоні).
+function toDisksHTML() {
+  const T = TO.table || {}, ds = T.disks || [];
+  if (T.ok === false) return `<p class="err">${esc(T.error)}</p>`;
+  if (!ds.length) return '<p class="note" style="margin:0">Дисків ще немає в даних.</p>';
+  const c = (d, k) => (d.c || {})[k];
+  const ch = (d, k, warn) => { const x = c(d, k); if (!x) return '—'; const dd = x.d;
+    return `${nf(x.to)}${dd ? ` <span class="${warn && dd > 0 ? 'bad' : 'up'}">+${nf(dd)}</span>` : ''}`; };
+  const days = ({'6h': 0.25, '24h': 1, '7d': 7, '30d': 30, '90d': 90, '1y': 365})[TO.range] || 1;
+  const perDay = v => v == null ? '' : days > 1 ? ` <span class="faint">≈${nf(v / days, v / days < 10 ? 1 : 0)}/добу</span>` : '';
+  const lim = d => /^2\.5/.test(d.form || '') || !d.form && d.usb && d.size < 2.2e12 ? 600000 : 300000;
+  const rows = [
+    ['оцінка', d => `<b style="color:var(--${d.verdict[0]})">${esc(d.verdict[1])}</b>`],
+    ['модель', d => `${esc(d.model || '—')}${d.size ? ' · ' + size(d.size) : ''}`],
+    ['підключення', d => d.bridge ? `${esc(d.bridge.name || 'USB')} · <span class="${d.bridge.speed && d.bridge.speed < 5000 ? 'bad' : ''}">${d.bridge.speed >= 5000 ? 'USB 3' : d.bridge.speed ? 'USB 2.0' : 'USB'}</span>` : d.system ? 'внутрішній' : d.usb ? 'USB' : 'SATA'],
+    ['не спав', d => d.awake == null ? '—' : `${nf(d.awake, 1)}% часу`],
+    ['прокидався', d => d.rot && !d.system ? `${nf(d.wakes)} ${razy(d.wakes)}${perDay(d.wakes)}` : '—'],
+    ['хто будив', d => (d.wokeBy || []).filter(w => w.who).slice(0, 3).map(w => `${esc(w.who)} ×${w.n}`).join('<br>') || '—'],
+    ['хто працював з ним', d => (d.who || []).slice(0, 3).map(w => `${esc(w.who)} <span class="faint">${tdur(w.min * 60)}</span>`).join('<br>') || '—'],
+    ['температура', d => d.temp && d.temp.avg != null ? `${nf(d.temp.avg)}° сер. · <span class="${d.temp.max >= 50 ? 'bad' : ''}">${nf(d.temp.max)}° макс</span>` : '—'],
+    ['паркувань головок', d => { const x = c(d, 'load_cycles'); return x ? ch(d, 'load_cycles') + perDay(x.d) + (x.to >= lim(d) * 0.8 ? `<br><span class="faint">ресурс ${nf(lim(d) / 1000)} тис. — ${nf(x.to / lim(d) * 100)}%</span>` : '') : '—'; }],
+    ['увімкнень (розкруток)', d => ch(d, 'cycles')],
+    ['годин роботи', d => ch(d, 'hours')],
+    ['помилки кабелю', d => ch(d, 'crc', true)],
+    ['перепризначені', d => ch(d, 'realloc', true)],
+    ['нестабільні', d => ch(d, 'pending', true)],
+    ['невиправні', d => ch(d, 'uncorrect', true)],
+    ['помилки носія', d => ch(d, 'media_errors', true)],
+    ['ресурс SSD', d => c(d, 'life') ? `${nf(c(d, 'life').to)}%` : '—'],
+    ['збої USB', d => d.bridge ? `<span class="${d.usbEvents ? 'bad' : ''}">${nf(d.usbEvents)}</span>` : '—'],
+    ['помилки вводу-виводу', d => `<span class="${d.ioErrors ? 'bad' : ''}">${nf(d.ioErrors)}</span>`],
+  ].filter(([, f]) => ds.some(d => f(d) !== '—'));
+  return `<div class="to-tbl-wrap"><table class="to-tbl"><thead><tr><th>за ${trName()}</th>${ds.map(d => `<th>${esc(d.names.join(' · '))}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(([l, f]) => `<tr><th scope="row">${l}</th>${ds.map(d => `<td>${f(d)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+    <p class="note">«+N» — приріст за період. «Хто будив» — процес, що першим звернувся до сплячого диска; «хто працював» — скільки хвилин процес читав чи писав на диск. Поки диск спить, SMART не читається, щоб його не будити.</p>`;
+}
+
+function toSysHTML() {
+  const s = (TO.table || {}).system;
+  if (!s) return '<p class="note" style="margin:0">—</p>';
+  const a = x => x ? `${nf(x.avg, 1)} сер. · ${nf(x.min, 1)}…${nf(x.max, 1)}` : null;
+  const n = x => x && x.n ? `${x.n} · разом ${tdur(x.d)}` : x ? '0' : null;
+  const diff = (x, u = '') => x && x.to != null ? `${nf(x.to, 1)}${u}${x.d ? ` <span class="${x.d < 0 ? 'bad' : 'up'}">(${x.d > 0 ? '+' : ''}${nf(x.d, 1)})</span>` : ''}` : null;
+  const fans = Object.entries(s.fans || {}).map(([k, v]) => [tName(k), v ? `${nf(v.avg)} сер. · до ${nf(v.max)} об/хв` : null]);
+  const rows = [
+    ['процесор, °C', a(s['cpu.temp']) + (s.hotMin ? ` · <span class="bad">${s.hotMin} хв гарячим</span>` : '')], ['завантаження, %', a(s['cpu.load'])],
+    ['споживання процесора, Вт', a(s['cpu.w'])], ['частота, МГц', s['cpu.freq'] ? `${nf(s['cpu.freq'].avg)} сер. · до ${nf(s['cpu.freq'].max)}` : null],
+    ['скидання частоти від перегріву', s.throttle && s.throttle.d != null ? `<span class="${s.throttle.d > 100 ? 'bad' : ''}">${nf(s.throttle.d)}</span>` : null],
+    ...fans, ['пам’ять, %', a(s['mem.used'])], ['swap, %', a(s['swap.used'])],
+    ['батарея: ємність, %', diff(s['bat.health'])], ['батарея: цикли', diff(s['bat.cycles'])],
+    ['відключення світла', n(s.outages)], ['без інтернету', n(s.inet)], ['пінг, мс', s['net.ping'] ? `${nf(s['net.ping'].avg)} сер. · до ${nf(s['net.ping'].max)}` : null],
+    ['сигнал Wi-Fi, дБм', a(s['wifi.signal'])], ['сервер працював', s.online != null ? `${nf(s.online, 1)}% часу` : null],
+    ['увімкнень', s.boots ? nf(s.boots.n) : null], ['раптових вимкнень', s.crashes ? `<span class="${s.crashes.n ? 'bad' : ''}">${nf(s.crashes.n)}</span>` : null],
+    ['збої USB', s.usb ? `<span class="${s.usb.n ? 'bad' : ''}">${nf(s.usb.n)}</span>` : null], ['помилки дисків', s.ioerr ? `<span class="${s.ioerr.n ? 'bad' : ''}">${nf(s.ioerr.n)}</span>` : null],
+    ['падіння служб', s.svcCrash ? `<span class="${s.svcCrash.n ? 'bad' : ''}">${nf(s.svcCrash.n)}</span>` : null], ['помилки в журналах', s.logErr != null ? nf(s.logErr) : null],
+    ['режим продуктивності', s.boost && s.boost.n ? `${s.boost.n} ${razy(s.boost.n)}, разом ${tdur(s.boost.d)}` : null],
+    ['субтитри ШІ', s.vbDone && (s.vbDone.n || (s.vbErr || {}).n) ? `${s.vbDone.n} готово${s.vbMin ? `, ≈${nf(s.vbMin.avg)} хв на серію` : ''}${(s.vbErr || {}).n ? ` · <span class="bad">${s.vbErr.n} з помилкою</span>` : ''}` : null],
+    ['копії', s.backupOk && (s.backupOk.n || (s.backupFail || {}).n) ? `${s.backupOk.n} вдалих${(s.backupFail || {}).n ? ` · <span class="bad">${s.backupFail.n} невдалих</span>` : ''}` : null],
+  ].filter(r => r[1] != null && !String(r[1]).startsWith('null'));
+  return `<dl class="kv to-kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+}
+
+const EVF = [['imp', 'важливі', null], ['disk', 'диски', ['disk_wake', 'disk_sleep', 'disk_gone', 'disk_back', 'smart', 'io_error', 'offline']],
+  ['usb', 'USB', ['usb_off', 'usb_on', 'usb_reset', 'usb_err', 'overcurrent']], ['power', 'живлення', ['ac_off', 'ac_on', 'boot', 'crash', 'cpu_hot', 'throttle_k', 'boost_on', 'boost_off']],
+  ['net', 'мережа', ['inet_down', 'inet_up', 'ip_change']], ['svc', 'служби', ['svc_crash', 'svc_restart', 'svc_down', 'oom', 'backup_ok', 'backup_fail', 'vb_done', 'vb_error']], ['all', 'усі', null]];
+function toEvHTML() {
+  const f = EVF.find(x => x[0] === TO.evf) || EVF[0];
+  let ev = (TO.ev && TO.ev.events) || [];
+  if (f[0] === 'imp') ev = ev.filter(e => e.lvl !== 'dim' || ['boot', 'crash', 'disk_gone'].includes(e.kind));
+  else if (f[2]) ev = ev.filter(e => f[2].includes(e.kind));
+  const list = ev.slice(0, 80);
+  return `<div class="logbar">${EVF.map(([k, l]) => `<button class="chip${TO.evf === k ? ' on' : ''}" data-evf="${k}">${l}</button>`).join('')}</div>` +
+    (list.length ? `<ol class="log wrapl to-ev">${list.map(e => `<li><span class="t">${tdate(e.ts)}</span><span class="u" style="color:var(--${lvlCol(e.lvl)});width:auto">●</span><span class="m">${esc(e.text)}</span></li>`).join('')}</ol>` +
+      (ev.length > list.length ? `<p class="note">Показано 80 з ${ev.length}. Усе — в експорті.</p>` : '')
+      : `<p class="note" style="margin:0">За ${trName()} ${f[0] === 'imp' ? 'нічого важливого не сталося' : 'подій цього типу немає'}.</p>`);
+}
+function bindToEv() { $$('[data-evf]').forEach(b => b.onclick = () => { TO.evf = b.dataset.evf; const box = $('#toEv .wbody'); delete box.dataset.html; drawTO(); }); }
+
+const LIMN = {disk_temp: ['диск гарячий від', '°C'], cpu_temp: ['процесор гарячий від', '°C'], cpu_hot_min: ['…і гарячий довше ніж', 'хв за добу'],
+  parks_day: ['паркувань головок за добу більше ніж', ''], wakes_day: ['диск прокидається за добу частіше ніж', 'разів'],
+  bat_drop: ['батарея втратила ємності за місяць', '%'], backup_days: ['копії не було довше ніж', 'дн.']};
+function toLimHTML() {
+  const L = TO.lim || {}, v = L.limits || {}, r = L.range || {};
+  return `<p class="note" style="margin-top:0">Коли показник переходить межу, він з’являється в «стані» вгорі й позначкою на пункті «9 то».</p>
+    <div class="dk-form to-lim">${Object.entries(LIMN).map(([k, [l, u]]) => `<div><label class="f" for="lim_${k}">${l}${u ? ', ' + u : ''}</label><input id="lim_${k}" type="number" min="${(r[k] || [])[0] ?? ''}" max="${(r[k] || [])[1] ?? ''}" value="${v[k] ?? ''}" data-lim="${k}"></div>`).join('')}</div>
+    <div class="acts"><button class="btn primary" id="limSave">Зберегти</button><button class="btn ghost" id="limReset">Як було типово</button></div>`;
+}
+function bindToLim() {
+  if (!$('#limSave')) return;
+  $('#limSave').onclick = async () => {
+    const limits = Object.fromEntries($$('[data-lim]').map(i => [i.dataset.lim, +i.value]));
+    const r = await api('/api/health', {op: 'set_limits', limits});
+    if (r.ok === false) return toast(r.error);
+    TO.lim = r; toast('Пороги збережено'); delete $('#toLimBox').dataset.html; toLoad(false);
+  };
+  $('#limReset').onclick = async () => {
+    const r = await api('/api/health', {op: 'set_limits', reset: true});
+    if (r.ok === false) return toast(r.error);
+    TO.lim = r; toast('Пороги — як було типово'); delete $('#toLimBox').dataset.html; toLoad(false);
+  };
+}
+
+// Клавіші 1–9 — до розділу панелі, як у btop.
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey || typing() || !$('.top nav a[data-k]')) return;
-  if (/^[1-8]$/.test(e.key)) goSection(e.key);
+  if (/^[1-9]$/.test(e.key)) goSection(e.key);
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && $('#cpuG')) live(); });
 

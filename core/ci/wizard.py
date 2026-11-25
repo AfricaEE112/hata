@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from playwright.sync_api import sync_playwright
@@ -123,6 +124,39 @@ with sync_playwright() as p:
     print('backup:', st['conf'].get('last'), [s['name'] for s in st['snapshots']])
     assert st['conf']['last'].get('error') is None and st['snapshots'] and st['conf']['last']['files'] > 5, st['conf']['last']
     pg.keyboard.press('2'); pg.wait_for_selector('#bk'); pg.wait_for_timeout(500); shot('disks')
+    # ТО: gazda щохвилини збирає заміри; подія з журналу ядра (відвал USB) має стати подією ТО й рядком журналу
+    jget = lambda u: pg.evaluate("async u => (await fetch(u)).json()", u)
+    for i in range(40):
+        ks = jget('/api/health?op=keys&range=24h')
+        if ks.get('ok') and {'cpu.load', 'mem.used', 'net.rx'} <= set(ks.get('keys', [])):
+            break
+        time.sleep(5)
+    print('ТО keys:', ks.get('keys'))
+    assert {'cpu.load', 'mem.used', 'net.rx'} <= set(ks['keys']), ks
+    sh('echo "usb 9-9: USB disconnect, device number 7" | sudo tee /dev/kmsg >/dev/null')
+    for i in range(40):
+        ev = jget('/api/health?op=events&range=24h&kinds=usb_off')
+        if any(e['subj'] == '9-9' for e in ev.get('events', [])):
+            break
+        time.sleep(5)
+    print('ТО events:', ev)
+    assert any(e['subj'] == '9-9' for e in ev['events']), ev
+    jl = jget('/api/journal?n=60&src=' + urllib.parse.quote('події'))
+    assert any('9-9' in l['msg'] for l in jl['lines']), jl
+    assert jget('/api/journal?n=20&src=gazda').get('lines'), 'журнал gazda порожній'
+    sm = jget('/api/health?op=summary')
+    tb = jget('/api/health?op=table&range=24h')
+    print('ТО summary:', sm.get('level'), sm.get('items'))
+    assert sm.get('ok') and 'level' in sm and tb.get('ok') and tb['system'].get('mem.used'), (sm, tb)
+    se = jget('/api/health?op=series&range=6h&keys=cpu.load,mem.used')
+    assert se['series']['mem.used']['points'], se
+    li = pg.evaluate("""async () => (await fetch('/api/health', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                       body: JSON.stringify({op: 'set_limits', limits: {disk_temp: 47}})})).json()""")
+    assert li['limits']['disk_temp'] == 47, li
+    csv = pg.evaluate("async () => (await fetch('/api/health/export?range=24h&fmt=csv')).text()")
+    assert 'показник' in csv and 'cpu.load' in csv, csv[:300]
+    pg.keyboard.press('9'); pg.wait_for_selector('#toChart svg', timeout=60000); pg.wait_for_timeout(800); shot('to')
+    pg.click('[data-tg="load"]'); pg.wait_for_timeout(800); shot('to-load')
     pg.keyboard.press('1'); pg.wait_for_selector('#sys')
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="папір"]'); shot('panel-paper')
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="чай"]')

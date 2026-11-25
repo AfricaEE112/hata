@@ -305,3 +305,46 @@ button.fm-name{font-weight:600}
 .dk-snaps span{color:var(--dim)}
 .linkbtn{background:none;border:0;padding:0;color:var(--acc);font:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
 .dk-warn{margin:0 0 12px;font-size:13px;line-height:1.5}
+
+/* ── журнал: фільтр, дата, перенос довгих рядків ── */
+.logbar{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+.logbar .chip{min-height:30px;padding:0 10px;border-radius:6px;border:1px solid var(--line);background:none;color:var(--dim);cursor:pointer;font:inherit;font-size:12.5px}
+.logbar .chip:hover{color:var(--fg)}
+.logbar .chip.on{border-color:var(--acc);color:var(--fg)}
+.log.wrapl li{white-space:normal;flex-wrap:wrap;gap:2px 14px;align-items:baseline}
+.log.wrapl .t{flex:none;white-space:nowrap;min-width:9ch}
+.log.wrapl .m{flex:1 1 300px;min-width:0;overflow-wrap:anywhere;line-height:1.45}
+.log li.l-red .m{color:var(--red)}.log li.l-yel .m{color:var(--yel)}
+@media (max-width:640px){.log.wrapl .u{width:auto}.log.wrapl .m{flex-basis:100%}}
+
+/* ── ТО ── */
+.top nav a .tdot{width:7px;height:7px;border-radius:50%;margin-left:2px;align-self:flex-start;margin-top:6px}
+.to-line{margin:14px 0 0;font-size:13px;line-height:1.5;color:var(--dim)}
+.to-verdict{margin:0 0 10px;font-weight:600;font-size:15px}
+.to-verdict.acc{color:var(--acc)}.to-verdict.yel{color:var(--yel)}.to-verdict.red{color:var(--red)}
+.to-items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:13px;line-height:1.5}
+.to-items li{display:flex;gap:10px}.to-items li span{flex:none;width:1ch}
+.to-items li.red{color:var(--red)}.to-items li.yel{color:var(--yel)}.to-items li.dim{color:var(--dim)}
+.to-range{display:grid;grid-template-columns:repeat(3,1fr)}.to-range button{min-width:0;min-height:34px;font-size:13px}
+.tbar{fill:var(--c);opacity:.85}
+.tboost{fill:color-mix(in srgb,var(--vio) 10%,transparent)}
+.tmark{stroke-width:1.5;vector-effect:non-scaling-stroke;opacity:.8}
+.tmark.bad{stroke:var(--red)}.tmark.warn{stroke:var(--yel);stroke-dasharray:4 3}.tmark.boot{stroke:var(--dim);stroke-dasharray:2 3}
+.hsw.tboostsw{background:color-mix(in srgb,var(--vio) 30%,transparent)}
+.hsw.tmarksw{width:3px!important;background:var(--red)}
+.bad{color:var(--red)}.up{color:var(--dim)}.faint{color:var(--faint)}
+.to-tbl-wrap{overflow-x:auto;margin:0 -4px;padding:0 4px}
+.to-tbl{border-collapse:collapse;width:100%;font-size:13px}
+.to-tbl td{min-width:170px}
+.to-tbl th,.to-tbl td{text-align:left;vertical-align:top;padding:7px 12px 7px 0;border-bottom:1px dashed color-mix(in srgb,var(--line) 70%,transparent);line-height:1.45}
+.to-tbl thead th{color:var(--acc);font-weight:600;border-bottom:1px solid var(--line);white-space:nowrap}
+.to-tbl thead th:first-child{color:var(--dim);font-weight:400}
+.to-tbl tbody th{color:var(--yel);font-weight:400;white-space:nowrap;width:1%;position:sticky;left:0;background:var(--panel);z-index:1}
+.to-tbl tr:last-child th,.to-tbl tr:last-child td{border-bottom:0}
+.to-kv{font-size:13px}
+.to-ev{max-height:520px;overflow-y:auto;padding-right:4px}
+.to-ev .t{min-width:12ch}
+.to-lim{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+@media (max-width:640px){.to-kv{grid-template-columns:1fr;gap:0}.to-kv dd{margin-bottom:8px}.to-tbl tbody th{white-space:normal;min-width:110px;max-width:120px}}
+@media (max-width:640px){#toChips .hchips{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}#toChips .chip{flex:none}}
+#logList .log{max-height:440px;overflow-y:auto;padding-right:4px}

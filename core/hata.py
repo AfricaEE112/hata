@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import files   # noqa: E402 — модуль «Файли» поруч
 import house   # noqa: E402 — розділ «Будинок» (заміри від ESP)
 import backup  # noqa: E402 — розділ «Копії»
+import health  # noqa: E402 — лише для демо (справжнє ТО — у gazda)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, 'web')
@@ -178,11 +179,30 @@ def demo_gazda(req):
         return {'ok': True, 'iface': 'wlo1', 'ssid': w, 'signal': -45 if w else None, 'saved': w}
     if d == 'journal':
         now = int(time.time())
-        return {'ok': True, 'lines': [
-            {'t': now - 1600, 'unit': 'hata', 'msg': 'Hata: панель на порту 80'},
-            {'t': now - 1300, 'unit': 'vidbox', 'msg': 'anilist: Frieren — опис і жанри збережено'},
-            {'t': now - 340, 'unit': 'gazda', 'msg': 'mount media → /srv/disks/media'},
-            {'t': now - 2, 'unit': 'vidbox', 'msg': 'GET /api/anime 200'}]}
+        lines = [{'t': now - 90000, 'unit': 'hata', 'msg': 'Hata: панель на порту 80', 'lvl': ''},
+                 {'t': now - 1300, 'unit': 'vidbox', 'msg': 'anilist: Frieren — опис і жанри збережено', 'lvl': ''},
+                 {'t': now - 900, 'unit': 'vidbox', 'msg': 'Субтитри ШІ: Frieren 07 — розпізнавання 61 %, переклад Gemma 4 26B (локально, ПК 192.168.3.50), '
+                  'глосарій тайтлу 34 записи + набір «Аніме»; аналіз серії: 6 персонажів, 12 авто-термінів (довгий рядок — має переноситись)', 'lvl': ''},
+                 {'t': now - 340, 'unit': 'gazda', 'msg': 'mount media → /srv/disks/media', 'lvl': ''},
+                 {'t': now - 60, 'unit': 'vidbox', 'msg': 'Traceback: OSError [Errno 5] Input/output error', 'lvl': 'red'},
+                 {'t': now - 2, 'unit': 'vidbox', 'msg': 'GET /api/anime 200', 'lvl': ''}]
+        src = req.get('src') or ''
+        lines = [l for l in lines if not src or l['unit'] == src]
+        if src in ('', 'події'):
+            lines += [{'t': e['ts'], 'unit': 'події', 'msg': e['text'], 'lvl': e['lvl'], 'kind': e['kind']}
+                      for e in health.events(demo_health(), '1y', None, req.get('n') or 14)]
+        lines.sort(key=lambda l: l['t'])
+        return {'ok': True, 'lines': lines[-(req.get('n') or 14):]}
+    if d == 'health':
+        st = demo_health()
+        if req.get('op') == 'set_limits':
+            cur = health.limits_static(st)
+            st.set_meta('limits', health.DEFAULT_LIMITS if req.get('reset') else dict(cur, **health.clean_limits(req.get('limits'))))
+            req = dict(req, op='limits')
+        try:
+            return dict(ok=True, **health.handle(st, req))
+        except ValueError as e:
+            return {'ok': False, 'error': str(e)}
     if d == 'update_check':
         return {'ok': True, 'version': 'cd4bff2 2026-11-19T15:00:00+02:00', 'commits': [
             {'hash': 'a1f3c2e', 'msg': 'Аніме: опис і жанри в апці'},
@@ -215,6 +235,17 @@ def demo_gazda(req):
                           for i, n in enumerate(DEMO_STATE['mounted'].values())],
                 'services': {'vidbox': 'active' if CONF.get('setup_done') else 'inactive', 'hata': 'active', 'hata-screen': 'active'}}
     return {'ok': True}
+
+
+DEMO_HEALTH = []
+
+
+def demo_health():
+    """Демо ТО: 35 днів правдоподібних замірів (створюються один раз за запуск, ~2 с)."""
+    with LOCK:
+        if not DEMO_HEALTH:
+            DEMO_HEALTH.append(health.demo_fill(os.path.join(DATA, 'health-demo.db')))
+    return DEMO_HEALTH[0]
 
 
 DEMO_ROOT = os.path.join(DATA, 'demo-disks')
@@ -659,7 +690,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p == '/api/live':
             return self.json(live())
         if p == '/api/journal':
-            return self.json(gazda({'do': 'journal', 'n': 14}, 30))
+            try:
+                n = max(1, min(300, int(qs.get('n', ['40'])[0])))
+            except ValueError:
+                n = 40
+            return self.json(gazda({'do': 'journal', 'n': n, 'src': qs.get('src', [''])[0]}, 30))
+        if p == '/api/health':
+            g = lambda k, d='': qs.get(k, [d])[0]
+            req = {'do': 'health', 'op': g('op', 'summary'), 'range': g('range', '24h')}
+            if g('kinds'):
+                req['kinds'] = g('kinds').split(',')
+            if g('limit'):
+                req['limit'] = g('limit')
+            if g('keys'):
+                req['keys'] = g('keys').split(',')[:24]
+            return self.json(gazda(req, 90))
+        if p == '/api/health/export':
+            fmt = 'json' if qs.get('fmt', ['csv'])[0] == 'json' else 'csv'
+            r = gazda({'do': 'health', 'op': 'export', 'fmt': fmt, 'range': qs.get('range', ['30d'])[0]}, 120)
+            if not r.get('ok', True) or 'text' not in r:
+                return self.json(r, 500)
+            body = r['text'].encode('utf-8')
+            if fmt == 'csv':
+                body = b'\xef\xbb\xbf' + body          # BOM — щоб Excel побачив кирилицю
+            return self.send(200, body, 'text/csv; charset=utf-8' if fmt == 'csv' else 'application/json; charset=utf-8',
+                             {'Content-Disposition': 'attachment; filename="%s"' % r['name']})
         if p == '/api/updates':
             return self.json(updates('force' in qs))
         if p == '/api/files':
@@ -837,6 +892,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if d.get('op') == 'save':
                 return self.json(bk_save(d))
             return self.json({'ok': False, 'error': 'Невідома дія'})
+        if p == '/api/health':
+            if d.get('op') != 'set_limits':
+                return self.json({'ok': False, 'error': 'Невідома дія'})
+            return self.json(gazda({'do': 'health', 'op': 'set_limits', 'limits': d.get('limits') or {}, 'reset': bool(d.get('reset'))}, 30))
         if p == '/api/house/key':
             with LOCK:
                 CONF['house_key'] = secrets.token_hex(12)
