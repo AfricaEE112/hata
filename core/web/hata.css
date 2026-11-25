@@ -348,3 +348,4 @@ button.fm-name{font-weight:600}
 @media (max-width:640px){.to-kv{grid-template-columns:1fr;gap:0}.to-kv dd{margin-bottom:8px}.to-tbl tbody th{white-space:normal;min-width:110px;max-width:120px}}
 @media (max-width:640px){#toChips .hchips{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}#toChips .chip{flex:none}}
 #logList .log{max-height:440px;overflow-y:auto;padding-right:4px}
+.tdotl{stroke-width:7}

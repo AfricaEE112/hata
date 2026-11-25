@@ -1498,7 +1498,9 @@ function toChart() {
   const el = $('#toChart'), S = TO.ser;
   if (!el) return;
   if (!S || S.ok === false || !S.series) { el.innerHTML = `<p class="note" style="margin:0;padding:40px 0;text-align:center">${esc(S && S.error || 'Немає даних.')}</p>`; $('#toLeg').innerHTML = ''; return; }
-  const keys = Object.keys(S.series), from = S.from, to = S.to, W = 1000, H = 300;
+  const keys = Object.keys(S.series), to = S.to, W = 1000, H = 300;
+  // дані почали збиратись пізніше за початок періоду — графік з першого заміру, а не порожній тиждень
+  const clipped = S.first && S.first - S.from > (to - S.from) * 0.03, from = clipped ? Math.max(S.from, S.first - S.step) : S.from;
   const pct = k => /\.awake$/.test(k) ? 100 : 1;
   const pts = k => (S.series[k].points || []).map(p => p.map((v, i) => i && v != null ? v * pct(k) : v));
   const sig = JSON.stringify([TO.range, TO.group, keys.map(k => (S.series[k].points || []).length), to - to % 60, (TO.ev.events || []).length]);
@@ -1524,6 +1526,7 @@ function toChart() {
   const series = keys.map((k, i) => {
     const p = pts(k), c = TCOL[i % TCOL.length];
     if (bars) return p.map(q => `<rect x="${(X(q[0]) + i * bw).toFixed(1)}" y="${Y(q[1]).toFixed(1)}" width="${bw.toFixed(1)}" height="${(Y(lo) - Y(q[1])).toFixed(1)}" class="tbar" style="--c:var(--${c})"/>`).join('');
+    if (p.length === 1) return `<line x1="${X(p[0][0]).toFixed(1)}" x2="${X(p[0][0]).toFixed(1)}" y1="${Y(p[0][1]).toFixed(1)}" y2="${Y(p[0][1]).toFixed(1)}" class="hline tdotl" style="--c:var(--${c})"/>`;
     return `<path d="${band(p)}" class="hband" style="--c:var(--${c})"/><path d="${path(p)}" class="hline" style="--c:var(--${c})"/>`;
   }).join('');
   // події: відключення світла й інтернету — заштриховані проміжки, режим продуктивності — тонована смуга, збої — червоні риски
@@ -1536,10 +1539,11 @@ function toChart() {
   const marks = evs.filter(e => e.ts > from && (e.lvl === 'red' || ['boot', 'crash', 'usb_off', 'usb_reset'].includes(e.kind))).map(e =>
     `<line x1="${X(e.ts).toFixed(1)}" x2="${X(e.ts).toFixed(1)}" y1="0" y2="${H}" class="tmark ${e.lvl === 'red' || e.kind === 'crash' ? 'bad' : e.kind === 'boot' ? 'boot' : 'warn'}"><title>${tdate(e.ts)} — ${esc(e.text)}</title></line>`).join('');
   const yt = []; for (let v = lo; v <= hi + step / 2; v += step) yt.push(v);
-  const tstep = {'6h': 3600, '24h': 3 * 3600, '7d': 86400, '30d': 5 * 86400, '90d': 15 * 86400, '1y': 61 * 86400}[TO.range] * (el.clientWidth < 560 ? 2 : 1);
+  const span = to - from, maxTicks = el.clientWidth < 560 ? 4 : 8;
+  const tstep = [300, 600, 1800, 3600, 7200, 3 * 3600, 6 * 3600, 86400, 2 * 86400, 5 * 86400, 15 * 86400, 61 * 86400].find(x => span / x <= maxTicks) || 61 * 86400;
   const tz = new Date().getTimezoneOffset() * 60, xt = [];
   for (let t = Math.ceil((from - tz) / tstep) * tstep + tz; t <= to; t += tstep) xt.push(t);
-  const xl = t => ['6h', '24h'].includes(TO.range) ? hclock(t) : TO.range === '7d' ? new Date(t * 1000).toLocaleDateString('uk-UA', {weekday: 'short', day: 'numeric'}) : new Date(t * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'short'});
+  const xl = t => tstep < 86400 ? hclock(t) : span <= 8 * 86400 ? new Date(t * 1000).toLocaleDateString('uk-UA', {weekday: 'short', day: 'numeric'}) : new Date(t * 1000).toLocaleDateString('uk-UA', {day: 'numeric', month: 'short'});
   const k0 = keys[0], unit = tUnit(k0) === '%' || /awake/.test(k0) ? '%' : bars ? '' : tUnit(k0);
   const yfmt = v => /^net\.|\.io$/.test(k0) ? short(v) : nf(v, Math.abs(step) < 1 ? 1 : 0);
   el.innerHTML = `<div class="hplot"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
@@ -1554,7 +1558,8 @@ function toChart() {
   const per = bars ? ` за ${S.step >= 86400 ? 'добу' : S.step >= 3600 ? (S.step / 3600 === 1 ? 'годину' : S.step / 3600 + ' год') : Math.round(S.step / 60) + ' хв'}` : '';
   $('#toLeg').innerHTML = keys.map((k, i) => `<span><i style="background:var(--${TCOL[i % TCOL.length]})"></i>${esc(tName(k))}${/awake/.test(k) ? ', % часу без сну' : bars ? ', паркувань' + per : unit ? ', ' + (tUnit(k) || unit) : ''}</span>`).join('') +
     (kinds.has('power') ? '<span><i class="hsw power"></i>без світла</span>' : '') + (kinds.has('inet') ? '<span><i class="hsw inet"></i>без інтернету</span>' : '') +
-    (kinds.has('boost') ? '<span><i class="hsw tboostsw"></i>режим продуктивності</span>' : '') + (marks ? '<span><i class="hsw tmarksw"></i>збої й увімкнення</span>' : '');
+    (kinds.has('boost') ? '<span><i class="hsw tboostsw"></i>режим продуктивності</span>' : '') + (marks ? '<span><i class="hsw tmarksw"></i>збої й увімкнення</span>' : '') +
+    (clipped ? `<span>дані є з ${esc(tdate(S.first))}</span>` : '');
   const plot = $('.hplot', el), tip = $('#ttip'), cur = $('#tcur');
   const show = e => {
     const r = plot.getBoundingClientRect(), x = Math.min(Math.max(0, (e.clientX - r.left) / r.width), 1), t = from + x * (to - from);
@@ -1564,7 +1569,7 @@ function toChart() {
     if (!rows.length && !ev.length) { tip.hidden = true; cur.setAttribute('visibility', 'hidden'); return; }
     cur.setAttribute('x1', x * W); cur.setAttribute('x2', x * W); cur.setAttribute('visibility', 'visible');
     tip.hidden = false;
-    tip.innerHTML = `<b>${['6h', '24h'].includes(TO.range) ? hclock(t) : tdate(t)}</b>${rows.concat(ev).join('<br>')}`;
+    tip.innerHTML = `<b>${span <= 86400 ? hclock(t) : tdate(t)}</b>${rows.concat(ev).join('<br>')}`;
     tip.style.left = Math.min(r.width - tip.offsetWidth - 4, Math.max(4, x * r.width + 12)) + 'px';
   };
   plot.onpointermove = show; plot.onpointerdown = show;
@@ -1585,6 +1590,7 @@ function toDisksHTML() {
   const rows = [
     ['оцінка', d => `<b style="color:var(--${d.verdict[0]})">${esc(d.verdict[1])}</b>`],
     ['модель', d => `${esc(d.model || '—')}${d.size ? ' · ' + size(d.size) : ''}`],
+    ['SMART', d => d.smart === 'none' ? `<span class="bad">недоступний</span>${d.why ? `<br><span class="faint">${esc(d.why)}</span>` : ''}` : '—'],
     ['підключення', d => d.bridge ? `${esc(d.bridge.name || 'USB')} · <span class="${d.bridge.speed && d.bridge.speed < 5000 ? 'bad' : ''}">${d.bridge.speed >= 5000 ? 'USB 3' : d.bridge.speed ? 'USB 2.0' : 'USB'}</span>` : d.system ? 'внутрішній' : d.usb ? 'USB' : 'SATA'],
     ['не спав', d => d.awake == null ? '—' : `${nf(d.awake, 1)}% часу`],
     ['прокидався', d => d.rot && !d.system ? `${nf(d.wakes)} ${razy(d.wakes)}${perDay(d.wakes)}` : '—'],

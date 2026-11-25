@@ -628,7 +628,7 @@ class Collector:
                     self.s.event(boot, 'crash', 'server', 'red', 'Сервер вимкнувся раптово (без завершення роботи) — не працював %s. '
                                  'Буває, коли зникло світло й села батарея, або ноутбук завис' % dur_text(off), off)
             else:
-                self.s.event(boot, 'boot', 'server', 'vio', 'Почато збір даних ТО')
+                self.s.event(now, 'boot', 'server', 'vio', 'Почато збір даних ТО')
             self.state['boot'] = boot
         self.state.pop('stopped', None)
 
@@ -738,7 +738,12 @@ class Collector:
             self.disk_meta[did] = dict(self.disk_meta.get(did) or {}, **meta)
             pre = 'disk.%s.' % did
             asleep = sm.get('state') == 'standby'
-            if d['rot'] and not d['system']:
+            known = sm.get('state') in ('active', 'standby')      # SMART недоступний — про сон нічого не знаємо
+            meta_d = self.disk_meta[did]
+            meta_d['smart'] = sm.get('state') or 'ще не прочитано'
+            if sm.get('state') == 'none':
+                meta_d['why'] = sm.get('why') or ''
+            if d['rot'] and not d['system'] and known:
                 self.add(now, pre + 'awake', 0 if asleep else 1)
             if not asleep and sm.get('at') and now - sm['at'] < 900:
                 self.add(now, pre + 'temp', sm.get('temp'))
@@ -766,7 +771,7 @@ class Collector:
                     if other > 0 and d['rot'] and not d['system']:
                         foreign[d['kname']] = (did, other * 512, d2 > 0, names, d['dev'])
             # сон і пробудження
-            if d['rot'] and not d['system']:
+            if d['rot'] and not d['system'] and known:
                 was = self.state.setdefault('awake', {}).get(did)
                 if was is not None and was != (not asleep):
                     if asleep:
@@ -1040,8 +1045,20 @@ def series(store, keys, rng, now=None):
     span, step = RANGES.get(rng, RANGES['24h'])
     a = now - span
     out = {}
-    for k in keys[:24]:
-        rows = store.rows(k, a - (step if is_counter(k) else 0), now + 1)
+    keys = keys[:24]
+    # дані почали збиратись недавно — дрібніший крок від першого заміру, щоб графік не був однією точкою
+    first = None
+    if keys:
+        r = store.q('SELECT MIN(ts) AS t FROM samples WHERE ts>=? AND key IN (%s)' % ','.join('?' * len(keys)), [a] + keys)
+        h = store.q('SELECT MIN(ts) AS t FROM hourly WHERE ts>=? AND key IN (%s)' % ','.join('?' * len(keys)), [a] + keys)
+        first = min([x for x in (r[0]['t'], h[0]['t']) if x] or [None]) if (r[0]['t'] or h[0]['t']) else None
+    a_q = a
+    if first and first - a > span * 0.03:
+        eff = now - first
+        step = min(step, next((x for x in (60, 300, 900, 3600, 3 * 3600) if eff / x <= 360), step))
+        a_q = first - first % step
+    for k in keys:
+        rows = store.rows(k, a_q - (step if is_counter(k) else 0), now + 1)
         buckets = {}
         for t, avg, lo, hi, last in rows:
             b = (t // step) * step if step < 86400 else local_day(t)
@@ -1052,13 +1069,14 @@ def series(store, keys, rng, now=None):
         for b in sorted(buckets):
             x = buckets[b]
             if is_counter(k):
-                if prev is not None and b >= a:
+                if prev is not None and b >= a_q:
                     pts.append([b, max(0, round(x[4] - prev, 3))])
                 prev = x[4]
-            elif b >= a:
+            elif b >= a_q:
                 pts.append([b, round(x[0] / x[1], 2), x[2], x[3]])
         out[k] = {'counter': is_counter(k), 'points': pts}
-    return {'range': rng, 'from': a, 'to': now, 'step': step, 'series': out}
+    firsts = [v['points'][0][0] for v in out.values() if v['points']]
+    return {'range': rng, 'from': a, 'to': now, 'step': step, 'series': out, 'first': min(firsts) if firsts else None}
 
 
 def events(store, rng='7d', kinds=None, limit=400, now=None):
@@ -1084,6 +1102,7 @@ def disk_table(store, span, now=None):
             continue
         pre = 'disk.%s.' % did
         row = {'id': did, 'names': m.get('names') or [did], 'model': m.get('model'), 'rot': m.get('rot'), 'usb': m.get('usb'),
+               'smart': m.get('smart'), 'why': m.get('why'),
                'system': m.get('system'), 'bridge': m.get('bridge'), 'form': m.get('form'), 'size': m.get('size'), 'seen': m.get('seen'), 'c': {}}
         for k in ('hours', 'cycles', 'load_cycles', 'crc', 'realloc', 'pending', 'uncorrect', 'media_errors', 'life'):
             s0 = store.value_at(pre + k, a)

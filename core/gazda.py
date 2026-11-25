@@ -679,8 +679,8 @@ def parse_smart(j):
 
 def smart_read(dev, wake=False):
     """Прочитати SMART. Повертає словник зі state: active | standby | none (недоступно) і причиною."""
-    msgs = ''
-    for extra in ([], ['-d', 'sat']):
+    msgs, empty = '', None
+    for extra in ([], ['-d', 'sat'], ['-d', 'sat,12']):     # sat,12 — для частини мостів ASMedia/JMicron
         cmd = ['smartctl', '-j', '-a'] + ([] if wake else ['-n', 'standby']) + extra + [dev]
         try:
             r = run(cmd, 60)
@@ -699,8 +699,11 @@ def smart_read(dev, wake=False):
             continue                     # не відкрився або не той тип — пробуємо як SAT (USB-адаптери)
         s = parse_smart(j)
         if s['passed'] is None and s['temp'] is None and s['hours'] is None:
-            return {'state': 'none', 'why': msgs or 'SMART вимкнено або не підтримується', 'model': s['model']}
+            empty = {'state': 'none', 'why': msgs or 'SMART вимкнено або не підтримується', 'model': s['model']}
+            continue                     # міст відповів, але без даних — пробуємо інший спосіб
         return s
+    if empty:
+        return empty
     return {'state': 'none', 'why': msgs or 'SMART недоступний (адаптер не передає дані диска)'}
 
 
