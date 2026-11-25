@@ -1,0 +1,35 @@
+name: VidBox — ядро перекладу
+
+on:
+  push:
+    paths:
+      - 'apps/vidbox/tr/**'
+      - 'apps/vidbox/qa/**'
+      - 'apps/vidbox/tests/**'
+      - 'apps/vidbox/vidbox.py'
+      - '.github/workflows/vidbox-core.yml'
+  pull_request:
+    paths:
+      - 'apps/vidbox/tr/**'
+      - 'apps/vidbox/qa/**'
+      - 'apps/vidbox/tests/**'
+      - 'apps/vidbox/vidbox.py'
+      - '.github/workflows/vidbox-core.yml'
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Без словника (перевірки мають тихо вимикатися)
+        run: python apps/vidbox/tests/test_tr.py
+      - name: Словник VESUM (pymorphy3)
+        run: pip install pymorphy3 pymorphy3-dicts-uk
+      - name: Зі словником
+        run: python apps/vidbox/tests/test_tr.py
+      - name: vidbox.py компілюється
+        run: python -m py_compile apps/vidbox/vidbox.py
