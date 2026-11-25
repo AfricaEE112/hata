@@ -234,6 +234,10 @@ def check_line(ln, uk, ctx):
                 if j >= len(low):
                     continue
                 g2 = lex.gender(low[j])
+                if g2 and j + 1 < len(low) and not any(p.tag.POS == 'VERB' for p in lex.parses(low[j])) and \
+                        {p.tag.POS for p in lex.parses(low[j + 1])} & {'NOUN'} and \
+                        not {p.tag.POS for p in lex.parses(low[j + 1])} & {'ADJF', 'ADJS', 'PRTF', 'ADVB', 'VERB'}:
+                    g2 = None               # «я цілий тиждень…» — прикметник до іменника, а не до «я»
                 if g2 and g2 != g:
                     iss.append(Issue('gender_' + ('who' if pron == 'я' else 'to'), 'block',
                                      '%s — %s (%s), а «%s %s» — %s рід' % (

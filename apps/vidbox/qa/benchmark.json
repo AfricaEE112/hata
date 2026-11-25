@@ -1,0 +1,2272 @@
+{
+ "version": 1,
+ "note": "Сталий тест якості перекладу (NOTES.md → «Тест «Перевірити модель»»). Без Kyonyuu Kazoku Saimin. Регекси в any/all/none — без урахування регістру; any — хоч один; all — усі; none — жодного.",
+ "cases": [
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane01-thug",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Whoa... They're huge!"
+    },
+    {
+     "en": "Ah! Did you look?"
+    },
+    {
+     "en": "You looked at my tits, right?",
+     "who": "Aika",
+     "to": "Taku"
+    },
+    {
+     "en": "Wanna have a sip too? Just kidding!",
+     "who": "Aika",
+     "any": [
+      "ковт",
+      "сьорб",
+      "відпи",
+      "скуштув",
+      "спробув",
+      "хлебн"
+     ],
+     "none": [
+      "глотн"
+     ],
+     "why": "sip — ковтнути, не «глотнути»"
+    },
+    {
+     "en": "Dumbass! Who'd look at a thug like you!",
+     "who": "Taku",
+     "to": "Aika",
+     "any": [
+      "хуліган",
+      "гопни",
+      "бандит",
+      "шпан",
+      "відморож"
+     ],
+     "none": [
+      "шльонд",
+      "повій"
+     ],
+     "why": "thug — хуліганка, не «шльондра»"
+    },
+    {
+     "en": "Huuuh!?"
+    },
+    {
+     "en": "My sister moved out and got married to her former delinquent fellow."
+    },
+    {
+     "en": "She gave birth to their second child a few days ago."
+    },
+    {
+     "en": "She's back to our family's home for a while to take care of her baby."
+    },
+    {
+     "en": "Hold it right there, mister!"
+    },
+    {
+     "en": "Wear some clothes!"
+    },
+    {
+     "en": "She's always like this every day."
+    },
+    {
+     "en": "My sister had always been a thuggish one back then.",
+     "any": [
+      "хуліган",
+      "гопни",
+      "бандит",
+      "шпан",
+      "відморож"
+     ],
+     "none": [
+      "шльонд",
+      "повій"
+     ]
+    },
+    {
+     "en": "But nowadays,"
+    }
+   ],
+   "sex": [],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 01",
+    "from": 10
+   }
+  },
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane01-daisuke",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Drink with me, Takuya!",
+     "who": "Aika",
+     "to": "Taku"
+    },
+    {
+     "en": "Oh, there's no place like home!"
+    },
+    {
+     "en": "Jeez, how long are you planning to stay here?"
+    },
+    {
+     "en": "Don't you feel bad for Daisuke-san?",
+     "who": "Taku",
+     "to": "Aika",
+     "any": [
+      "Дайсуке"
+     ],
+     "none": [
+      "Дайкі",
+      "-сан"
+     ],
+     "why": "Daisuke ≠ Daiki; без -сан"
+    },
+    {
+     "en": "Shaddup!"
+    },
+    {
+     "en": "You're sloppy in the first place, sis!",
+     "who": "Taku",
+     "to": "Aika",
+     "any": [
+      "неохайн",
+      "недбал",
+      "неакуратн",
+      "безлад",
+      "розхрист",
+      "нечепур",
+      "розпущен",
+      "неорганізован"
+     ],
+     "none": [
+      "розмазн"
+     ],
+     "why": "sloppy — неохайна, не «розмазня»"
+    },
+    {
+     "en": "L-Like how you go around without a bra, or with your breasts out...",
+     "any": [
+      "ліфчик",
+      "бюстгальтер",
+      "бюстик"
+     ],
+     "none": [
+      "бюстгалтер",
+      "бюстєкс"
+     ]
+    },
+    {
+     "en": "You're living with a young man around so you should be more careful!"
+    }
+   ],
+   "sex": [],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 01",
+    "from": 38
+   }
+  },
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane01-chicken",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Th-That's right, but..."
+    },
+    {
+     "en": "H-Hey, I think having you suck them is a bit...",
+     "who": "Aika",
+     "to": "Taku"
+    },
+    {
+     "en": "What's that, sis? You're chickening out?",
+     "who": "Taku",
+     "to": "Aika",
+     "any": [
+      "злякал",
+      "боїш",
+      "струси",
+      "здрейф",
+      "пасуєш",
+      "кущі",
+      "відступ",
+      "сцикотн",
+      "зляка",
+      "дав задню",
+      "дала задню",
+      "очкуєш",
+      "перелякал"
+     ],
+     "none": [
+      "тікаєш"
+     ],
+     "why": "chickening out — злякалася"
+    },
+    {
+     "en": "Th-There's no way I am!",
+     "who": "Aika",
+     "to": "Taku"
+    }
+   ],
+   "sex": [],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 01",
+    "from": 58
+   }
+  },
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane01-knew",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Hey!"
+    },
+    {
+     "en": "It's twitching inside me..."
+    },
+    {
+     "en": "I knew it... My younger brother's cock is great!",
+     "who": "Aika",
+     "any": [
+      "знала"
+     ],
+     "none": [
+      "знав\\b"
+     ],
+     "why": "мовець — жінка"
+    },
+    {
+     "en": "I'll get addicted to this..."
+    },
+    {
+     "en": "Hey, why did you give me a creampie again!?",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "всередин",
+      "в мене",
+      "кінчив"
+     ],
+     "none": [
+      "кремпі"
+     ]
+    },
+    {
+     "en": "I'm sorry, I didn't mean to...",
+     "who": "Taku",
+     "to": "Aika"
+    },
+    {
+     "en": "Jeez... Make sure to wear a rubber",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "гумк",
+      "презерватив",
+      "резинк"
+     ]
+    },
+    {
+     "en": "from now on..."
+    },
+    {
+     "en": "Since then, I've been enjoying sex with my older sister"
+    },
+    {
+     "en": "as much as I want when our family is outside in the daytime.",
+     "any": [
+      "нема",
+      "поза дом",
+      "надвор",
+      "не вдома",
+      "на вулиці",
+      "вийшл",
+      "йде",
+      "піде",
+      "відсутн"
+     ]
+    },
+    {
+     "en": "Hey, nothing will be left for Yuusuke if you drink that much milk!",
+     "who": "Taku",
+     "to": "Aika",
+     "any": [
+      "Юсуке",
+      "Юске"
+     ]
+    },
+    {
+     "en": "Jeez!"
+    },
+    {
+     "en": "Oh, it's time for mommy's tits!"
+    },
+    {
+     "en": "Yes, yes... Yuusuke!"
+    },
+    {
+     "en": "Aren't you hungry?",
+     "who": "Aika",
+     "to": "Yuusuke",
+     "any": [
+      "голодн"
+     ],
+     "none": [
+      "голодна"
+     ],
+     "why": "до немовляти-хлопчика"
+    },
+    {
+     "en": "Hey, Taku... I'm parched.",
+     "who": "Aika",
+     "to": "Taku"
+    }
+   ],
+   "sex": [
+    [
+     0,
+     7
+    ]
+   ],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 01",
+    "from": 140
+   }
+  },
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane01-lunch",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Are you on lunch break?",
+     "who": "Aika",
+     "to": "Daisuke"
+    },
+    {
+     "en": "Yeah, I will be on duty after~!"
+    },
+    {
+     "en": "Good luck with work, papa!",
+     "who": "Aika",
+     "to": "Daisuke",
+     "any": [
+      "тат",
+      "тату",
+      "татк"
+     ],
+     "none": [
+      "\\bпап"
+     ],
+     "why": "папа → тато"
+    },
+    {
+     "en": "Dammit! She's squeezing my cock dry"
+    },
+    {
+     "en": "while having fun talking to her husband!"
+    },
+    {
+     "en": "Hey, you'll make my hand slip!",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "рук"
+     ]
+    },
+    {
+     "en": "Gosh! I get it already!"
+    },
+    {
+     "en": "I'll do it properly!"
+    },
+    {
+     "en": "Come whenever you want.",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "кінча",
+      "кінчи"
+     ],
+     "none": [
+      "приходь"
+     ],
+     "why": "come = кінчати, не «приходь»"
+    },
+    {
+     "en": "I'm gonna catch it.",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "злов",
+      "прийм",
+      "ковтн",
+      "спійма",
+      "впійма"
+     ],
+     "none": [
+      "спіймаю облизня"
+     ]
+    },
+    {
+     "en": "Sis, how about going all the way?",
+     "who": "Taku",
+     "to": "Aika",
+     "any": [
+      "до кінця",
+      "повністю",
+      "по-справжньому",
+      "по-дорослому",
+      "усе"
+     ]
+    },
+    {
+     "en": "No! Daiki and mom are about to come home soon!",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "Дайкі"
+     ]
+    }
+   ],
+   "sex": [
+    [
+     3,
+     11
+    ]
+   ],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 01",
+    "from": 174
+   }
+  },
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane01-rubber",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Sis!"
+    },
+    {
+     "en": "This cock is damn great! I knew it!",
+     "who": "Aika",
+     "any": [
+      "знала"
+     ],
+     "none": [
+      "знав\\b"
+     ]
+    },
+    {
+     "en": "I never had my younger brother's cock for a week!",
+     "who": "Aika"
+    },
+    {
+     "en": "I'll end up moaning if I lose my focus!",
+     "who": "Aika",
+     "any": [
+      "стогн"
+     ]
+    },
+    {
+     "en": "Wait, this sensation..."
+    },
+    {
+     "en": "Hey, Taku... Did you wear a rubber?",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "гумк",
+      "презерватив",
+      "резинк"
+     ]
+    },
+    {
+     "en": "Uhh!"
+    },
+    {
+     "en": "What do you mean \"uhh\"? Don't tell me that..."
+    },
+    {
+     "en": "Hey, don't dodge my question by thrusting hard!",
+     "who": "Aika",
+     "to": "Taku"
+    },
+    {
+     "en": "This position is incredible!"
+    },
+    {
+     "en": "My sons are sleeping in the next room."
+    },
+    {
+     "en": "No... Right now..."
+    },
+    {
+     "en": "I'm making a face unbecoming of a mother!",
+     "who": "Aika",
+     "any": [
+      "мат",
+      "мам"
+     ]
+    },
+    {
+     "en": "I'm already..."
+    },
+    {
+     "en": "Hey, do it outside!",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "назовні",
+      "ззовні",
+      "не всередин",
+      "на живіт",
+      "витягни",
+      "вийми"
+     ],
+     "none": [
+      "зроби це ззовні"
+     ]
+    },
+    {
+     "en": "I'm coming—!",
+     "who": "Aika",
+     "any": [
+      "кінча"
+     ]
+    }
+   ],
+   "sex": [
+    [
+     0,
+     15
+    ]
+   ],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 01",
+    "from": 203
+   }
+  },
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane02-atami",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "It's the sea!"
+    },
+    {
+     "en": "We went to Atami Beach today.",
+     "who": "Taku",
+     "any": [
+      "Атамі"
+     ]
+    },
+    {
+     "en": "Raffle Area",
+     "any": [
+      "розіграш",
+      "лотере"
+     ]
+    },
+    {
+     "en": "Here's your prize!"
+    },
+    {
+     "en": "Special Prize",
+     "any": [
+      "приз",
+      "нагород"
+     ]
+    },
+    {
+     "en": "Oh, these are Atami travel coupons...",
+     "any": [
+      "Атамі"
+     ]
+    },
+    {
+     "en": "I can spend time alone with my older sister..."
+    },
+    {
+     "en": "Ugh... There's Daiki and the others too so that won't happen...",
+     "who": "Taku",
+     "any": [
+      "Дайкі"
+     ]
+    },
+    {
+     "en": "I'm home!"
+    },
+    {
+     "en": "Oh? What's that?"
+    },
+    {
+     "en": "Are you serious!? Atami travel coupons!?",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "Атамі"
+     ]
+    },
+    {
+     "en": "They allow visitors to bring babies with them!",
+     "who": "Aika",
+     "any": [
+      "немовл",
+      "малюк",
+      "малят",
+      "дітей",
+      "діток"
+     ]
+    }
+   ],
+   "sex": [],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 02",
+    "from": 0
+   }
+  },
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane02-cpr",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "N-No, I never really did anything...",
+     "who": "Taku",
+     "to": "Aika"
+    },
+    {
+     "en": "It was Daisuke-san who saved you.",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "Дайсуке"
+     ],
+     "none": [
+      "Дайкі",
+      "-сан"
+     ]
+    },
+    {
+     "en": "You were manly back there...",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "мужн",
+      "справжн",
+      "чолові"
+     ],
+     "why": "manly"
+    },
+    {
+     "en": "...just kidding!"
+    },
+    {
+     "en": "Uhh! Dammit, sis!",
+     "who": "Taku",
+     "to": "Aika"
+    },
+    {
+     "en": "How dare you play with a man's heart!"
+    },
+    {
+     "en": "S-Sis, I'm gonna come!",
+     "who": "Taku",
+     "to": "Aika",
+     "any": [
+      "кінч"
+     ]
+    },
+    {
+     "en": "Alright, I'm about to come too!",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "кінч"
+     ]
+    },
+    {
+     "en": "Oh! I found you, mom!",
+     "who": "Daiki",
+     "to": "Aika",
+     "any": [
+      "мам"
+     ]
+    },
+    {
+     "en": "What are you doing?"
+    },
+    {
+     "en": "Th-This is called CPR!",
+     "who": "Aika",
+     "to": "Daiki",
+     "any": [
+      "штучн\\w* дихан",
+      "реанімац",
+      "рот у рот",
+      "рот в рот",
+      "серцево-легенев",
+      "першу допомогу"
+     ],
+     "none": [
+      "серцебит"
+     ],
+     "why": "CPR — штучне дихання"
+    },
+    {
+     "en": "You see, Taku drowned!",
+     "who": "Aika",
+     "to": "Daiki",
+     "any": [
+      "Таку"
+     ],
+     "none": [
+      "Таку-"
+     ]
+    },
+    {
+     "en": "What's wrong, mom?"
+    },
+    {
+     "en": "N-Nothing..."
+    },
+    {
+     "en": "Oh! Here you go, dad! Have another glass!",
+     "who": "Aika",
+     "any": [
+      "тат",
+      "тату",
+      "татк"
+     ],
+     "none": [
+      "\\bпап"
+     ]
+    },
+    {
+     "en": "Hey, we can't do this!"
+    },
+    {
+     "en": "Hold it in until everybody's asleep."
+    },
+    {
+     "en": "Our family and my husband are just right next room..."
+    },
+    {
+     "en": "They're gonna catch us!"
+    },
+    {
+     "en": "Ehh... So it's really true that Aika",
+     "any": [
+      "Айк"
+     ]
+    },
+    {
+     "en": "was already tomboyish as a child?",
+     "any": [
+      "пацанк",
+      "хлопчак",
+      "шибеник",
+      "бешкетн",
+      "хуліган",
+      "шибайголов",
+      "зірвиголов",
+      "хлопчиськ"
+     ],
+     "none": [
+      "соромих"
+     ],
+     "why": "tomboyish"
+    },
+    {
+     "en": "That girl once said, \"I'm the only one allowed to bully Taku\"!",
+     "any": [
+      "Таку"
+     ]
+    },
+    {
+     "en": "Don't do that!"
+    },
+    {
+     "en": "I'll moan... I'll end up moaning...",
+     "who": "Aika",
+     "any": [
+      "стогн"
+     ]
+    },
+    {
+     "en": "I bet your daughter thought of her little brother as a pet back then!"
+    },
+    {
+     "en": "Oh, isn't that still true today?"
+    }
+   ],
+   "sex": [
+    [
+     4,
+     7
+    ],
+    [
+     15,
+     24
+    ]
+   ],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 02",
+    "from": 84
+   }
+  },
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane02-cold",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "That hard thing of yours is ramming me deep inside so fast!",
+     "who": "Aika",
+     "to": "Taku"
+    },
+    {
+     "en": "I really love this!"
+    },
+    {
+     "en": "Yes, when you insatiably lust after me like this...",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "ненаситн",
+      "жадібн",
+      "жадаєш",
+      "прагнеш",
+      "хочеш"
+     ],
+     "none": [
+      "ненасильн"
+     ]
+    },
+    {
+     "en": "I'm getting addicted to this!"
+    },
+    {
+     "en": "Nee-chan!",
+     "who": "Taku",
+     "to": "Aika",
+     "any": [
+      "сестр"
+     ],
+     "none": [
+      "\\bнее",
+      "-чан"
+     ]
+    },
+    {
+     "en": "Taku, this feels chilly!",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "холод",
+      "прохолод",
+      "мерзн",
+      "змерз"
+     ]
+    },
+    {
+     "en": "I'm gonna catch a cold!",
+     "who": "Aika",
+     "any": [
+      "застуд",
+      "захворію"
+     ],
+     "none": [
+      "застуж"
+     ]
+    },
+    {
+     "en": "Then I'll use my semen"
+    }
+   ],
+   "sex": [
+    [
+     0,
+     7
+    ]
+   ],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 02",
+    "from": 168
+   }
+  },
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane02-third",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Thanks for the meal..."
+    },
+    {
+     "en": "Let's come back here again at Atami!"
+    },
+    {
+     "en": "H-Hey, sis...",
+     "who": "Taku",
+     "to": "Aika"
+    },
+    {
+     "en": "H-How did it go?"
+    },
+    {
+     "en": "Well..."
+    },
+    {
+     "en": "We really did it!",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "вийшло",
+      "вдалося",
+      "зробили",
+      "завагіт",
+      "вагітн",
+      "вдалось",
+      "вийшло"
+     ]
+    },
+    {
+     "en": "I can feel that it was the case since it's already my third one.",
+     "who": "Aika",
+     "any": [
+      "трет"
+     ]
+    },
+    {
+     "en": "Wh-Whoaaa!"
+    },
+    {
+     "en": "It's okay! You have the same blood type as my husband!",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "груп\\w* крові"
+     ]
+    },
+    {
+     "en": "I hope that it's a girl this time!"
+    },
+    {
+     "en": "This means that we'll save up money from buying rubbers for a while.",
+     "who": "Aika",
+     "any": [
+      "гумк",
+      "презерватив",
+      "резинк"
+     ]
+    },
+    {
+     "en": "Let's get right to it again today!"
+    },
+    {
+     "en": "Several months went by and winter came."
+    },
+    {
+     "en": "My older sister lied about her third child being Daisuke's.",
+     "who": "Taku",
+     "any": [
+      "Дайсуке"
+     ],
+     "none": [
+      "Дайкі"
+     ]
+    }
+   ],
+   "sex": [],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 02",
+    "from": 200
+   }
+  },
+  {
+   "title": "Ane wa Yanmama Junyuuchuu",
+   "summary": "Taku (younger brother, male) and his older sister Aika (female, former delinquent, married to Daisuke, mother of Daiki and baby Yuusuke) have a secret affair at the family home.",
+   "chars": [
+    {
+     "en": "Taku",
+     "uk": "Таку",
+     "gender": "m",
+     "aliases": [
+      "Takuya"
+     ]
+    },
+    {
+     "en": "Aika",
+     "uk": "Айка",
+     "gender": "f",
+     "aliases": [
+      "Sis",
+      "Nee-chan"
+     ]
+    },
+    {
+     "en": "Daisuke",
+     "uk": "Дайсуке",
+     "gender": "m",
+     "speech": "Aika's husband"
+    },
+    {
+     "en": "Daiki",
+     "uk": "Дайкі",
+     "gender": "m",
+     "speech": "Aika's older son"
+    },
+    {
+     "en": "Yuusuke",
+     "uk": "Юсуке",
+     "gender": "m",
+     "speech": "Aika's baby son"
+    }
+   ],
+   "id": "ane02-pregnant",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Don't worry, just let your sister pamper you.",
+     "who": "Aika",
+     "to": "Taku"
+    },
+    {
+     "en": "Sis!"
+    },
+    {
+     "en": "Gosh... What a hopeless spoiled brat you always are!",
+     "who": "Aika",
+     "to": "Taku"
+    },
+    {
+     "en": "You're more childish than Daiki!",
+     "who": "Aika",
+     "to": "Taku",
+     "any": [
+      "Дайкі"
+     ]
+    },
+    {
+     "en": "My older sister said it before..."
+    },
+    {
+     "en": "That she's pregnant with Daisuke-san's third child.",
+     "who": "Taku",
+     "all": [
+      "вагітн",
+      "Дайсуке"
+     ],
+     "none": [
+      "завагірн",
+      "-сан"
+     ]
+    },
+    {
+     "en": "So, that really means she chose him over me...",
+     "who": "Taku"
+    },
+    {
+     "en": "Ahh... Taku!"
+    }
+   ],
+   "sex": [
+    [
+     0,
+     7
+    ]
+   ],
+   "from": {
+    "ep": "Ane wa Yanmama Junyuuchuu 02",
+    "from": 230
+   }
+  },
+  {
+   "title": "Tsuma ni Damatte Sokubaikai ni Ikun ja Nakatta",
+   "summary": "Yumiko (female, married to Taka) has an affair with young Kazuya while her husband Taka is away, supposedly on business trips (really at an anime convention).",
+   "chars": [
+    {
+     "en": "Yumiko",
+     "uk": "Юміко",
+     "gender": "f"
+    },
+    {
+     "en": "Kazuya",
+     "uk": "Кадзуя",
+     "gender": "m"
+    },
+    {
+     "en": "Taka",
+     "uk": "Така",
+     "gender": "m",
+     "speech": "Yumiko's husband"
+    }
+   ],
+   "id": "tsuma01-doujinshi",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "I'm still good to go. What should we do?",
+     "who": "Kazuya",
+     "to": "Yumiko"
+    },
+    {
+     "en": "Just make sure to wear a rubber, okay?",
+     "who": "Yumiko",
+     "to": "Kazuya",
+     "any": [
+      "гумк",
+      "презерватив",
+      "резинк"
+     ]
+    },
+    {
+     "en": "Ohh, so this is your bedroom!"
+    },
+    {
+     "en": "O-On second thought, let's do it in another room...",
+     "who": "Yumiko",
+     "to": "Kazuya"
+    },
+    {
+     "en": "Oh, isn't that a doujinshi?",
+     "who": "Kazuya",
+     "to": "Yumiko",
+     "any": [
+      "доджінш",
+      "додзінш",
+      "дзінш",
+      "комікс",
+      "манґ",
+      "манг",
+      "фанатськ"
+     ],
+     "none": [
+      "doujin"
+     ]
+    },
+    {
+     "en": "Doujinshi?",
+     "who": "Yumiko",
+     "any": [
+      "доджінш",
+      "додзінш",
+      "дзінш",
+      "комікс",
+      "манґ",
+      "манг",
+      "фанатськ"
+     ],
+     "none": [
+      "doujin"
+     ]
+    }
+   ],
+   "sex": [],
+   "from": {
+    "ep": "Tsuma ni Damatte Sokubaikai ni Ikun ja Nakatta 01",
+    "from": 98
+   }
+  },
+  {
+   "title": "Tsuma ni Damatte Sokubaikai ni Ikun ja Nakatta",
+   "summary": "Yumiko (female, married to Taka) has an affair with young Kazuya while her husband Taka is away, supposedly on business trips (really at an anime convention).",
+   "chars": [
+    {
+     "en": "Yumiko",
+     "uk": "Юміко",
+     "gender": "f"
+    },
+    {
+     "en": "Kazuya",
+     "uk": "Кадзуя",
+     "gender": "m"
+    },
+    {
+     "en": "Taka",
+     "uk": "Така",
+     "gender": "m",
+     "speech": "Yumiko's husband"
+    }
+   ],
+   "id": "tsuma01-impregnated",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Shoot it inside me!",
+     "who": "Yumiko",
+     "to": "Kazuya"
+    },
+    {
+     "en": "I can feel it..."
+    },
+    {
+     "en": "I can feel his sperm entering my womb!",
+     "who": "Yumiko",
+     "any": [
+      "сперм",
+      "матк",
+      "лоно"
+     ]
+    },
+    {
+     "en": "He plugged me up with his dick! There's no escaping this!"
+    },
+    {
+     "en": "What should I do if I get impregnated?",
+     "who": "Yumiko",
+     "any": [
+      "завагітн",
+      "вагітн",
+      "заплідн"
+     ],
+     "none": [
+      "завагірн"
+     ]
+    },
+    {
+     "en": "I'm sorry, Taka-kun!",
+     "who": "Yumiko",
+     "to": "Taka",
+     "any": [
+      "Така"
+     ],
+     "none": [
+      "-кун"
+     ]
+    }
+   ],
+   "sex": [
+    [
+     0,
+     5
+    ]
+   ],
+   "from": {
+    "ep": "Tsuma ni Damatte Sokubaikai ni Ikun ja Nakatta 01",
+    "from": 190
+   }
+  },
+  {
+   "title": "Tsuma ni Damatte Sokubaikai ni Ikun ja Nakatta",
+   "summary": "Yumiko (female, married to Taka) has an affair with young Kazuya while her husband Taka is away, supposedly on business trips (really at an anime convention).",
+   "chars": [
+    {
+     "en": "Yumiko",
+     "uk": "Юміко",
+     "gender": "f"
+    },
+    {
+     "en": "Kazuya",
+     "uk": "Кадзуя",
+     "gender": "m"
+    },
+    {
+     "en": "Taka",
+     "uk": "Така",
+     "gender": "m",
+     "speech": "Yumiko's husband"
+    }
+   ],
+   "id": "tsuma02-trip",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "It's already 4 AM..."
+    },
+    {
+     "en": "Taka-kun told me to wake him up at six",
+     "who": "Yumiko",
+     "any": [
+      "Така"
+     ],
+     "none": [
+      "-кун"
+     ]
+    },
+    {
+     "en": "so I should start preparing breakfast now."
+    },
+    {
+     "en": "It's alright, he's a heavy sleeper.",
+     "who": "Kazuya",
+     "to": "Yumiko",
+     "any": [
+      "спить",
+      "сон",
+      "сплюх",
+      "спати"
+     ]
+    },
+    {
+     "en": "Hey, wanna go on a trip?",
+     "who": "Kazuya",
+     "to": "Yumiko",
+     "any": [
+      "поїздк",
+      "подорож",
+      "поїха",
+      "з'їзди",
+      "з’їзди",
+      "мандр"
+     ]
+    },
+    {
+     "en": "We've been together for a year now.",
+     "who": "Kazuya",
+     "to": "Yumiko",
+     "any": [
+      "рік",
+      "року"
+     ]
+    },
+    {
+     "en": "Isn't your husband going on a business trip tomorrow?",
+     "who": "Kazuya",
+     "to": "Yumiko",
+     "any": [
+      "відрядж"
+     ]
+    },
+    {
+     "en": "But going on a trip when Taka-kun is working hard would be...",
+     "who": "Yumiko",
+     "to": "Kazuya",
+     "any": [
+      "Така"
+     ]
+    },
+    {
+     "en": "Do you still believe that?",
+     "who": "Kazuya",
+     "to": "Yumiko"
+    },
+    {
+     "en": "Well, as long as he says it's a business trip,"
+    },
+    {
+     "en": "I want to have faith in him...",
+     "who": "Yumiko",
+     "any": [
+      "вір"
+     ]
+    },
+    {
+     "en": "Hey, Yumiko-san...",
+     "who": "Kazuya",
+     "to": "Yumiko",
+     "any": [
+      "Юміко"
+     ],
+     "none": [
+      "-сан"
+     ]
+    },
+    {
+     "en": "Have you heard of ComiMa?",
+     "who": "Kazuya",
+     "to": "Yumiko",
+     "any": [
+      "Комі",
+      "ComiMa"
+     ]
+    },
+    {
+     "en": "I Shouldn't Have Gone to the Convention Without Telling My Wife"
+    },
+    {
+     "en": "Is Taka-kun really in a place like this?",
+     "who": "Yumiko",
+     "any": [
+      "Така"
+     ]
+    },
+    {
+     "en": "That's what my great deductive reasoning says.",
+     "who": "Yumiko"
+    }
+   ],
+   "sex": [],
+   "from": {
+    "ep": "Tsuma ni Damatte Sokubaikai ni Ikun ja Nakatta 02",
+    "from": 18
+   }
+  },
+  {
+   "title": "Daisuki na Mama",
+   "summary": "Akira (male) has sex with his aunt Saori (female), who calls herself \"mom\" during sex.",
+   "chars": [
+    {
+     "en": "Akira",
+     "uk": "Акіра",
+     "gender": "m"
+    },
+    {
+     "en": "Saori",
+     "uk": "Саорі",
+     "gender": "f"
+    }
+   ],
+   "id": "daisuki02-coming",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "You're stirring me up inside!",
+     "who": "Saori",
+     "to": "Akira"
+    },
+    {
+     "en": "If you keep shoving it in, I'll go crazy!",
+     "who": "Saori",
+     "to": "Akira"
+    },
+    {
+     "en": "You're so intense!",
+     "who": "Saori",
+     "to": "Akira"
+    },
+    {
+     "en": "I'm coming! I'm coming already!",
+     "who": "Saori",
+     "any": [
+      "кінча",
+      "кінчу"
+     ]
+    },
+    {
+     "en": "I can't... I can't take it anymore!",
+     "who": "Saori",
+     "any": [
+      "не можу",
+      "не витрима",
+      "більше не"
+     ]
+    },
+    {
+     "en": "Your dick is rubbing deep inside me!",
+     "who": "Saori",
+     "to": "Akira",
+     "any": [
+      "член",
+      "хуй",
+      "пеніс"
+     ]
+    },
+    {
+     "en": "No... No, I'm coming!",
+     "who": "Saori",
+     "any": [
+      "кінча",
+      "кінчу"
+     ]
+    },
+    {
+     "en": "I'm really gonna come!",
+     "who": "Saori",
+     "any": [
+      "кінч"
+     ]
+    },
+    {
+     "en": "It's coming out!",
+     "who": "Akira"
+    },
+    {
+     "en": "I can't stop myself anymore!",
+     "who": "Akira",
+     "any": [
+      "не можу",
+      "стрима",
+      "зупини"
+     ]
+    }
+   ],
+   "sex": [
+    [
+     0,
+     9
+    ]
+   ],
+   "from": {
+    "ep": "Daisuki na Mama 02",
+    "from": 70
+   }
+  },
+  {
+   "title": "Daisuki na Mama",
+   "summary": "Akira (male) has sex with his aunt Saori (female), who calls herself \"mom\" during sex.",
+   "chars": [
+    {
+     "en": "Akira",
+     "uk": "Акіра",
+     "gender": "m"
+    },
+    {
+     "en": "Saori",
+     "uk": "Саорі",
+     "gender": "f"
+    }
+   ],
+   "id": "daisuki02-handjob",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "You're throbbing down here, like it's gonna burst at any time.",
+     "who": "Saori",
+     "to": "Akira"
+    },
+    {
+     "en": "It's okay, shoot it out!",
+     "who": "Saori",
+     "to": "Akira",
+     "any": [
+      "кінча",
+      "кінчи",
+      "випуска",
+      "стріляй",
+      "давай"
+     ]
+    },
+    {
+     "en": "I want you to come from my handjob!",
+     "who": "Saori",
+     "to": "Akira",
+     "any": [
+      "рук",
+      "дроч"
+     ]
+    },
+    {
+     "en": "Good boy, come!",
+     "who": "Saori",
+     "to": "Akira",
+     "any": [
+      "кінча",
+      "кінчи"
+     ]
+    },
+    {
+     "en": "Cover me with your sperm!",
+     "who": "Saori",
+     "to": "Akira",
+     "any": [
+      "сперм"
+     ]
+    },
+    {
+     "en": "Mom, you're amazing!",
+     "who": "Akira",
+     "to": "Saori",
+     "any": [
+      "мам"
+     ]
+    },
+    {
+     "en": "That's right, I'll do the moving for today!",
+     "who": "Saori",
+     "to": "Akira"
+    },
+    {
+     "en": "I'm sorry, my hips are moving on their own!",
+     "who": "Saori",
+     "any": [
+      "стегн",
+      "таз",
+      "бедр",
+      "попк"
+     ]
+    },
+    {
+     "en": "My hips won't stop!",
+     "who": "Saori"
+    },
+    {
+     "en": "You're coming so much!",
+     "who": "Saori",
+     "to": "Akira",
+     "any": [
+      "кінча",
+      "сперм",
+      "стільки"
+     ]
+    }
+   ],
+   "sex": [
+    [
+     0,
+     9
+    ]
+   ],
+   "from": {
+    "ep": "Daisuki na Mama 02",
+    "from": 86
+   }
+  },
+  {
+   "title": "Nagachichi Nagai-san",
+   "summary": "Nagai (female, shy busty girl) has lewd encounters with strangers: a man on a train, old men at a party, customers at a burger shop.",
+   "chars": [
+    {
+     "en": "Nagai",
+     "uk": "Нагаї",
+     "gender": "f"
+    },
+    {
+     "en": "Customer",
+     "uk": "Клієнт",
+     "gender": "m"
+    }
+   ],
+   "id": "naga02-stop",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "It's shooting out! You're filling my tits with your stinky cum!"
+    },
+    {
+     "en": "Go ahead. Spurt as much as you want until those balls are completely empty.",
+     "who": "Nagai",
+     "to": "Customer"
+    },
+    {
+     "en": "Um... Do you want to get off at the next stop?",
+     "who": "Nagai",
+     "to": "Customer",
+     "any": [
+      "зупинц",
+      "станці"
+     ]
+    },
+    {
+     "en": "Huh?"
+    },
+    {
+     "en": "Well, you can't go to the office in that state.",
+     "who": "Nagai",
+     "to": "Customer",
+     "any": [
+      "офіс",
+      "робот"
+     ]
+    },
+    {
+     "en": "Besides, it looks like you're not done yet.",
+     "who": "Nagai",
+     "to": "Customer",
+     "any": [
+      "закінчив",
+      "не все",
+      "ще не"
+     ]
+    },
+    {
+     "en": "Come on, let's go."
+    },
+    {
+     "en": "Okay."
+    },
+    {
+     "en": "Sorry for dragging you out here like this.",
+     "who": "Nagai",
+     "to": "Customer",
+     "any": [
+      "вибач",
+      "пробач",
+      "перепрош"
+     ]
+    },
+    {
+     "en": "But it's your fault. Your lewd cock made my pussy throb so hard, I couldn't wait any longer.",
+     "who": "Nagai",
+     "to": "Customer"
+    }
+   ],
+   "sex": [
+    [
+     0,
+     1
+    ],
+    [
+     9,
+     9
+    ]
+   ],
+   "from": {
+    "ep": "Nagachichi Nagai-san 02",
+    "from": 76
+   }
+  },
+  {
+   "title": "Nagachichi Nagai-san",
+   "summary": "Nagai (female, shy busty girl) has lewd encounters with strangers: a man on a train, old men at a party, customers at a burger shop.",
+   "chars": [
+    {
+     "en": "Nagai",
+     "uk": "Нагаї",
+     "gender": "f"
+    },
+    {
+     "en": "Customer",
+     "uk": "Клієнт",
+     "gender": "m"
+    }
+   ],
+   "id": "naga03-neither",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Lively Bunny Service🖤 New Year's Party"
+    },
+    {
+     "en": "I can't hold back anymore!",
+     "any": [
+      "стрим",
+      "терпіти",
+      "витерп",
+      "чекати"
+     ]
+    },
+    {
+     "en": "Me neither!",
+     "any": [
+      "теж",
+      "і я",
+      "так само"
+     ],
+     "none": [
+      "стримув"
+     ],
+     "why": "Me neither — «Я теж!», не повтор попередньої"
+    },
+    {
+     "en": "Huh?"
+    },
+    {
+     "en": "Hey! We can't see a damn thing if you squat down like that!",
+     "any": [
+      "присяд",
+      "сядеш",
+      "сідаєш",
+      "сядете",
+      "сідаєте",
+      "сіла",
+      "присіла"
+     ]
+    },
+    {
+     "en": "Ehhh?!"
+    },
+    {
+     "en": "You gotta listen to your elders!",
+     "any": [
+      "старш"
+     ]
+    },
+    {
+     "en": "There we go."
+    }
+   ],
+   "sex": [],
+   "from": {
+    "ep": "Nagachichi Nagai-san 03",
+    "from": 20
+   }
+  },
+  {
+   "title": "Nagachichi Nagai-san",
+   "summary": "Nagai (female, shy busty girl) has lewd encounters with strangers: a man on a train, old men at a party, customers at a burger shop.",
+   "chars": [
+    {
+     "en": "Nagai",
+     "uk": "Нагаї",
+     "gender": "f"
+    },
+    {
+     "en": "Customer",
+     "uk": "Клієнт",
+     "gender": "m"
+    }
+   ],
+   "id": "naga03-order",
+   "sets": [
+    "hentai"
+   ],
+   "lines": [
+    {
+     "en": "Wait, wait, now's not the time to panic!"
+    },
+    {
+     "en": "T-That's right!"
+    },
+    {
+     "en": "U-Um..."
+    },
+    {
+     "en": "What drink would you like with your combo?",
+     "who": "Nagai",
+     "to": "Customer",
+     "any": [
+      "напій",
+      "пити",
+      "напо",
+      "питиме"
+     ]
+    },
+    {
+     "en": "You're seriously gonna finish the order?!",
+     "who": "Customer",
+     "to": "Nagai",
+     "any": [
+      "замовлен",
+      "замовиш",
+      "замовит",
+      "дозамов",
+      "оформи",
+      "прийма"
+     ],
+     "none": [
+      "\\bкінч"
+     ],
+     "why": "finish the order — не секс"
+    },
+    {
+     "en": "Hmm... Then I'll have the Fresh Squeezed Milk.",
+     "who": "Customer",
+     "any": [
+      "молок"
+     ]
+    }
+   ],
+   "sex": [],
+   "from": {
+    "ep": "Nagachichi Nagai-san 03",
+    "from": 136
+   }
+  }
+ ]
+}

@@ -146,6 +146,8 @@ def test_gender():
     assert not blocks(check_line(L("Aren't you hungry?", to='Aika'), 'Ти що, не голодна?', c))
     assert not blocks(check_line(L('I knew it'), 'Я так і знав!', c)), 'мовець невідомий — не судимо'
     assert not blocks(check_line(L('We knew it', who='Aika'), 'Ми так і знали!', c))
+    assert not blocks(check_line(L('A week', who='Aika'), 'Я цілий тиждень не відчувала члена.', c))
+    assert 'gender_who' in blocks(check_line(L("I'm so happy", who='Taku'), 'Я така щаслива!', c))
 
 
 def test_sex_context():
@@ -208,6 +210,48 @@ def test_without_dictionary():
     assert 'russism' in codes(check_line(L('Yes'), 'Конечно', c)), 'русизми працюють і без словника'
     rep = validate([L('Hi.', n=0, uk='Привіт.')], c)
     assert rep['meta']['dict_ok'] is False
+
+
+# ---------------- тест якості (benchmark) ----------------
+def test_benchmark_file_is_sane():
+    from tr import bench
+    b = bench.load()
+    ids = set()
+    for c in b['cases']:
+        assert c['id'] not in ids and 'kyonyuu' not in (c['id'] + c.get('title', '')).lower()
+        ids.add(c['id'])
+        names = {ch['en'] for ch in c['chars']}
+        for ln in c['lines']:
+            for k in ('any', 'all', 'none'):
+                for p in ln.get(k) or []:
+                    re.compile(p)
+            for k in ('who', 'to'):
+                assert not ln.get(k) or ln[k] in names, (c['id'], ln)
+        for a, z in c.get('sex') or []:
+            assert 0 <= a <= z < len(c['lines'])
+    assert sum(len(c['lines']) for c in b['cases']) >= 150
+
+
+def test_bench_scoring():
+    from tr import bench
+    case = {'id': 't', 'chars': [{'en': 'Aika', 'uk': 'Айка', 'gender': 'f'}], 'sex': [],
+            'lines': [{'en': 'I knew it!', 'who': 'Aika', 'any': ['знала'], 'none': [r'знав\b']},
+                      {'en': 'Me neither!', 'any': ['теж']},
+                      {'en': 'Thanks for finishing!', 'none': [r'\bкінч']}]}
+    r = bench.score_case(case, ['Я так і знала!', 'Я теж!', 'Дякую, що закінчив!'])
+    assert r['passed'] == 3, r
+    r = bench.score_case(case, ['Я так і знав!', 'Я так і знав!', 'Дякую, що кінчив!'])
+    assert r['passed'] == 0, r
+    assert r['lines'][1]['expect'], 'немає «теж»'
+    r = bench.score_case(case, ['Я так і знала!'])        # модель повернула менше рядків
+    assert r['passed'] == 1 and not r['lines'][2]['ok']
+    rep = bench.run(lambda c: ['Я так і знала!', 'Я теж!', 'Дякую!'], bench={'cases': [case, dict(case, id='u')]})
+    assert rep['score'] == 100.0 and rep['meta']['finished']
+
+    def boom(c):
+        raise RuntimeError('ПК вимкнений')
+    rep = bench.run(boom, bench={'cases': [case]})
+    assert rep['score'] == 0 and rep['cases'][0]['error'] == 'ПК вимкнений'
 
 
 if __name__ == '__main__':

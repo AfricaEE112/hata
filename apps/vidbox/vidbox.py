@@ -1672,6 +1672,87 @@ def ai_tr_deps():
         return False
 
 
+BENCH = {'run': False, 'p': 0.0, 'stop': False, 'err': ''}     # тест «Перевірити модель» (tr/bench.py)
+
+
+def bench_dir():
+    return os.path.join(C.data, 'aisubs', 'bench')
+
+
+def bench_gloss(case):
+    """Глосарій і заборони для оцінки — ті самі, що бачить перекладач (загальний + набори сцени)."""
+    sets = case.get('sets') or []
+    items = list(gloss_get('_')['items'])
+    for k in sets:
+        items += gloss_sets().get(k, {}).get('items', [])
+    forbid = [rx for k in sets for rx in gloss_sets().get(k, {}).get('forbid') or []]
+    return items, forbid
+
+
+def bench_translate_old(case):
+    """Старе ядро (translate_uk) на сцені тесту: контекст серії — з тесту, а не з аналізу моделлю,
+    щоб усі прогони були в однакових умовах."""
+    TR_CTX.gloss_sids, TR_CTX.sets, TR_CTX.temp = ['_'], list(case.get('sets') or []), None
+    chars = case.get('chars') or []
+    ctx = []
+    if case.get('summary'):
+        ctx.append('About this episode: ' + case['summary'])
+    if chars:
+        ctx.append('Characters (use correct Ukrainian gender endings for speakers and addressees): ' + '; '.join(
+            '%s → %s (%s%s)' % (c['en'], c['uk'], {'f': 'female', 'm': 'male'}.get(c.get('gender'), 'gender unknown'),
+                                ', ' + c['speech'] if c.get('speech') else '') for c in chars))
+    TR_CTX.ctx = '\n'.join(ctx)
+    TR_CTX.auto_items = gloss_clean([[c['en'], c['uk'], "ім'я", GENDER_UK.get(c.get('gender'), '')] for c in chars])
+    out, _via = translate_uk([ln['en'] for ln in case['lines']], 'en')
+    return out
+
+
+def bench_job(core):
+    try:
+        from tr import bench as trb, Lexicon
+        ai_tr_deps()                    # словник для оцінки — з venv ШІ (на старих встановленнях докладається тут)
+        lex = Lexicon.get(ai_dir('venv'))
+        meta = {'core': core, 'at': int(time.time()), 'model': C.cfg.get('local_pin') or C.cfg.get('local_model') or '',
+                'translator': (tr_chain() or [('', '')])[0][0], 'harden': C.cfg.get('ai_harden', True),
+                'dict': lex.ok}
+        rep = trb.run(bench_translate_old, bench_gloss, progress=lambda f: BENCH.update(p=f), meta=meta,
+                      should_stop=lambda: BENCH['stop'])
+        os.makedirs(bench_dir(), exist_ok=True)
+        name = time.strftime('%Y%m%d-%H%M%S') + '.json'
+        with open(os.path.join(bench_dir(), name), 'w', encoding='utf-8') as f:
+            json.dump(rep, f, ensure_ascii=False, indent=1)
+        BENCH['err'] = '' if rep['meta'].get('finished') else 'Зупинено — оцінка лише за пройденими сценами'
+    except Exception as e:              # noqa: BLE001
+        BENCH['err'] = 'Тест не вдався: %s' % str(e)[:300]
+    finally:
+        BENCH.update(run=False, stop=False)
+        AI_WAKE.set()
+
+
+def bench_list():
+    out = []
+    d = bench_dir()
+    for fn in sorted(os.listdir(d) if os.path.isdir(d) else [], reverse=True)[:30]:
+        try:
+            with open(os.path.join(d, fn), encoding='utf-8') as f:
+                j = json.load(f)
+        except (OSError, ValueError):
+            continue
+        out.append({'id': fn[:-5], 'score': j.get('score'), 'passed': j.get('passed'), 'total': j.get('total'),
+                    'meta': j.get('meta') or {}, 'codes': j.get('codes') or {}})
+    return out
+
+
+def bench_get(bid):
+    if not re.fullmatch(r'\d{8}-\d{6}', str(bid or '')):
+        return None
+    try:
+        with open(os.path.join(bench_dir(), bid + '.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
 def ai_queue():
     try:
         with open(os.path.join(C.data, 'aisubs', 'queue.json'), encoding='utf-8') as f:
@@ -3143,7 +3224,7 @@ def ai_loop():
     while True:
         AI_WAKE.wait(60)
         AI_WAKE.clear()
-        while ai_ready():
+        while ai_ready() and not BENCH['run']:     # під час тесту якості черга чекає — модель одна
             now = time.time()
             it = next((x for x in ai_queue() if x['state'] == 'queued' and (x.get('wait') or 0) <= now), None)
             if not it:
@@ -3232,7 +3313,8 @@ def ai_status():
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
             'localUrl': C.cfg.get('local_url') or '', 'localModel': C.cfg.get('local_model') or '',
-            'localToken': bool((C.cfg.get('local_key') or '').strip()), 'gloss': len(gloss_get('_')['items']), 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q}
+            'localToken': bool((C.cfg.get('local_key') or '').strip()), 'gloss': len(gloss_get('_')['items']), 'trMain': C.cfg.get('tr_main') or 'gemini', 'linux': sys.platform.startswith('linux'), 'queue': q,
+            'bench': {'run': BENCH['run'], 'p': round(BENCH['p'], 3), 'err': BENCH['err'], 'last': (bench_list() or [None])[0]}}
 
 
 def ai_post(d):
@@ -3292,6 +3374,19 @@ def ai_post(d):
                 AI['proc'].kill()
             except OSError:
                 pass
+    elif op == 'bench':                 # тест якості «Перевірити модель»
+        if not BENCH['run']:
+            if not tr_chain():
+                return {'ok': False, 'error': 'Спершу налаштуй перекладача (локальну модель на ПК)'}
+            BENCH.update(run=True, p=0.0, stop=False, err='')
+            threading.Thread(target=bench_job, args=('old',), daemon=True).start()
+    elif op == 'bench_stop':
+        BENCH['stop'] = True
+    elif op == 'bench_list':
+        return {'ok': True, 'runs': bench_list()}
+    elif op == 'bench_get':
+        r = bench_get(d.get('id'))
+        return {'ok': True, 'report': r} if r else {'ok': False, 'error': 'Звіт не знайдено'}
     elif op == 'done_list':             # готові субтитри ШІ по тайтлах — щоб швидко прибрати чи перекласти заново
         return {'ok': True, 'titles': ai_done_list()}
     elif op in ('delete', 'redo'):      # прибрати готові субтитри ШІ (відео / тайтл / усі); redo — і одразу знову в чергу
