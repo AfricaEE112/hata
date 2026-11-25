@@ -425,8 +425,19 @@ def do_update(_):
             run(['systemctl', 'restart', 'hata'], 60)
             raise Fail('Нова версія не запустилась — повернув попередню')
         run(['systemctl', 'try-restart', 'vidbox', 'hata-screen'], 60)
-        threading.Timer(3, lambda: os._exit(0)).start()   # systemd підніме gazda вже з новим кодом
+        threading.Timer(3, quit_gazda).start()   # systemd підніме gazda вже з новим кодом
         return {'changed': True, 'from': before[:7], 'version': git_version()}
+
+
+def quit_gazda():
+    """Вийти так, щоб ТО дописало буфер замірів і свій стан (інакше після оновлення губились останні хвилини)."""
+    try:
+        if HEALTH is not None:
+            import health
+            health.stop()
+    except Exception as e:
+        print('gazda: ТО не встигло зберегтись:', repr(e), flush=True)
+    os._exit(0)
 
 
 def do_update_check(_):
@@ -1311,12 +1322,7 @@ def serve():
         import health
         HEALTH = health.start(sys.modules[__name__])
 
-        def bye(*_):
-            try:
-                health.stop()          # дописати буфер і позначити, що вимкнулись як слід
-            finally:
-                os._exit(0)
-        signal.signal(signal.SIGTERM, bye)
+        signal.signal(signal.SIGTERM, lambda *_: quit_gazda())     # вимкнення/перезапуск: дописати буфер ТО
     except Exception as e:     # без ТО gazda однаково має працювати
         print('gazda: ТО не запустилось:', repr(e), flush=True)
     srv = Server(SOCK, Handler)

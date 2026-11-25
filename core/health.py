@@ -1005,6 +1005,7 @@ def start(g, path=DB_PATH):
     STORE = Store(path)
     COLLECTOR = Collector(STORE, g)
     COLLECTOR.boot_check(time.time())
+    COLLECTOR.save()          # одразу запам'ятати запуск — щоб наступний старт не вважався першим
 
     def loop():
         while True:
@@ -1191,7 +1192,8 @@ def system_table(store, span, now=None):
         first = min(x for x in (store.q('SELECT MIN(ts) AS t FROM samples')[0]['t'], store.q('SELECT MIN(ts) AS t FROM hourly')[0]['t']) if x) or a
         eff = max(60, now - max(a, first))          # дані збираються недавно — рахуємо від початку збору
         if span <= RAW_DAYS * 86400:
-            out['online'] = min(100, round((len(up) + 1) * 60 / eff * 100, 1))
+            eff = max(60, up[-1][0] - up[0][0] + 60) if now - up[-1][0] < 180 else eff
+            out['online'] = min(100, round(len(up) * 60 / eff * 100, 1))
         else:
             n = store.q('SELECT SUM(n) AS n FROM hourly WHERE key=? AND ts>=?', ('cpu.load', a))[0]['n'] or 0
             out['online'] = min(100, round(n * 60 / eff * 100, 1))
