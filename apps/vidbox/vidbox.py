@@ -1640,11 +1640,36 @@ def ai_install():
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1800)
         if r.returncode:
             raise RuntimeError(r.stdout.decode('utf-8', 'replace')[-400:])
+        say('Ставлю словник української (перевірка перекладу)…')
+        ai_tr_deps()
         open(ai_dir('venv', '.ok'), 'w').close()
         AI.update(install=None, log='')
         AI_WAKE.set()
     except Exception as e:
         AI.update(install='error', log='Не вдалося встановити: %s' % str(e)[-400:])
+
+
+TR_DEPS = ('pymorphy3', 'pymorphy3-dicts-uk')   # словник VESUM: орфографія й рід для перевірки перекладу (tr/)
+
+
+def ai_tr_deps():
+    """Поставити словник для нового ядра перекладу у venv ШІ (і на вже встановлених — один раз). Без нього
+    перевірки орфографії й роду просто вимикаються, тож помилка тут не фатальна."""
+    venv = ai_dir('venv')
+    if glob.glob(os.path.join(venv, 'lib', 'python3*', 'site-packages', 'pymorphy3_dicts_uk')):
+        return True
+    uv = ai_dir('uv')
+    if not os.path.exists(uv) or not os.path.exists(ai_py()):
+        return False
+    try:
+        r = subprocess.run([uv, 'pip', 'install', '--python', ai_py()] + list(TR_DEPS), env=ai_env(),
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900)
+        if r.returncode:
+            print('Словник для перевірки перекладу не встановився:', r.stdout.decode('utf-8', 'replace')[-300:])
+        return not r.returncode
+    except (OSError, subprocess.SubprocessError) as e:
+        print('Словник для перевірки перекладу не встановився:', e)
+        return False
 
 
 def ai_queue():
@@ -3107,6 +3132,8 @@ def ai_wait(vid, e):
 
 
 def ai_loop():
+    if ai_ready():                   # старі встановлення ШІ — докласти словник для перевірки перекладу
+        threading.Thread(target=ai_tr_deps, daemon=True).start()
     with AI_LOCK:                    # після перезапуску незавершене — знову в чергу
         q = ai_queue()
         for it in q:
