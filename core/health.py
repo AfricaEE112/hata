@@ -1169,11 +1169,13 @@ def system_table(store, span, now=None):
     out['logErr'] = round(sum(r[1] * (1 if span <= RAW_DAYS * 86400 else 60) for r in le)) if le else 0
     up = store.rows('cpu.load', a, now + 1)
     if up:
+        first = min(x for x in (store.q('SELECT MIN(ts) AS t FROM samples')[0]['t'], store.q('SELECT MIN(ts) AS t FROM hourly')[0]['t']) if x) or a
+        eff = max(60, now - max(a, first))          # дані збираються недавно — рахуємо від початку збору
         if span <= RAW_DAYS * 86400:
-            out['online'] = min(100, round(len(up) * 60 / span * 100, 1))
+            out['online'] = min(100, round((len(up) + 1) * 60 / eff * 100, 1))
         else:
             n = store.q('SELECT SUM(n) AS n FROM hourly WHERE key=? AND ts>=?', ('cpu.load', a))[0]['n'] or 0
-            out['online'] = min(100, round(n * 60 / span * 100, 1))
+            out['online'] = min(100, round(n * 60 / eff * 100, 1))
     return out
 
 
@@ -1307,6 +1309,8 @@ def handle(store, a, g=None, now=None):
     """Дія gazda «health»: op = summary | series | events | table | limits | export."""
     op = a.get('op') or 'summary'
     with LOCK:
+        if COLLECTOR is not None and COLLECTOR.s is store and store.meta('disks', {}) != COLLECTOR.disk_meta:
+            store.set_meta('disks', COLLECTOR.disk_meta)
         store.flush()
     lim = limits(g) if g else limits_static(store)
     rng = a.get('range') if a.get('range') in RANGES else '24h'

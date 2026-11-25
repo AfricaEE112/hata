@@ -1363,7 +1363,7 @@ const tFmt = (v, k) => v == null ? '—' : /^net\.(rx|tx)$|\.io$/.test(k) ? shor
 function toGroups() {
   const ks = (TO.keys && TO.keys.keys) || [], has = k => ks.includes(k), pre = p => ks.filter(k => k.startsWith(p));
   const g = [
-    ['heat', 'тепло', ['cpu.temp', ...pre('t.')]], ['fans', 'кулери', pre('fan.')], ['load', 'навантаження', ['cpu.load', 'mem.used', 'swap.used'].filter(has)],
+    ['heat', 'тепло', ['cpu.temp', ...pre('t.')].filter(has)], ['fans', 'кулери', pre('fan.')], ['load', 'навантаження', ['cpu.load', 'mem.used', 'swap.used'].filter(has)],
     ['watt', 'споживання', ['cpu.w', 'bat.w'].filter(has)], ['freq', 'частота', ['cpu.freq'].filter(has)], ['bat', 'батарея', ['bat.pct', 'bat.health'].filter(has)],
     ['net', 'трафік', ['net.rx', 'net.tx'].filter(has)], ['ping', 'пінг', ['net.ping'].filter(has)], ['wifi', 'Wi-Fi', ['wifi.signal'].filter(has)]];
   const dm = (TO.keys && TO.keys.disks) || {};
