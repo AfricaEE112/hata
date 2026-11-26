@@ -147,6 +147,8 @@ def test_gender():
     assert not blocks(check_line(L('I knew it'), 'Я так і знав!', c)), 'мовець невідомий — не судимо'
     assert not blocks(check_line(L('We knew it', who='Aika'), 'Ми так і знали!', c))
     assert not blocks(check_line(L('A week', who='Aika'), 'Я цілий тиждень не відчувала члена.', c))
+    assert not blocks(check_line(L('brat', to='Taku'), 'Яка ж ти нестерпна розпещена дитина!', c))
+    assert 'gender_to' in blocks(check_line(L('brat', to='Taku'), 'Ти така нестерпна!', c))
     assert 'gender_who' in blocks(check_line(L("I'm so happy", who='Taku'), 'Я така щаслива!', c))
 
 
