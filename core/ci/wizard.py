@@ -155,6 +155,16 @@ with sync_playwright() as p:
     assert li['limits']['disk_temp'] == 47, li
     csv = pg.evaluate("async () => (await fetch('/api/health/export?range=24h&fmt=csv')).text()")
     assert 'показник' in csv and 'cpu.load' in csv, csv[:300]
+    # сторож дисків: правило udev (USB без автосну, тайм-аут 90 с), перемикач «не засинати під час субтитрів ШІ»
+    rules = open('/etc/udev/rules.d/90-hata-usb-disks.rules').read()
+    assert 'power/control' in rules and 'device/timeout' in rules, rules
+    v = subprocess.run('udevadm verify /etc/udev/rules.d/90-hata-usb-disks.rules', shell=True, capture_output=True, text=True)
+    print('udevadm verify:', v.returncode, (v.stdout + v.stderr).strip()[-300:])
+    assert v.returncode == 0 or 'verify' in (v.stderr or '') and 'Unknown' in (v.stderr or ''), v.stderr
+    post_j = lambda d: pg.evaluate("""async d => (await fetch('/api/disks/health', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                   body: JSON.stringify(d)})).json()""", d)
+    assert post_j({'op': 'ai_awake', 'on': False}).get('aiAwake') is False
+    assert post_j({'op': 'ai_awake', 'on': True}).get('aiAwake') is True
     pg.keyboard.press('9'); pg.wait_for_selector('#toChart svg', timeout=60000); pg.wait_for_timeout(800); shot('to')
     pg.click('[data-tg="load"]'); pg.wait_for_timeout(800); shot('to-load')
     pg.keyboard.press('1'); pg.wait_for_selector('#sys')

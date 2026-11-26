@@ -758,6 +758,8 @@ def disk_care(now):
     """Раз на 20 с з keeper: SMART раз на 5 хв (не будячи), приспати бездіяльні HDD."""
     sleep = load_state().get('sleep') or {}
     disks = phys_disks()
+    import guard
+    keep_ai = guard.ai_keep(sys.modules[__name__], now)      # субтитри ШІ в роботі — диски з бібліотекою не засинають
     for k in set(TUNED) - {d['kname'] for d in disks}:      # диск зник — при поверненні налаштуємо знову
         TUNED.pop(k, None)
     for d in disks:
@@ -778,15 +780,18 @@ def disk_care(now):
                 lc_note(dev, cache)
             SMART[dev] = cache
         mins = sleep_mode(sleep, d)
-        if not d['rot'] or d['system'] or d['loop'] or mins < 0:
+        ai = bool(keep_ai & set(d['names']))
+        if not d['rot'] or d['system'] or d['loop'] or mins < 0 and not ai:
             TUNED.pop(kname, None)
             continue
-        if (TUNED.get(kname) or (None,))[0] != d['serial']:
+        if mins >= 0 and (TUNED.get(kname) or (None,))[0] != d['serial']:
             ok = smartctl_set(dev, 'standby,off', 'apm,254')
             TUNED[kname] = (d['serial'], ok)
             print('gazda: диск %s — власний таймер сну %s' % ('/'.join(d['names']), 'вимкнено' if ok else 'вимкнути не вдалося (тримаю читанням)'), flush=True)
-        if (mins == 0 or not st[2] and now - st[1] < mins * 60) and now - PINGED.get(kname, 0) >= KEEPALIVE_EVERY:
+        if (ai or mins == 0 or not st[2] and now - st[1] < mins * 60) and now - PINGED.get(kname, 0) >= KEEPALIVE_EVERY:
             PINGED[kname] = now
+            if ai:
+                st[2] = False             # після черги рахуємо простій заново, а не «вже приспали»
             try:
                 touch_disk(dev, d['size'])
                 TOUCHED[kname] = TOUCHED.get(kname, 0) + 8
@@ -797,7 +802,7 @@ def disk_care(now):
                 if KEEPER_SAID.get(dev) != str(e):
                     print('gazda: не вдалося торкнутись диска %s: %s' % (dev, e), flush=True)
                     KEEPER_SAID[dev] = str(e)
-        if mins and not st[2] and now - st[1] >= mins * 60:
+        if mins > 0 and not ai and not st[2] and now - st[1] >= mins * 60:
             r = run(['smartctl', '-s', 'standby,now', dev], 30)
             if r.returncode & 3:
                 r = run(['smartctl', '-d', 'sat', '-s', 'standby,now', dev], 30)
@@ -836,6 +841,24 @@ def do_disk_health(a):
             save_state(st)
         if disks[dev]['kname'] in DISK_IO:
             DISK_IO[disks[dev]['kname']][2] = False
+    elif op == 'ai_awake':
+        with LOCK:
+            st = load_state()
+            st['ai_awake'] = bool(a.get('on'))
+            save_state(st)
+        import guard
+        guard.G['ai_at'] = 0
+    elif op == 'idle3':
+        dev = a.get('dev')
+        if dev not in disks or not disks[dev]['rot']:
+            raise Fail('Диск не знайдено')
+        if not re.match(r'(?i)^(WDC|WD)', disks[dev]['model'] or (SMART.get(dev) or {}).get('model') or ''):
+            raise Fail('Таймер idle3 є лише в дисках Western Digital')
+        v = a.get('value')
+        if v not in (None, 'off') and not (isinstance(v, int) and 1 <= v <= 255):
+            raise Fail('Невідоме значення таймера')
+        import guard
+        return guard.idle3(sys.modules[__name__], dev, v)
     elif op != 'status':
         raise Fail('Невідома дія')
     sleep = load_state().get('sleep') or {}
@@ -853,7 +876,9 @@ def do_disk_health(a):
                         idle=int(now - io[1]) if io else None, sleepable=d['rot'] and not d['system'] and not d['loop'],
                         usage={n: usage(os.path.join(DISKS, n)) for n in d['names'] if n != 'система'}))
     out.sort(key=lambda d: (not d['system'], d['names']))
-    return {'disks': out, 'choices': list(SLEEP_CHOICES)}
+    import guard
+    return {'disks': out, 'choices': list(SLEEP_CHOICES), 'aiAwake': load_state().get('ai_awake', True) is not False,
+            'aiKeep': sorted(guard.G['ai_disks'])}
 
 
 KEEPER_SAID = {}
@@ -959,6 +984,11 @@ def keeper():
                     if KEEPER_SAID.get(point) != msg:      # не засмічуємо журнал однаковою помилкою щоразу
                         print('gazda: підмонтував' if r.returncode == 0 else 'gazda: не підмонтував', point, msg, flush=True)
                         KEEPER_SAID[point] = msg
+            try:
+                import guard
+                guard.care(sys.modules[__name__], time.time())
+            except Exception as e:
+                print('gazda сторож:', repr(e), flush=True)
             if shutil.which('smartctl'):
                 disk_care(time.time())
             boost_care()
@@ -1316,6 +1346,11 @@ def serve():
     st = load_state()
     if st.get('battery_limit'):
         apply_battery_limit(st['battery_limit'])
+    try:
+        import guard
+        guard.ensure_udev(sys.modules[__name__])
+    except Exception as e:
+        print('gazda: правило udev:', repr(e), flush=True)
     threading.Thread(target=keeper, daemon=True).start()
     global HEALTH
     try:

@@ -1431,6 +1431,7 @@ def rescan_loop():
             last = time.time()
             try:
                 scan()
+                ai_requeue_found()
             except Exception:
                 traceback.print_exc()
 
@@ -3086,7 +3087,89 @@ def ai_audio_stream(path):
     return 0
 
 
+def root_ok(root):
+    """Папка бібліотеки доступна. Під Hata диск — це /srv/disks/<назва>: якщо він не змонтований (USB відвалився),
+    папки «немає», навіть коли порожня тека-точка монтування лишилась."""
+    if not root:
+        return False
+    m = re.match(r'^(/srv/disks/[^/]+)', root)
+    if m and not os.path.ismount(m.group(1)):
+        return False
+    return os.path.isdir(root)
+
+
+def disk_label(root):
+    m = re.match(r'^/srv/disks/([^/]+)', root or '')
+    return m.group(1) if m else root
+
+
+DISK_WAIT = 'чекаю диск'
+
+
+def ai_disk_wait(vid, r):
+    """Файлу немає, бо немає диска: не «вигоряти» в помилку, а чекати, поки диск повернеться."""
+    return ai_set(vid, state='queued', p=0, wait=time.time() + 600,
+                  err='%s «%s» — продовжу, щойно він з\'явиться' % (DISK_WAIT, disk_label(r['root'])))
+
+
+def ai_requeue_found():
+    """Після сканування чи повернення диска: відкладені через диск — одразу в роботу, а «Файл не знайдено» — знову в чергу,
+    якщо файл з'явився."""
+    changed = False
+    with AI_LOCK:
+        q = ai_queue()
+        for it in q:
+            err = it.get('err') or ''
+            if it.get('state') == 'queued' and err.startswith(DISK_WAIT) or it.get('state') == 'error' and err.startswith('Файл не знайдено'):
+                r = DB.one('SELECT path, root FROM videos WHERE id=?', (it['id'],))
+                if r and os.path.exists(r['path']):
+                    it.update(state='queued', p=0, wait=0, err='')
+                    changed = True
+        if changed:
+            ai_save_queue(q)
+    if changed:
+        AI_WAKE.set()
+    return changed
+
+
+def roots_watch_loop():
+    """Раз на 15 с: чи доступні папки бібліотеки й аніме. Зник диск — пересканувати (файли позначаться відсутніми);
+    повернувся — пересканувати, підхопити папку аніме й продовжити відкладену чергу субтитрів ШІ."""
+    last = None
+    while True:
+        try:
+            a = C.cfg.get('anime_folder') or ''
+            roots = list(dict.fromkeys(list(C.cfg.get('folders') or []) + list(C.roots) + ([a] if a else [])))
+            now = tuple(root_ok(r) for r in roots)
+            if last is not None and now != last:
+                back = [disk_label(r) for r, ok, was in zip(roots, now, last) if ok and not was]
+                lost = [disk_label(r) for r, ok, was in zip(roots, now, last) if was and not ok]
+                print('Диск з бібліотекою %s: %s' % ('повернувся' if back else 'зник', ', '.join(dict.fromkeys(back or lost))), flush=True)
+                C.anime = a if a and root_ok(a) else ''
+                C.roots = [r for r in (C.cfg.get('folders') or C.roots) if root_ok(r)] or C.roots
+                scan()
+                ai_requeue_found()
+            last = now
+        except Exception:
+            traceback.print_exc()
+        time.sleep(15)
+
+
 def ai_job(it):
+    """Один елемент черги. Якщо файл недоступний через диск, що відвалився, — чекати диск, а не ставити помилку."""
+    vid = it['id']
+    r = DB.one('SELECT * FROM videos WHERE id=?', (vid,))
+    if r and not os.path.exists(r['path']) and not root_ok(r['root']):
+        return ai_disk_wait(vid, r)
+    res = ai_job_run(it)
+    if r and not root_ok(r['root']):       # диск зник посеред роботи — помилку замінюємо очікуванням
+        cur = next((x for x in ai_queue() if x['id'] == vid), None)
+        if cur and cur.get('state') == 'error':
+            return ai_disk_wait(vid, r)
+    return res
+
+
+def ai_job_run(it):
     vid = it['id']
     r = DB.one('SELECT * FROM videos WHERE id=?', (vid,))
     if not r or not os.path.exists(r['path']):
@@ -5576,7 +5659,7 @@ def main():
 
     C.roots = folders
     a = C.cfg.get('anime_folder') or ''
-    C.anime = a if a and os.path.isdir(a) else ''
+    C.anime = a if a and root_ok(a) else ''      # диска з аніме ще немає — roots_watch_loop підхопить, щойно з'явиться
     C.port = int(C.cfg['port'])
     C.ffmpeg = find_tool('ffmpeg', args.ffmpeg)
     C.ffprobe = find_tool('ffprobe', args.ffmpeg or C.ffmpeg)
@@ -5616,7 +5699,7 @@ def main():
     print('  Налаштування: на сайті, вкладка «Налаштування» (зберігаються в %s)' % cfg_path())
     print('  Ctrl+C — зупинити')
     print('  Android-апка: знайде цей ПК сама, якщо телефон у тій самій Wi-Fi мережі\n')
-    for target in (media_worker, prep_worker, rescan_loop, detect_hw, discovery_loop, ai_loop):
+    for target in (media_worker, prep_worker, rescan_loop, detect_hw, discovery_loop, ai_loop, roots_watch_loop):
         threading.Thread(target=target, daemon=True).start()
     if C.cfg.get('open_browser', True) and not args.no_browser:
         try:

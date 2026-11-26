@@ -997,11 +997,23 @@ function diskCard(d, choices) {
     ${dayLine(d)}
     ${d.sleepable ? `<p class="note" style="margin-top:16px">засинати без роботи через</p>
       <div class="seg dk-sleep" role="group" aria-label="Засинати без роботи">${choices.map(m => `<button data-sleep="${m}" data-dev="${esc(d.dev)}" class="${d.sleep === m ? 'on' : ''}">${minsText(m)}</button>`).join('')}</div>
-      <p class="note">${sleepNote(d)}</p>` : ''}
+      <p class="note">${sleepNote(d)}</p>
+      <label class="dk-ai"><input type="checkbox" data-aiawake ${DK.health.aiAwake !== false ? 'checked' : ''}> не засинати, поки йдуть субтитри ШІ${(DK.health.aiKeep || []).some(n => d.names.includes(n)) ? ' <span class="tag">зараз тримаю</span>' : ''}</label>` : ''}
+    ${d.rot && /^(WDC|WD)/i.test(d.model || s.model || '') ? idle3HTML(d) : ''}
     <div class="acts">${d.loop ? '' : `<button class="btn" data-smart="${esc(d.dev)}">Оновити SMART</button>`}
       ${d.names.filter(n => n !== 'система').map(n => `<button class="btn ghost" data-fopen="${esc(n)}">Файли: ${esc(n)}</button>`).join('')}
       <span class="sp"></span><span class="note" style="margin:0">${s.at ? 'перевірено ' + agoText(s.at) : ''}</span></div>`,
     {c: lvl === 'red' ? 'red' : lvl === 'yel' ? 'yel' : 'acc', cls: 'dk', badge: lvl === 'red' ? 'увага' : ''});
+}
+
+// Таймер паркування головок WD (idle3): читаємо лише кнопкою — запит може розбудити диск.
+function idle3HTML(d) {
+  const r = (DK.idle3 || {})[d.dev];
+  const v = r && r.idle3;
+  return `<div class="dk-idle3"><p class="note" style="margin:14px 0 6px">таймер паркування головок WD (idle3): <b>${r ? esc(r.idle3Text) : 'не перевірено'}</b>${v != null && v > 0 && v <= 128 ? ' — дуже часто, звідси тисячі паркувань' : ''}</p>
+    ${r && r.note ? `<p class="note" style="color:var(--yel);margin:0 0 6px">${esc(r.note)}</p>` : ''}
+    <div class="acts" style="margin-top:6px"><button class="btn ghost" data-idle3="${esc(d.dev)}">${r ? 'Перевірити ще раз' : 'Перевірити'}</button>
+      ${r ? `<button class="btn ghost" data-idle3="${esc(d.dev)}" data-idle3v="138">Паркувати через 5 хв</button><button class="btn ghost" data-idle3="${esc(d.dev)}" data-idle3v="off">Вимкнути таймер</button>` : ''}</div></div>`;
 }
 
 // Підсумок ТО за добу для картки диска: розкрутки, паркування, хто будив, підключення.
@@ -1094,6 +1106,22 @@ function bindDisks() {
   $$('[data-fopen]').forEach(b => b.onclick = () => filesPage((DK.bk && DK.bk.root || '/srv/disks') + '/' + b.dataset.fopen));
   $$('[data-fpath]').forEach(b => b.onclick = () => filesPage(b.dataset.fpath));
   $$('[data-goto-to]').forEach(b => b.onclick = () => goSection('9'));
+  $$('[data-aiawake]').forEach(b => b.onchange = async () => {
+    const r = await api('/api/disks/health', {op: 'ai_awake', on: b.checked});
+    toast(r.ok === false ? r.error : b.checked ? 'Поки йдуть субтитри ШІ, диски з бібліотекою не засинатимуть' : 'Диски засинають за своїм налаштуванням і під час субтитрів ШІ');
+    disksPage();
+  });
+  $$('[data-idle3]').forEach(b => b.onclick = async () => {
+    const v = b.dataset.idle3v, dev = b.dataset.idle3;
+    if (v && !confirm(v === 'off' ? 'Вимкнути власний таймер паркування головок WD? Головки паркуватимуться лише при вимкненні чи сні диска. Зміна записується в диск.'
+      : 'Поставити паркування головок через 5 хв без роботи? Зміна записується в диск.')) return;
+    b.disabled = true; b.innerHTML = '<span class="spin"></span> ' + (v ? 'Записую…' : 'Читаю…');
+    const r = await api('/api/disks/health', {op: 'idle3', dev, value: v === 'off' ? 'off' : v ? +v : null}, 700000);
+    if (r.ok === false) { toast(r.error); b.disabled = false; b.textContent = 'Перевірити'; return; }
+    (DK.idle3 = DK.idle3 || {})[dev] = r;
+    if (v) toast('Записано в диск. Діє після вимкнення доку з розетки на 10 с');
+    delete $('#dkBody').dataset.html; drawDisks();
+  });
   $('#dkFind').onclick = () => openFromPanel(2);
   const save = async d => { const r = await api('/api/backup', {op: 'save', ...d}); if (r.ok === false) toast(r.error); await disksPage(); return r; };
   $('#bkTarget').onchange = e => save({target: e.target.value}).then(r => r.ok && toast(e.target.value ? `Копії йтимуть на «${e.target.value}»` : 'Копії вимкнено'));
@@ -1639,7 +1667,7 @@ function toSysHTML() {
   return `<dl class="kv to-kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
 }
 
-const EVF = [['imp', 'важливі', null], ['disk', 'диски', ['disk_wake', 'disk_sleep', 'disk_gone', 'disk_back', 'smart', 'io_error', 'offline']],
+const EVF = [['imp', 'важливі', null], ['disk', 'диски', ['disk_wake', 'disk_sleep', 'disk_gone', 'disk_back', 'smart', 'io_error', 'offline', 'guard']],
   ['usb', 'USB', ['usb_off', 'usb_on', 'usb_reset', 'usb_err', 'overcurrent']], ['power', 'живлення', ['ac_off', 'ac_on', 'boot', 'crash', 'cpu_hot', 'throttle_k', 'boost_on', 'boost_off']],
   ['net', 'мережа', ['inet_down', 'inet_up', 'ip_change']], ['svc', 'служби', ['svc_crash', 'svc_restart', 'svc_down', 'oom', 'backup_ok', 'backup_fail', 'vb_done', 'vb_error']], ['all', 'усі', null]];
 function toEvHTML() {

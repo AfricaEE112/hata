@@ -349,3 +349,5 @@ button.fm-name{font-weight:600}
 @media (max-width:640px){#toChips .hchips{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}#toChips .chip{flex:none}}
 #logList .log{max-height:440px;overflow-y:auto;padding-right:4px}
 .tdotl{stroke-width:7}
+.dk-ai{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px;color:var(--dim);cursor:pointer}
+.dk-ai input{accent-color:var(--acc)}

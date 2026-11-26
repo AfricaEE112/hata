@@ -210,6 +210,15 @@ def demo_gazda(req):
     if d == 'disk_health':
         if req.get('op') == 'sleep':
             DEMO_STATE.setdefault('sleep', {})[req.get('dev')] = req.get('minutes')
+        if req.get('op') == 'ai_awake':
+            DEMO_STATE['ai_awake'] = bool(req.get('on'))
+        if req.get('op') == 'idle3':
+            if req.get('value') is not None:
+                DEMO_STATE['idle3'] = 0 if req['value'] == 'off' else req['value']
+            v = DEMO_STATE.get('idle3', 80)
+            return {'ok': True, 'idle3': v, 'idle3Text': 'вимкнено' if v == 0 else '%g с' % (v / 10) if v <= 128 else '%g хв' % ((v - 128) / 2),
+                    'changed': req.get('value') is not None,
+                    'note': 'Нове значення діє після повного вимкнення диска: вимкни док з розетки на 10 с (перезавантаження Хати не досить).' if req.get('value') is not None else ''}
         sl = DEMO_STATE.get('sleep', {})
         names = list(DEMO_STATE['mounted'].values())
         disks = [{'dev': '/dev/nvme0n1', 'names': ['система'], 'model': 'SAMSUNG MZVL2512HCJQ', 'serial': 'S6X1', 'size': 512 * G, 'rot': False,
@@ -225,7 +234,7 @@ def demo_gazda(req):
                           'usb': True, 'system': False, 'loop': False, 'sleep': sl.get('/dev/sdb', -1), 'tuned': None, 'idle': 5400, 'sleepable': True,
                           'usage': {names[1]: {'total': 1000 * G, 'free': 120 * G}},
                           'smart': {'state': 'standby', 'passed': True, 'temp': 44, 'hours': 30311, 'cycles': 9800, 'load_cycles': 812500, 'realloc': 16, 'pending': 2, 'uncorrect': 0, 'crc': 0, 'at': time.time() - 900}})
-        return {'ok': True, 'disks': disks, 'choices': [-1, 0, 10, 20, 30, 60, 120]}
+        return {'ok': True, 'disks': disks, 'choices': [-1, 0, 10, 20, 30, 60, 120], 'aiAwake': DEMO_STATE.get('ai_awake', True), 'aiKeep': names[:1]}
     if d == 'status':
         return {'ok': True, 'host': 'hata', 'uptime': 93784, 'load': 0.42, 'cpus': 8, 'cpu_model': '11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz', 'temp': 47.5,
                 'mem': {'total': 8 * G, 'avail': 5.6 * G}, 'os': 'Ubuntu 24.04.1 LTS', 'version': 'cd4bff2 2026-11-19T15:00:00+02:00', 'tz': DEMO_STATE.get('tz', 'Europe/Kyiv'),
@@ -883,9 +892,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.json(gazda({'do': 'share', 'op': 'disable'}, 120))
             return self.json({'ok': False, 'error': 'Невідома дія'})
         if p == '/api/disks/health':
-            if d.get('op') not in ('refresh', 'sleep'):
+            if d.get('op') not in ('refresh', 'sleep', 'idle3', 'ai_awake'):
                 return self.json({'ok': False, 'error': 'Невідома дія'})
-            return self.json(gazda({'do': 'disk_health', 'op': d['op'], 'dev': d.get('dev'), 'minutes': d.get('minutes')}, 120))
+            return self.json(gazda({'do': 'disk_health', 'op': d['op'], 'dev': d.get('dev'), 'minutes': d.get('minutes'),
+                                    'value': d.get('value'), 'on': d.get('on')}, 700 if d['op'] == 'idle3' else 120))
         if p == '/api/backup':
             if d.get('op') == 'run':
                 return self.json(bk_start())
