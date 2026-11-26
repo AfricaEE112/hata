@@ -59,13 +59,22 @@ class Ctx:
             return False
         return not any('Name' in str(p.tag) or 'Surn' in str(p.tag) for p in self.lex.parses(w))
 
+    GENERIC = {'man': 'masc', 'boy': 'masc', 'male': 'masc', 'чоловік': 'masc', 'хлопець': 'masc',
+               'woman': 'femn', 'girl': 'femn', 'female': 'femn', 'жінка': 'femn', 'дівчина': 'femn'}
+
     def char(self, name):
+        """Персонаж за іменем від аналізу чи моделі: «Aika», «Айка», «Aika (Sis)», «Kazuya-kun»; «man»/«woman» —
+        лише стать."""
         n = str(name or '').strip().lower()
-        if not n:
+        if not n or n == '?':
             return None
+        if n in self.GENERIC:
+            return {'en': n, 'uk': n, 'gender': self.GENERIC[n]}
+        keys = {n} | set(re.split(r'[\s()/,-]+', n)) - {''}
         for c in self.chars:
-            if n in {str(c.get('en') or '').lower(), str(c.get('uk') or '').lower()} | \
-                    {str(a).lower() for a in (c.get('aliases') or []) + (c.get('aliases_uk') or [])}:
+            names = {str(c.get('en') or '').lower(), str(c.get('uk') or '').lower()} | \
+                {str(a).lower() for a in (c.get('aliases') or []) + (c.get('aliases_uk') or [])}
+            if keys & (names - {''}):
                 return c
         return None
 

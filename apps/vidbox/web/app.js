@@ -1737,6 +1737,8 @@ async function drawAiSet(st) {
       <div class="srow"><div class="sl"><b>Готові субтитри</b><small>Які тайтли вже перекладені й коли. Старий переклад (напр. зроблений іншою моделлю) можна прибрати або одразу перекласти заново — разом з аналізом серії. Оригінальні субтитри у відео не зачіпаються.</small></div>
         <div class="sc"><button class="btn ghost" id="aiDoneBtn">Показати</button></div></div>
       <div id="aiDone"></div>
+      <div class="srow"><div class="sl"><b>Ядро перекладу</b><small>Нове (тест): кожна репліка має номер, переклад іде сценами, кожен варіант перевіряється — вигадані слова (словник української), русизми, рід за мовцем, зсув рядків, заборони глосарію; що не пройшло — модель виправляє адресно з поясненням причини. Біля субтитрів — звіт qa.json із сумнівними репліками. Поки лише для локальної моделі. Порівняти ядра — «Перевірити модель» з кожним.</small></div>
+        <div class="sc"><div class="seg" id="aiCore"><button data-core="old" class="${st.trCore !== 'new' ? 'on' : ''}">старе</button><button data-core="new" class="${st.trCore === 'new' ? 'on' : ''}">нове (тест)</button></div></div></div>
       <div class="srow"><div class="sl"><b>Перевірити модель</b><small>Сталий тест якості: ${st.bench && st.bench.last ? st.bench.last.total : 210} реплік із 19 сцен, де раніше траплялися помилки (зсув рядків, вигадані слова, рід, «Дайкі» замість Daisuke, CPR, «finish the order»…). Оцінка — частка реплік без помилок; її видно в історії, тож можна порівнювати моделі, налаштування й нові версії перекладу. ≈ 15–25 хв на ПК; черга на цей час чекає.</small></div>
         <div class="sc">${st.bench && st.bench.run ? '<button class="btn ghost" id="aiBenchStop">Зупинити</button>' : '<button class="btn" id="aiBenchRun">Запустити</button>'}<button class="btn ghost" id="aiBenchHist">Історія</button></div></div>
       <div id="aiBench">${aiBenchLine(st.bench)}</div>
@@ -1771,6 +1773,7 @@ async function drawAiSet(st) {
     const r = await post({op: 'add_bulk', scope});
     if (r.ok) { drawAiSet(r); toast(`Додав ${r.count} ${plural(r.count, 'серію', 'серії', 'серій')}`); }
   });
+  $$('#aiCore [data-core]').forEach(b => b.onclick = async () => { drawAiSet(await post({op: 'save', trCore: b.dataset.core})); toast(b.dataset.core === 'new' ? 'Нове ядро: наступні серії й тест — ним' : 'Старе ядро'); });
   if ($('#aiBenchRun')) $('#aiBenchRun').onclick = async () => {
     if (!confirm('Запустити тест якості? ≈ 15–25 хв, ПК з моделлю має бути ввімкнений. Черга перекладу на цей час чекає.')) return;
     drawAiSet(await post({op: 'bench'}));
@@ -1824,7 +1827,7 @@ async function aiBenchHist(post) {
   box.innerHTML = `<div class="flist">${R.map((x, i) => {
     const prev = R[i + 1], d = prev ? Math.round((x.score - prev.score) * 10) / 10 : null;
     return `<div class="frow"><div><b>${x.score} %</b> <small>${x.passed} з ${x.total}${d !== null ? ` · <span style="color:var(${d >= 0 ? '--acc' : '--red, #e66'})">${d >= 0 ? '+' : ''}${d}</span>` : ''}</small>
-      <small style="display:block;color:var(--mute)">${esc(aiBenchWhen(x.meta))} · ${esc(x.meta.model || x.meta.translator || '')} · ядро: ${x.meta.core === 'old' ? 'старе' : esc(x.meta.core || '')}${x.meta.finished === false ? ' · зупинено' : ''}</small></div>
+      <small style="display:block;color:var(--mute)">${esc(aiBenchWhen(x.meta))} · ${esc(x.meta.model || x.meta.translator || '')} · ядро: ${x.meta.core === 'old' ? 'старе' : x.meta.core === 'new' ? 'нове' : esc(x.meta.core || '')}${x.meta.finished === false ? ' · зупинено' : ''}</small></div>
       <button class="btn ghost" data-bench="${esc(x.id)}">Звіт</button></div>`;
   }).join('')}</div><div id="aiBenchRep"></div>`;
   $$('[data-bench]').forEach(b => b.onclick = async () => {
