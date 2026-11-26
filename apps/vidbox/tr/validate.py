@@ -62,6 +62,43 @@ class Ctx:
     GENERIC = {'man': 'masc', 'boy': 'masc', 'male': 'masc', 'чоловік': 'masc', 'хлопець': 'masc',
                'woman': 'femn', 'girl': 'femn', 'female': 'femn', 'жінка': 'femn', 'дівчина': 'femn'}
 
+    def gloss_fix(self, uk):
+        """Англійський термін глосарію лишився латиницею («О, це що, doujinshi?») → перший варіант з глосарію."""
+        if not re.search(r'[A-Za-z]{3,}', uk):
+            return uk
+        for it in self.gloss:
+            en, tr = (it[0] if it else ''), (it[1] if len(it) > 1 else '')
+            if not en or not tr or not re.fullmatch(r"[A-Za-z][A-Za-z' -]+", en):
+                continue
+            first = re.split(r'\s*/\s*', tr)[0].strip()
+            if not first or re.search('[A-Za-z]', first):
+                continue
+            uk = re.sub(r'(?i)\b%s\b' % re.escape(en), lambda m: first[:1].upper() + first[1:]
+                        if m.group(0)[:1].isupper() else first, uk)
+        return uk
+
+    def vocatives(self):
+        """Кличні форми японських імен, яких не має бути: «Така» → «Тако», «Кадзуя» → «Кадзує», «Юкі» не змінюється."""
+        out = {}
+        for c in self.chars:
+            uk = str(c.get('uk') or '').strip()
+            if not uk or ' ' in uk or not uk[:1].isupper():
+                continue
+            if self.lex.ok and self.lex.known(uk) and \
+                    any(p.tag.POS == 'NOUN' and 'Name' not in str(p.tag) for p in self.lex.parses(uk)):
+                continue                 # «Клієнт», «Мама» — звичайні іменники, їх кличний правильний
+            low = uk.lower()
+            forms = set()
+            if low.endswith('а'):
+                forms |= {low[:-1] + 'о', low[:-1] + 'у'}
+            elif low.endswith('я'):
+                forms |= {low[:-1] + 'є', low[:-1] + 'ю'}
+            elif low[-1:] not in 'аеєиіїоуюяь':
+                forms |= {low + 'е', low + 'у'}
+            for f in forms:
+                out[f] = (uk, c)
+        return out
+
     def char(self, name):
         """Персонаж за іменем від аналізу чи моделі: «Aika», «Айка», «Aika (Sis)», «Kazuya-kun»; «man»/«woman» —
         лише стать."""
@@ -192,6 +229,15 @@ def check_line(ln, uk, ctx):
             if x.strip() and re.search(r'(?i)\b%s' % re.escape(x.strip()[:max(4, len(x.strip()) - 2)]), uk):
                 iss.append(Issue('gloss_forbid', 'block', '«%s» тут не «%s» (глосарій: %s)' % (it[0], x, it[1]), (x,)))
 
+    # --- кличний відмінок японських імен («Тако» замість «Така») ---
+    voc = ctx.vocatives()
+    vbad = [(w, voc[w.lower()][0]) for w, _ in toks if w[:1].isupper() and w.lower() in voc
+            and any(re.search(r'(?i)\b%s' % re.escape(p[:4]), ln.en) for p in re.findall(r'[A-Za-z]{3,}', str(
+                voc[w.lower()][1].get('en') or '')))]
+    if vbad:
+        iss.append(Issue('name_form', 'block', 'японські імена не відмінюються в кличному: %s' % ', '.join(
+            '«%s», а не «%s»' % (n, w) for w, n in vbad), tuple(w for w, _ in vbad)))
+
     # --- гоноративи ---
     hon = [w for w, _ in toks if HONORIFIC.search(w)]
     if hon:
@@ -292,7 +338,7 @@ def shift_against(ln, uk, others):
 
 def accept(ln, uk, ctx, lines, stage='', echo=None):
     """Спробувати прийняти кандидата. Повертає (прийнято?, [Issue]). Усе записується в ln.cands."""
-    uk = autofix(str(uk or '').strip())
+    uk = ctx.gloss_fix(autofix(str(uk or '').strip()))
     iss = []
     if echo is not None and not echo_ok(echo, ln.en):
         iss.append(Issue('echo', 'block', 'відповідь не для цієї репліки (src «%s»)' % str(echo)[:30]))

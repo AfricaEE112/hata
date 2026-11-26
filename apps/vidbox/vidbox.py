@@ -1704,8 +1704,9 @@ def bench_translate_old(case):
                                 ', ' + c['speech'] if c.get('speech') else '') for c in chars))
     TR_CTX.ctx = '\n'.join(ctx)
     TR_CTX.auto_items = gloss_clean([[c['en'], c['uk'], "ім'я", GENDER_UK.get(c.get('gender'), '')] for c in chars])
+    TR_CTX.qa_all = None
     out, _via = translate_uk([ln['en'] for ln in case['lines']], 'en')
-    return out
+    return {'uk': out, 'diag': getattr(TR_CTX, 'qa_all', None)}
 
 
 def bench_job(core):
@@ -3144,6 +3145,8 @@ def translate_new(url, lines, src, progress=None):
         rep['meta'].update(meta, harden=took)
     rep['meta'].update(model=AI.get('model_used') or '', src=src)
     TR_CTX.qa = rep
+    TR_CTX.qa_all = [{'who': ln.who, 'to': ln.to, 'status': ln.status, 'tries': len(ln.cands),
+                      'stages': [c['stage'] for c in ln.cands]} for ln in ls]
     return [ln.uk for ln in ls]
 
 

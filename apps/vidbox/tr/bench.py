@@ -47,7 +47,7 @@ def expect_fails(spec, uk):
     return out
 
 
-def score_case(case, outs, gloss=(), forbid=()):
+def score_case(case, outs, gloss=(), forbid=(), diag=None):
     lines = prepare(case_segs(case))
     for ln, spec, uk in zip(lines, case['lines'], list(outs) + [''] * len(lines)):
         ln.who, ln.to, ln.uk = spec.get('who', ''), spec.get('to', ''), str(uk or '').strip()
@@ -60,9 +60,12 @@ def score_case(case, outs, gloss=(), forbid=()):
         exp = expect_fails(spec, ln.uk) if ln.uk else []
         blocks = [i.msg for i in ln.issues if i.sev == 'block']
         warns = [i.msg for i in ln.issues if i.sev == 'warn']
-        res.append({'n': ln.n, 'en': ln.en, 'uk': ln.uk, 'ok': not blocks and not exp,
-                    'expect': exp, 'block': blocks, 'warn': warns, 'codes': [i.code for i in ln.issues],
-                    'why': spec.get('why', '')})
+        r = {'n': ln.n, 'en': ln.en, 'uk': ln.uk, 'ok': not blocks and not exp,
+             'expect': exp, 'block': blocks, 'warn': warns, 'codes': [i.code for i in ln.issues],
+             'why': spec.get('why', '')}
+        if diag and ln.n < len(diag) and diag[ln.n]:    # що бачило ядро: мовець за моделлю, спроби, статус
+            r['core'] = diag[ln.n]
+        res.append(r)
     return {'id': case['id'], 'title': case.get('title', ''), 'lines': res,
             'passed': sum(r['ok'] for r in res), 'total': len(res)}
 
@@ -99,12 +102,17 @@ def run(translate, gloss_for=lambda case: ((), ()), bench=None, progress=None, m
             break
         t = time.time()
         err = None
+        diag = None
         try:
-            outs = list(translate(case))
+            got = translate(case)
+            if isinstance(got, dict):
+                outs, diag = list(got.get('uk') or []), got.get('diag')
+            else:
+                outs = list(got)
         except Exception as e:          # noqa: BLE001 — модель недоступна, обрив тощо
             outs, err = [], str(e)[:300]
         gloss, forbid = gloss_for(case)
-        r = score_case(case, outs, gloss, forbid)
+        r = score_case(case, outs, gloss, forbid, diag)
         r['secs'], r['error'] = round(time.time() - t, 1), err
         results.append(r)
         if progress:
