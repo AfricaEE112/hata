@@ -1716,8 +1716,11 @@ def bench_job(core):
         meta = {'core': core, 'at': int(time.time()), 'model': C.cfg.get('local_pin') or C.cfg.get('local_model') or '',
                 'translator': (tr_chain() or [('', '')])[0][0], 'harden': C.cfg.get('ai_harden', True),
                 'dict': lex.ok}
+        AI['model_used'] = ''
         rep = trb.run(bench_translate_old, bench_gloss, progress=lambda f: BENCH.update(p=f), meta=meta,
                       should_stop=lambda: BENCH['stop'])
+        if AI.get('model_used'):            # модель, яка справді перекладала (пін міг указувати на видалену)
+            rep['meta']['model'] = AI['model_used']
         os.makedirs(bench_dir(), exist_ok=True)
         name = time.strftime('%Y%m%d-%H%M%S') + '.json'
         with open(os.path.join(bench_dir(), name), 'w', encoding='utf-8') as f:
@@ -2528,6 +2531,7 @@ def local_translate(url, lines, src, progress=None):
     base = local_base(url)
     hdr = local_hdr()
     model = local_pick_model(url, hdr)      # щоразу перевіряємо: модель на ПК могли змінити
+    AI['model_used'] = model
     if model != C.cfg.get('local_model'):
         with CFG_LOCK:
             C.cfg['local_model'] = model

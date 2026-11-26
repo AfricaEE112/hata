@@ -76,7 +76,8 @@ class Lexicon:
     @classmethod
     def get(cls, venv_dir=None):
         with cls._lock:
-            if cls._inst is None or (not cls._inst.ok and venv_dir and add_site_packages(venv_dir)):
+            added = bool(venv_dir) and add_site_packages(venv_dir)   # спершу шлях до venv ШІ, потім імпорт
+            if cls._inst is None or (not cls._inst.ok and added):
                 cls._inst = cls()
             return cls._inst
 
