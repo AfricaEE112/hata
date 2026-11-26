@@ -18,7 +18,7 @@ CHARS = [{'en': 'Aika', 'uk': 'Айка', 'gender': 'femn'},
          {'en': 'Daisuke', 'uk': 'Дайсуке', 'gender': 'masc'},
          {'en': 'Daiki', 'uk': 'Дайкі', 'gender': 'masc'},
          {'en': 'Customer', 'uk': 'Клієнт', 'gender': 'masc'}]
-GLOSS = [['thug', 'хуліган / гопник', 'розмовне', 'не «шльондра»'], ['doujinshi', 'доджінші', '', '']]
+GLOSS = [['thug', 'хуліган / гопник', 'розмовне', 'не «шльондра»'], ['doujinshi', 'доджінші', '', ''], ['cum', 'сперма', '', '']]
 import re  # noqa: E402
 FORBID = [re.compile(x, re.I) for x in ['фініш', 'кічк']]
 
@@ -132,6 +132,22 @@ def test_honorific_and_names():
     assert 'name_not_in_src' not in codes(check_line(L('Hey, Taku... Are you okay?'), 'Гей, Таку... Ти як?', c))
     assert 'name_not_in_src' not in codes(check_line(L('Who would look at you!'), 'Хто б дивився на таку, як ти!', c))
     assert 'name_not_in_src' not in codes(check_line(L('The customers are staring!'), 'Клієнти так дивляться!', c))
+
+
+def test_gloss_fix_and_vocative():
+    c = ctx()
+    ln = L("Oh, isn't that a doujinshi?")
+    ok, _ = accept(ln, 'О, це що, doujinshi?', c, [ln])
+    assert ok and ln.uk == 'О, це що, доджінші?', ln.uk
+    ln = L('Doujinshi?')
+    assert accept(ln, 'Doujinshi?', c, [ln])[0] and ln.uk == 'Доджінші?'
+    tk = Ctx(chars=[{'en': 'Taka', 'uk': 'Така', 'gender': 'masc'}, {'en': 'Kazuya', 'uk': 'Кадзуя', 'gender': 'masc'}])
+    assert 'name_form' in blocks(check_line(L("I'm sorry, Taka-kun!"), 'Пробач мені, Тако!', tk))
+    assert 'name_form' in blocks(check_line(L('Kazuya, wait!'), 'Кадзує, зачекай!', tk))
+    assert not blocks(check_line(L("I'm sorry, Taka-kun!"), 'Пробач мені, Така!', tk))
+    assert not blocks(check_line(L('Want some tacos?'), 'Тако хочеш?', tk)), 'нема імені в оригіналі — не судимо'
+    ln = L('Wanna have a sip too?')
+    assert accept(ln, 'Хочеш теж глотнути?', c, [ln])[0] and ln.uk == 'Хочеш теж ковтнути?'
 
 
 def test_gender():
@@ -249,6 +265,9 @@ def test_bench_scoring():
     assert r['passed'] == 1 and not r['lines'][2]['ok']
     rep = bench.run(lambda c: ['Я так і знала!', 'Я теж!', 'Дякую!'], bench={'cases': [case, dict(case, id='u')]})
     assert rep['score'] == 100.0 and rep['meta']['finished']
+    rep = bench.run(lambda c: {'uk': ['Я так і знав!', 'Я теж!', 'Дякую!'], 'diag': [
+        {'who': 'Taku', 'status': 'ok', 'tries': 1}, None, None]}, bench={'cases': [case]})
+    assert rep['fails'][0]['core']['who'] == 'Taku', 'видно, що модель вважала мовцем Таку'
 
     def boom(c):
         raise RuntimeError('ПК вимкнений')

@@ -1837,7 +1837,7 @@ async function aiBenchHist(post) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(rep, null, 1)], {type: 'application/json'}));
     $('#aiBenchRep').innerHTML = `<p class="note">${rep.score} % · ${rep.passed} з ${rep.total} · не виконано очікувань: ${rep.expect_failed} · <a href="${url}" download="vidbox-test-${esc(b.dataset.bench)}.json">завантажити звіт</a></p>` +
       `<div class="flist">${F.map(f => `<div class="frow"><div><small style="color:var(--mute)">${esc(f.case)} · ${f.n + 1}</small><br>${esc(f.en)}<br><b>${esc(f.uk || '—')}</b>
-        <small style="display:block;color:var(--red, #e66)">${esc([...f.expect, ...f.block].join('; '))}</small>${f.why ? `<small style="display:block;color:var(--mute)">${esc(f.why)}</small>` : ''}</div></div>`).join('')}</div>`;
+        <small style="display:block;color:var(--red, #e66)">${esc([...f.expect, ...f.block].join('; '))}</small>${f.why ? `<small style="display:block;color:var(--mute)">${esc(f.why)}</small>` : ''}${f.core ? `<small style="display:block;color:var(--mute)">ядро: ${esc(f.core.status)}, спроб ${f.core.tries}${f.core.who ? ', мовець «' + esc(f.core.who) + '»' : ''}${f.core.to ? ' → «' + esc(f.core.to) + '»' : ''}</small>` : ''}</div></div>`).join('')}</div>`;
   });
 }
 async function aiDoneDraw(post) {
