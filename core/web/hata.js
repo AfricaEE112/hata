@@ -954,13 +954,14 @@ function diskVerdict(d) {
   const lim = /^2\.5/.test(s.form || '') || !s.form && d.usb && d.size < 2.2e12 ? 600000 : 300000;
   const lc = s.load_cycles, rate = lc && s.hours > 0 ? Math.round(lc / s.hours) : 0;
   const nice = n => n.toLocaleString('uk-UA');
-  if (lc >= lim) out.push(['yel', `Головки запаркувались ${nice(lc)} ${razy(lc)} — більше за ресурс від виробника (${nice(lim / 1000)} тис.). Диск ще може довго працювати, але копії тримай свіжими.`]);
-  else if (lc >= lim * .8) out.push(['yel', `Головки запаркувались ${nice(lc)} ${razy(lc)} — майже весь ресурс від виробника (${nice(lim / 1000)} тис.). Копії тримай свіжими.`]);
+  // Паспортні 600/300 тис. — гарантований мінімум, а не межа: диски часто доживають до 1–1,5 млн. Самі по собі — не тривога.
+  const parkNote = lc >= lim * .8 ? `Головки запаркувались ${nice(lc)} ${razy(lc)}${lc >= lim ? ` — більше за паспортні ${nice(lim / 1000)} тис.` : ` (паспорт — ${nice(lim / 1000)} тис.)`}. Це гарантований мінімум, а не межа: без поганих секторів диск працює далі. Важливе — не лише на ньому.` : '';
   if (d.sleep >= 0 && s.lc_rate > 20) out.push(['yel', `Головки й далі паркуються ~${s.lc_rate} ${razy(s.lc_rate)} на годину. Схоже, диск не слухає команду про паркування, а щохвилинне читання, яке не дає доку приспати диск, будить головки знову. Вибери «як є» — так паркувань буде менше.`]);
   if (d.sleep < 0 && lc > 1000 && (s.lc_rate ?? rate) > 20) out.push(['yel', `Головки паркуються ~${s.lc_rate ?? rate} ${razy(s.lc_rate ?? rate)} на годину. Вибери нижче «ніколи» або час сну — Хата вимкне це паркування.`]);
   if (s.crc > 0) out.push(['yel', `${s.crc} ${pl(s.crc, 'помилка', 'помилки', 'помилок')} передачі — зазвичай винен кабель чи USB-адаптер, а не сам диск.${s.crc < 10 ? ' Кілька штук за роки — не страшно, якщо число не росте.' : ''}`]);
-  if (!out.length) return ['acc', s.state === 'standby' ? 'Здоровий, зараз спить.' : 'Диск здоровий.'];
-  return out.sort((a, b) => (a[0] === 'red' ? 0 : 1) - (b[0] === 'red' ? 0 : 1))[0].concat([out.slice(1).map(x => x[1])]);
+  if (!out.length) return ['acc', s.state === 'standby' ? 'Здоровий, зараз спить.' : 'Диск здоровий.', parkNote ? [parkNote] : []];
+  const top = out.sort((a, b) => (a[0] === 'red' ? 0 : 1) - (b[0] === 'red' ? 0 : 1));
+  return top[0].concat([top.slice(1).map(x => x[1]).concat(parkNote ? [parkNote] : [])]);
 }
 
 function sleepNote(d) {
@@ -1625,7 +1626,7 @@ function toDisksHTML() {
     ['хто будив', d => (d.wokeBy || []).filter(w => w.who).slice(0, 3).map(w => `${esc(w.who)} ×${w.n}`).join('<br>') || '—'],
     ['хто працював з ним', d => (d.who || []).slice(0, 3).map(w => `${esc(w.who)} <span class="faint">${tdur(w.min * 60)}</span>`).join('<br>') || '—'],
     ['температура', d => d.temp && d.temp.avg != null ? `${nf(d.temp.avg)}° сер. · <span class="${d.temp.max >= 50 ? 'bad' : ''}">${nf(d.temp.max)}° макс</span>` : '—'],
-    ['паркувань головок', d => { const x = c(d, 'load_cycles'); return x ? ch(d, 'load_cycles') + perDay(x.d) + (x.to >= lim(d) * 0.8 ? `<br><span class="faint">ресурс ${nf(lim(d) / 1000)} тис. — ${nf(x.to / lim(d) * 100)}%</span>` : '') : '—'; }],
+    ['паркувань головок', d => { const x = c(d, 'load_cycles'); return x ? ch(d, 'load_cycles') + perDay(x.d) + (x.to >= lim(d) * 0.8 ? `<br><span class="faint">паспорт ${nf(lim(d) / 1000)} тис. (мінімум, не межа) — ${nf(x.to / lim(d) * 100)}%</span>` : '') : '—'; }],
     ['увімкнень (розкруток)', d => ch(d, 'cycles')],
     ['годин роботи', d => ch(d, 'hours')],
     ['помилки кабелю', d => ch(d, 'crc', true)],

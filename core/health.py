@@ -1148,8 +1148,6 @@ def disk_verdict(row, span):
         return ['red', 'замінити']
     if d('realloc') > 0:
         return ['red', 'замінити найближчим часом']
-    if row['rot'] and v('load_cycles') >= park_limit(row):
-        return ['yel', 'стежити: ресурс паркувань вичерпано']
     if d('crc') > 0 or row.get('ioErrors') or row.get('usbEvents'):
         return ['yel', 'стежити: збої зв\'язку']
     if (row['temp'] or {}).get('max') and row['temp']['max'] >= 55:
@@ -1231,8 +1229,8 @@ def summary(store, lim, now=None):
             if pd >= lim['parks_day']:
                 add('yel', '%s: головки паркуються %d разів за добу (межа %d).' % (n, pd, lim['parks_day']), 'disk', r['id'])
             lc = (c.get('load_cycles') or {}).get('to')
-            if lc and lc >= park_limit(r):
-                add('dim', '%s: ресурс паркувань від виробника вичерпано (%s з %d тис.) — працює, але копії тримай свіжими.' % (n, '{:,}'.format(int(lc)).replace(',', ' '), park_limit(r) // 1000), 'disk', r['id'])
+            if lc and lc >= park_limit(r) and not any((c.get(k) or {}).get('to') for k in ('realloc', 'pending', 'uncorrect')):
+                add('dim', '%s: паркувань %s — більше за паспортні %d тис. Це гарантований мінімум, а не межа; поганих секторів немає — працює далі.' % (n, '{:,}'.format(int(lc)).replace(',', ' '), park_limit(r) // 1000), 'disk', r['id'])
             wd = day.get(r['id'], {}).get('wakes', 0)
             if wd >= lim['wakes_day']:
                 top = (day[r['id']].get('wokeBy') or [{}])[0].get('who') or 'невідомо'
