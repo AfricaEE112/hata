@@ -172,29 +172,57 @@ def idle3_text(v):
 
 
 def idle3(g, dev, value=None):
-    """Прочитати або змінити таймер паркування головок WD (idle3-tools)."""
-    g.ensure_pkgs('idle3-tools')
+    """Прочитати або змінити таймер паркування головок WD. Спершу idle3ctl (лише прямий SATA), а через USB-мости —
+    hdparm -J: він говорить з диском через SAT, як і smartctl."""
+    g.ensure_pkgs('idle3-tools', 'hdparm')
+    res = idle3_ctl(g, dev, value)
+    if res is None:
+        res = idle3_hdparm(g, dev, value)
+    v = res
+    return {'idle3': v, 'idle3Text': idle3_text(v), 'changed': value is not None,
+            'note': 'Нове значення діє після повного вимкнення диска: вимкни док з розетки на 10 с (перезавантаження Хати не досить).' if value is not None else ''}
+
+
+def idle3_ctl(g, dev, value):
+    """idle3ctl: None — не вміє через цей міст (HDIO), тоді пробуємо hdparm."""
     if value is not None:
-        if value == 'off':
-            r = g.run(['idle3ctl', '-d', dev], 60)
-        else:
-            v = int(value)
-            if not 1 <= v <= 255:
-                raise g.Fail('Значення таймера — від 1 до 255')
-            r = g.run(['idle3ctl', '-s', str(v), dev], 60)
+        r = g.run(['idle3ctl', '-d', dev] if value == 'off' else ['idle3ctl', '-s', str(int(value)), dev], 60)
         if r.returncode:
-            raise g.Fail('Диск не прийняв зміну: ' + (r.stderr or r.stdout).strip()[-200:] + ' (через деякі USB-мости idle3 не змінюється)')
+            return None if re.search(r'HDIO|Invalid argument|Inappropriate ioctl', r.stderr + r.stdout) else fail(g, 'Диск не прийняв зміну', r)
     r = g.run(['idle3ctl', '-g', dev], 60)
     out = (r.stdout + r.stderr).strip()
     if r.returncode:
-        raise g.Fail('Не вдалося прочитати таймер: ' + out[-200:] + ' (через деякі USB-мости idle3 не читається)')
+        return None if re.search(r'HDIO|Invalid argument|Inappropriate ioctl', out) else fail(g, 'Не вдалося прочитати таймер', r)
     if re.search(r'disabled', out, re.I):
-        v = 0
-    else:
-        m = re.search(r'set to (\d+)', out)
-        v = int(m.group(1)) if m else None
-    return {'idle3': v, 'idle3Text': idle3_text(v), 'changed': value is not None,
-            'note': 'Нове значення діє після повного вимкнення диска: вимкни док з розетки на 10 с (перезавантаження Хати не досить).' if value is not None else ''}
+        return 0
+    m = re.search(r'set to (\d+)', out)
+    return int(m.group(1)) if m else None
+
+
+def idle3_hdparm(g, dev, value):
+    if value is not None:
+        secs = 0 if value == 'off' else (int(value) / 10 if int(value) <= 128 else (int(value) - 128) * 30)
+        # hdparm вимагає цей прапорець для всіх команд, специфічних для виробника; сама дія — та сама, що в idle3ctl
+        r = g.run(['hdparm', '-J', '%g' % secs, '--please-destroy-my-drive', dev], 60)
+        if r.returncode:
+            fail(g, 'Диск не прийняв зміну', r)
+    r = g.run(['hdparm', '-J', dev], 60)
+    out = (r.stdout + r.stderr).strip()
+    m = re.search(r'wdidle3\s*=\s*(\S+)\s*(\w*)', out)
+    if r.returncode or not m:
+        fail(g, 'Не вдалося прочитати таймер', r)
+    if m.group(1).lower().startswith(('disabled', 'off')):
+        return 0
+    try:
+        n = float(m.group(1))
+    except ValueError:
+        fail(g, 'Незрозуміла відповідь диска', r)
+    secs = n * 60 if m.group(2).lower().startswith('min') else n
+    return int(round(secs * 10)) if secs <= 12.8 else 128 + int(round(secs / 30))
+
+
+def fail(g, what, r):
+    raise g.Fail('%s: %s (через деякі USB-мости idle3 недоступний)' % (what, ((r.stderr or '') + (r.stdout or '')).strip()[-200:]))
 
 
 # ───────────────────────── відновлення ─────────────────────────
