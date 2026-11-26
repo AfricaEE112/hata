@@ -81,7 +81,7 @@ with sync_playwright() as p:
     assert up.get('ok'), up
     lst = pg.evaluate("async () => (await fetch('/api/files?path=/srv/disks/media')).json()")
     assert any(i['name'] == 'ci-upload.txt' for i in lst['items']), lst
-    pg.keyboard.press('7'); pg.wait_for_selector('#fm .fm-row'); shot('files')
+    pg.keyboard.press('3'); pg.wait_for_selector('#fm .fm-row'); shot('files')
     rm = pg.evaluate("""async () => (await fetch('/api/files', {method: 'POST', headers: {'Content-Type': 'application/json'},
                        body: JSON.stringify({op: 'delete', paths: ['/srv/disks/media/ci-upload.txt']})})).json()""")
     assert rm.get('ok'), rm
@@ -107,7 +107,7 @@ with sync_playwright() as p:
     assert room['device'] == 'room' and room['online'] and room['values']['temp.room']['v'] == 22.5, hn
     ev = pg.evaluate("async () => (await fetch('/api/house/events?range=24h')).json()")
     assert ev['gaps'] and ev['gaps'][0]['kind'] == 'power', ev
-    pg.keyboard.press('8'); pg.wait_for_selector('#hchart svg'); pg.wait_for_timeout(500); shot('house')
+    pg.keyboard.press('4'); pg.wait_for_selector('#hchart svg'); pg.wait_for_timeout(500); shot('house')
     # Диски й копії: SMART на тестовому диску (файл) недоступний, але сторінка відкривається; копія на той самий диск робиться
     hh = pg.evaluate("async () => (await fetch('/api/disks/health')).json()")
     print('disk health:', [(d['names'], d['smart'].get('state')) for d in hh.get('disks', [])])
@@ -165,7 +165,7 @@ with sync_playwright() as p:
                                    body: JSON.stringify(d)})).json()""", d)
     assert post_j({'op': 'ai_awake', 'on': False}).get('aiAwake') is False
     assert post_j({'op': 'ai_awake', 'on': True}).get('aiAwake') is True
-    pg.keyboard.press('9'); pg.wait_for_selector('#toChart svg', timeout=60000); pg.wait_for_timeout(800); shot('to')
+    pg.keyboard.press('5'); pg.wait_for_selector('#toChart svg', timeout=60000); pg.wait_for_timeout(800); shot('to')
     pg.click('[data-tg="load"]'); pg.wait_for_timeout(800); shot('to-load')
     pg.keyboard.press('1'); pg.wait_for_selector('#sys')
     pg.click('details.schemes summary'); pg.click('.schemes button[data-scheme="папір"]'); shot('panel-paper')

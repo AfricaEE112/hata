@@ -312,7 +312,7 @@ function stepDone() {
 }
 
 // ───────────────────────── панель ─────────────────────────
-const SECTIONS = [['1', 'огляд', 'sys'], ['2', 'диски', 'disks'], ['3', 'служби', 'svc'], ['4', 'мережа', 'net'], ['5', 'живлення', 'pwr'], ['6', 'журнал', 'log']];
+const SECTIONS = [['1', 'огляд', 'sys'], ['2', 'диски', 'disks']];   // 3 файли, 4 будинок, 5 то — окремі сторінки
 const SVC = {vidbox: 'відео й аніме', hata: 'ця панель', 'hata-screen': 'екран на ноутбуці'};
 const HIST = {cpu: [], net: [], lastNet: null};
 let panelTimer, liveTimer, LAST = null, UPD = null;
@@ -323,8 +323,8 @@ function panelTop(s) {
   bar.hidden = false;
   const b = s.battery;
   bar.innerHTML = `${who()}<nav aria-label="Розділи">${SECTIONS.map(([k, l, id]) => `<a href="#${id}" data-k="${k}"><span>${k}</span>${l}</a>`).join('')}` +
-    `<a href="#files" data-k="7" data-files><span>7</span>файли</a><a href="#house" data-k="8" data-house><span>8</span>будинок</a>` +
-    `<a href="#to" data-k="9" data-to><span>9</span>то<i class="tdot" id="toDot" hidden></i></a>` +
+    `<a href="#files" data-k="3" data-files><span>3</span>файли</a><a href="#house" data-k="4" data-house><span>4</span>будинок</a>` +
+    `<a href="#to" data-k="5" data-to><span>5</span>то<i class="tdot" id="toDot" hidden></i></a>` +
     `<a class="ext" href="${esc(vidboxUrl(s))}">VidBox ↗</a></nav><span class="sp"></span>
     <dl class="stats"><div><dt>cpu</dt><dd id="tCpu">—</dd></div><div><dt>ram</dt><dd id="tRam">—</dd></div><div><dt>t°</dt><dd id="tTemp">—</dd></div>` +
     (b ? `<div><dt>бат</dt><dd style="display:flex;gap:6px;align-items:center">${segs(b.pct, 10).replace('class="segs ', 'style="width:52px;flex:none" class="segs ')}${b.pct}%</dd></div>` : '') +
@@ -333,13 +333,13 @@ function panelTop(s) {
   $$('.top nav a[data-k]').forEach(a => a.onclick = e => { e.preventDefault(); goSection(a.dataset.k); });
 }
 
-// Перехід до розділу: 1–6 — блоки панелі (якщо ми на іншій сторінці — спершу назад на панель), 7 — файли.
+// Перехід до розділу: 1 — огляд, 2 — диски, 3 — файли, 4 — будинок, 5 — ТО.
 async function goSection(k) {
   $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === k));
   if (k === '2') return disksPage();
-  if (k === '7') return filesPage();
-  if (k === '8') return housePage();
-  if (k === '9') return toPage();
+  if (k === '3') return filesPage();
+  if (k === '4') return housePage();
+  if (k === '5') return toPage();
   const s = SECTIONS.find(x => x[0] === k);
   if (!s) return;
   if (!$('#sys')) await panel();
@@ -417,8 +417,8 @@ async function panel(soft) {
   }
   app.innerHTML = `<div class="wrap wide">
     <div class="cols">${win('система', sys, {n: '¹', id: 'sys'})}${win('диски', dsk, {n: '²', c: 'yel', id: 'disks', cls: 'w2'})}</div>
-    <div class="cols">${win('служби', svc, {n: '³', c: 'red', id: 'svc'})}${win('мережа', net, {n: '⁴', c: 'vio', id: 'net'})}${win('живлення', pwr, {n: '⁵', c: 'yel', id: 'pwr'})}</div>
-    <div class="cols">${win('журнал', '<p class="note" style="margin:0"><span class="spin"></span></p>', {n: '⁶', c: 'dim', id: 'log', cls: 'w9'})}<div id="updBox" style="flex:1 1 340px;min-width:0">${updBox()}</div></div>
+    <div class="cols">${win('служби', svc, {c: 'red', id: 'svc'})}${win('мережа', net, {c: 'vio', id: 'net'})}${win('живлення', pwr, {c: 'yel', id: 'pwr'})}</div>
+    <div class="cols">${win('журнал', '<p class="note" style="margin:0"><span class="spin"></span></p>', {c: 'dim', id: 'log', cls: 'w9'})}<div id="updBox" style="flex:1 1 340px;min-width:0">${updBox()}</div></div>
   </div>`;
 
   for (const [id, html] of [['disks', dsk], ['svc', svc], ['pwr', pwr]]) $(`#${id} .wbody`).dataset.html = html;
@@ -686,7 +686,7 @@ function updBox() {
   return win('оновлення', `<dl class="kv"><dt>зараз</dt><dd>${esc(ver)}</dd><dt>нових змін</dt><dd>${c.length}</dd></dl>
     <ul class="commits">${c.slice(0, 6).map(x => `<li><b>${esc(x.hash)}</b><span>${esc(x.msg)}</span></li>`).join('')}${c.length > 6 ? `<li><span style="color:var(--dim)">і ще ${c.length - 6}</span></li>` : ''}</ul>
     <p class="note">Якщо після оновлення щось не запуститься, Хата сама повернеться до ${esc(ver)}.</p>
-    <div class="acts"><button class="btn primary" id="upd">Оновити</button></div>`, {n: '⁷', cls: 'hot', badge: String(c.length)});
+    <div class="acts"><button class="btn primary" id="upd">Оновити</button></div>`, {cls: 'hot', badge: String(c.length)});
 }
 function bindUpd() {
   const b = $('#upd'); if (!b) return;
@@ -714,7 +714,7 @@ const fdate = t => new Date(t * 1000).toLocaleDateString('uk-UA', {day: '2-digit
 async function filesPage(path = FS.path) {
   stopPanel(); fromPanel = false;
   if (!$('.top nav a[data-files]')) { bar.hidden = false; if (LAST) panelTop(LAST); }
-  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === '7'));
+  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === '3'));
   const r = await api('/api/files' + (path ? '?path=' + encodeURIComponent(path) : ''));
   if (r.ok === false && path) return filesPage('');     // теки вже немає — на початок
   FS.data = r; FS.path = r.path || ''; FS.sel.clear(); FS.ren = null;
@@ -727,7 +727,7 @@ function drawFiles() {
   const r = FS.data || {}, items = r.items || [], atRoot = !r.up;
   if (!$('#fm')) {
     app.innerHTML = `<div class="wrap wide"><div id="fmPrompt"></div><div class="cols">
-      ${win('файли', '', {n: '⁷', id: 'fm', cls: 'w9'})}
+      ${win('файли', '', {n: '³', id: 'fm', cls: 'w9'})}
       <div style="flex:1 1 340px;min-width:0">${win('завантаження', '', {c: 'yel', id: 'up'})}${win('спільні папки', '', {c: 'vio', id: 'smb'})}</div>
     </div></div><div class="drop" id="drop" hidden><div><b>Відпусти, щоб завантажити</b><span id="dropTo"></span></div></div>
     <input type="file" id="fPick" multiple hidden><input type="file" id="dPick" webkitdirectory hidden>`;
@@ -1106,7 +1106,7 @@ function bindDisks() {
   });
   $$('[data-fopen]').forEach(b => b.onclick = () => filesPage((DK.bk && DK.bk.root || '/srv/disks') + '/' + b.dataset.fopen));
   $$('[data-fpath]').forEach(b => b.onclick = () => filesPage(b.dataset.fpath));
-  $$('[data-goto-to]').forEach(b => b.onclick = () => goSection('9'));
+  $$('[data-goto-to]').forEach(b => b.onclick = () => goSection('5'));
   $$('[data-aiawake]').forEach(b => b.onchange = async () => {
     const r = await api('/api/disks/health', {op: 'ai_awake', on: b.checked});
     toast(r.ok === false ? r.error : b.checked ? 'Поки йдуть субтитри ШІ, диски з бібліотекою не засинатимуть' : 'Диски засинають за своїм налаштуванням і під час субтитрів ШІ');
@@ -1162,7 +1162,7 @@ let houseTimer, houseSeriesAt = 0;
 async function housePage() {
   stopPanel(); fromPanel = false;
   if (!$('.top nav a[data-house]')) { bar.hidden = false; if (LAST) panelTop(LAST); }
-  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === '8'));
+  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === '4'));
   app.innerHTML = `<div class="wrap wide">${prompt('~/будинок', 'tail -f room')}<div id="hBody"><p class="note"><span class="spin"></span></p></div></div>`;
   window.scrollTo(0, 0);
   houseSeriesAt = 0;
@@ -1240,7 +1240,7 @@ function drawHouse() {
       <div class="seg hrange">${HRANGES.map(([k, l]) => `<button data-hr="${k}" class="${HS.range === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>`;
   const title = d.device === 'room' ? 'кімната' : d.device;
   if (!$('#hnow')) {
-    box.innerHTML = `<div class="cols">${win(title, '', {n: '⁸', id: 'hnow'})}${win('графік', '<div id="hctl"></div><div class="hchart" id="hchart"></div><div class="hlegend" id="hlegend"></div>', {c: 'vio', id: 'hgraph', cls: 'w2'})}</div>
+    box.innerHTML = `<div class="cols">${win(title, '', {n: '⁴', id: 'hnow'})}${win('графік', '<div id="hctl"></div><div class="hchart" id="hchart"></div><div class="hlegend" id="hlegend"></div>', {c: 'vio', id: 'hgraph', cls: 'w2'})}</div>
       <div class="cols">${win('події', '', {c: 'yel', id: 'hev', cls: 'w2'})}${win('ключ плати', houseKeyHTML(), {c: 'dim', id: 'hkey'})}</div>`;
     bindHouseKey();
   }
@@ -1416,13 +1416,13 @@ async function toWarn() {
   if (dot) { dot.hidden = !bad.length; dot.style.background = `var(--${r.level === 'red' ? 'red' : 'yel'})`; }
   if (line) line.innerHTML = bad.length ? `<span style="color:var(--${lvlCol(r.level)})">▲ ТО: ${bad.length} ${pl(bad.length, 'зауваження', 'зауваження', 'зауважень')}</span> — ${esc(bad[0].text)} <button class="linkbtn" data-goto>детальніше</button>`
     : `<span style="color:var(--acc)">✓ ТО: усе стабільно</span> <button class="linkbtn" data-goto>графіки й таблиця</button>`;
-  line?.querySelector('[data-goto]')?.addEventListener('click', () => goSection('9'));
+  line?.querySelector('[data-goto]')?.addEventListener('click', () => goSection('5'));
 }
 
 async function toPage() {
   stopPanel(); fromPanel = false;
   if (!$('.top nav a[data-house]')) { bar.hidden = false; if (LAST) panelTop(LAST); }
-  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === '9'));
+  $$('.top nav a').forEach(x => x.classList.toggle('on', x.dataset.k === '5'));
   if (!$('#toBody')) {
     app.innerHTML = `<div class="wrap wide">${prompt('~/то', 'hata health --since ' + TO.range)}<div id="toBody"><p class="note"><span class="spin"></span> Збираю дані…</p></div></div>`;
     window.scrollTo(0, 0);
@@ -1456,7 +1456,7 @@ function drawTO() {
   const box = $('#toBody');
   if (!box) return;
   if (!$('#toSum')) {
-    box.innerHTML = `<div class="cols">${win('стан', '', {n: '⁹', id: 'toSum', cls: 'w2'})}${win('період', '', {c: 'vio', id: 'toCtl'})}</div>
+    box.innerHTML = `<div class="cols">${win('стан', '', {n: '⁵', id: 'toSum', cls: 'w2'})}${win('період', '', {c: 'vio', id: 'toCtl'})}</div>
       ${win('графіки', '<div id="toChips"></div><div class="hchart" id="toChart"></div><div class="hlegend" id="toLeg"></div>', {c: 'acc', id: 'toGraph'})}
       ${win('диски за період', '', {c: 'yel', id: 'toDisks'})}
       <div class="cols">${win('система за період', '', {c: 'vio', id: 'toSys', cls: 'w2'})}${win('події', '', {c: 'red', id: 'toEv'})}</div>
@@ -1689,7 +1689,7 @@ const LIMN = {disk_temp: ['диск гарячий від', '°C'], cpu_temp: ['
   bat_drop: ['батарея втратила ємності за місяць', '%'], backup_days: ['копії не було довше ніж', 'дн.']};
 function toLimHTML() {
   const L = TO.lim || {}, v = L.limits || {}, r = L.range || {};
-  return `<p class="note" style="margin-top:0">Коли показник переходить межу, він з’являється в «стані» вгорі й позначкою на пункті «9 то».</p>
+  return `<p class="note" style="margin-top:0">Коли показник переходить межу, він з’являється в «стані» вгорі й позначкою на пункті «5 то».</p>
     <div class="dk-form to-lim">${Object.entries(LIMN).map(([k, [l, u]]) => `<div><label class="f" for="lim_${k}">${l}${u ? ', ' + u : ''}</label><input id="lim_${k}" type="number" min="${(r[k] || [])[0] ?? ''}" max="${(r[k] || [])[1] ?? ''}" value="${v[k] ?? ''}" data-lim="${k}"></div>`).join('')}</div>
     <div class="acts"><button class="btn primary" id="limSave">Зберегти</button><button class="btn ghost" id="limReset">Як було типово</button></div>`;
 }
@@ -1708,10 +1708,10 @@ function bindToLim() {
   };
 }
 
-// Клавіші 1–9 — до розділу панелі, як у btop.
+// Клавіші 1–5 — до розділу панелі, як у btop.
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey || typing() || !$('.top nav a[data-k]')) return;
-  if (/^[1-9]$/.test(e.key)) goSection(e.key);
+  if (/^[1-5]$/.test(e.key)) goSection(e.key);
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && $('#cpuG')) live(); });
 
