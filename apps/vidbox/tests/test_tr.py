@@ -311,7 +311,7 @@ def test_pipeline_fixes_everything():
                                 4: _it(4, 'Me neither', 'Я теж!', 'Taku'),
                                 5: _it(5, 'Good night', 'Добраніч.')}[x['n']] for x in p['lines']]}
     chat, calls = _fake([scene, fix])
-    rep = pipeline.translate(ls, c, chat, 'SYS')
+    rep = pipeline.translate(ls, c, chat, 'SYS', review=False)
     want = ['Привіт, сестричко.', 'Гаразд, добре.', 'Вона знову вагітна.', 'Я так і знала!', 'Я теж!', 'Добраніч.',
             'Translated by: someone']
     if not HAVE_DICT:                   # без словника описку й рід не видно — їх модель і не виправляє
@@ -334,7 +334,7 @@ def test_pipeline_gives_up_gracefully():
     ls = prepare([(0, 2, 'Hello there.'), (3, 5, 'How are you?')])
     junk = lambda p: {'lines': []}
     chat, calls = _fake([junk])
-    rep = pipeline.translate(ls, ctx(), chat, 'SYS', rounds=3)
+    rep = pipeline.translate(ls, ctx(), chat, 'SYS', rounds=3, review=False)
     assert len(calls) == 4, 'сцена + 3 раунди виправлень'
     assert [l.uk for l in ls] == ['Hello there.', 'How are you?'], 'нічого не прийшло — лишається оригінал'
     assert rep['failed'] == 2 and [l['status'] for l in rep['lines']] == ['failed', 'failed']
@@ -347,7 +347,7 @@ def test_pipeline_best_candidate_and_errors():
     ls = prepare([(0, 2, 'I am so tired today.')])
     bad = lambda p: {'lines': [_it(0, 'I am', 'Я сьогодні така втомлена, бояюсь.')]}
     chat, calls = _fake([bad])
-    rep = pipeline.translate(ls, ctx(), chat, 'SYS', rounds=1)
+    rep = pipeline.translate(ls, ctx(), chat, 'SYS', rounds=1, review=False)
     assert ls[0].uk == 'Я сьогодні така втомлена, бояюсь.' and ls[0].status == 'failed', 'найкраща спроба, у звіт'
     assert rep['lines'][0]['tries'] == 2
 
@@ -372,9 +372,38 @@ def test_pipeline_marks_sexual_scenes():
                                              % (x['n'] % 6)) for x in p['lines']]}
     chat, calls = _fake([s])
     c = ctx(sex_ranges=None)
-    pipeline.translate(ls, c, chat, 'SYS')
+    pipeline.translate(ls, c, chat, 'SYS', review=False)
     assert len(calls) == 2 and c.sex_ranges == [(0, 5)], c.sex_ranges
     assert ls[0].status == 'ok' and ls[7].status == 'warn' and ls[7].issues[0].code == 'sex_context'
+
+
+def test_pipeline_reviewer_and_harden():
+    from tr import pipeline
+    ls = prepare([(0, 2, 'Th-This is called CPR!'), (3, 5, "You're gonna finish the order?"), (6, 8, 'Hi there.')])
+    scene = lambda p: {'sexual': False, 'lines': [
+        _it(0, 'Th-This', 'Ц-це називається серцебиття!'), _it(1, "You're gonna", 'Ти кінчиш замовлення?'),
+        _it(2, 'Hi there', 'Привіт.')]}
+    review = lambda p: {'errors': [
+        {'n': 0, 'src': 'Th-This', 'issue': 'CPR — штучне дихання', 'uk': 'Ц-це називається штучне дихання!'},
+        {'n': 1, 'src': 'Hi there', 'issue': 'x', 'uk': 'Ти закінчиш замовлення?'},          # не та репліка (src)
+        {'n': 2, 'src': 'Hi', 'issue': 'x', 'uk': 'Ти кінчиш замовлення?'},                   # переписана сусідня
+        {'n': 7, 'src': 'Hi', 'issue': 'x', 'uk': 'Щось.'}]}                                   # чужий номер
+    chat, calls = _fake([scene, review])
+    hardened = []
+
+    def harden(en, cur):
+        hardened.append(list(cur))
+        return [cur[0], cur[1], 'Привіт, бляха.']
+    rep = pipeline.translate(ls, ctx(sex_ranges=None), chat, 'SYS', harden=harden)
+    assert [l.uk for l in ls] == ['Ц-це називається штучне дихання!', 'Ти кінчиш замовлення?', 'Привіт, бляха.'], \
+        [l.uk for l in ls]
+    assert rep['meta']['reviewed'] == 1 and rep['meta']['hardened'] == 1 and len(calls) == 2
+    sent = {x['n']: x for x in calls[1][0]['lines']}
+    assert 'check' in sent[1] and 'кінч' in sent[1]['check'], 'рецензенту — підозра з перевірки'
+    assert sent[0]['sex_scene'] is False
+    assert ls[0].cands[-1]['stage'] == 'review' and ls[0].cands[-1]['why'] == 'CPR — штучне дихання'
+    assert ls[2].cands[-1]['stage'] == 'review' and not ls[2].cands[-1]['ok']
+    assert hardened == [['Ц-це називається серцебиття!', 'Ти кінчиш замовлення?', 'Привіт.']], 'жорсткіше — до рецензента'
 
 
 if __name__ == '__main__':

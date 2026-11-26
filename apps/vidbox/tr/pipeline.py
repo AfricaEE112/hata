@@ -37,6 +37,12 @@ RULES = ('For every item: "src" — copy the first two words of line n exactly a
          'briefly, as a sign.')
 
 
+REVIEW_BATCH = 35
+REVIEW_SCHEMA = {'type': 'object', 'required': ['errors'], 'properties': {'errors': {'type': 'array', 'items': {
+    'type': 'object', 'required': ['n', 'src', 'issue', 'uk'], 'properties': {
+        'n': {'type': 'integer'}, 'src': {'type': 'string'}, 'issue': {'type': 'string'}, 'uk': {'type': 'string'}}}}}}
+
+
 def parse(txt):
     txt = re.sub(r'<think>.*?</think>', '', str(txt or ''), flags=re.S).strip()
     m = re.search(r'\{.*\}', txt, re.S)
@@ -114,8 +120,11 @@ def _problem(ln):
 
 
 class Translator:
-    def __init__(self, chat, ctx, system, hint='', ctx_text='', gloss_text=None, progress=None, rounds=3, log=None):
+    def __init__(self, chat, ctx, system, hint='', ctx_text='', gloss_text=None, progress=None, rounds=3, log=None,
+                 review=True, harden=None):
         self.chat, self.ctx, self.system = chat, ctx, system
+        self.review_on, self.harden = review, harden
+        self.reviewed = self.hardened = 0
         self.hint, self.ctx_text = hint, ctx_text
         self.gloss_text = gloss_text or (lambda text: '')
         self.progress = progress or (lambda f: None)
@@ -197,12 +206,87 @@ class Translator:
             got = self.ask(user, schema(len(grp)), temp)
             _apply(got, by_n, self.ctx, lines, stage, ns)
 
+    # ---------- 3. «жорсткіше» (пропозиції ззовні, напр. tr_harden у VidBox) ----------
+    def harden_pass(self, lines):
+        work = [ln for ln in lines if ln.uk and ln.kind != 'credits']
+        if not self.harden or not work:
+            return
+        cur = [ln.uk for ln in work]
+        hard = self.harden([ln.en for ln in work], list(cur)) or cur
+        for ln, old_uk, new_uk in zip(work, cur, hard):
+            if new_uk and new_uk != old_uk:
+                if accept(ln, new_uk, self.ctx, lines, stage='harden')[0]:
+                    self.hardened += 1
+                else:
+                    ln.uk = old_uk
+
+    # ---------- 4. рецензент змісту ----------
+    def review(self, lines):
+        """Модель перечитує пари оригінал → переклад і повертає лише репліки зі справжніми помилками сенсу.
+        Виправлення приймається, лише якщо проходить accept і схоже на свій переклад більше, ніж на сусідні."""
+        work = [ln for ln in lines if ln.uk and ln.en.strip() and ln.kind != 'credits']
+        for i in range(0, len(work), REVIEW_BATCH):
+            grp = work[i:i + REVIEW_BATCH]
+            by_n = {ln.n: ln for ln in grp}
+            items = []
+            for ln in grp:
+                d = {'n': ln.n, 'en': ln.en, 'uk': ln.uk}
+                if ln.who:
+                    d['who'] = ln.who
+                if ln.to:
+                    d['to'] = ln.to
+                if self.ctx.sex_ranges is not None:
+                    d['sex_scene'] = self.ctx.in_sex(ln.n)
+                warn = [x.msg for x in ln.issues if x.sev == 'warn' and x.code not in ('unknown_name', 'too_long')]
+                if warn:
+                    d['check'] = '; '.join(warn)
+                items.append(d)
+            text = '\n'.join(ln.en for ln in grp)
+            user = ('You are the editor of these Ukrainian subtitles. Compare every "uk" with its English "en" in '
+                    'context and report ONLY real errors: wrong meaning (a word taken in the wrong sense for this '
+                    'scene: CPR is «штучне дихання», "finish the order" is «доробити / закінчити замовлення», "sip" '
+                    'is «ковток»), sexual wording where the scene is not sexual ("sex_scene": false) or missing where '
+                    'it is, wrong gender of the speaker ("who") or listener ("to"), a wrong name, a line that '
+                    'translates its neighbour instead of itself, words that are not Ukrainian. Lines with "check" '
+                    'were flagged by an automatic check — confirm and fix, or leave them if they are right. Do NOT '
+                    'report style preferences and do NOT soften crude language. For each error return {"n", "src" '
+                    '(first two words of that en line), "issue" (short, in Ukrainian), "uk" (the corrected full '
+                    'line)}. If everything is right, return {"errors": []}.\n%s\n%s'
+                    % (self._head(text), json.dumps({'lines': items}, ensure_ascii=False)))
+            got = self.ask(user, REVIEW_SCHEMA, 0.2)
+            seen = set()
+            for e in got.get('errors') or []:
+                if not isinstance(e, dict):
+                    continue
+                try:
+                    n = int(e.get('n'))
+                except (TypeError, ValueError):
+                    continue
+                ln = by_n.get(n)
+                fix = str(e.get('uk') or '').strip()
+                if not ln or n in seen or not fix or fix == ln.uk:
+                    continue
+                seen.add(n)
+                own = sim(fix, ln.uk)
+                near = [o.uk for o in lines[max(0, n - 3):n + 4] if o.n != n and o.uk]
+                if near and max(sim(fix, x) for x in near) > own and own < 0.5:
+                    ln.cands.append({'uk': fix, 'stage': 'review', 'ok': False, 'issues': [Issue(
+                        'shift', 'block', 'виправлення рецензента схоже на сусідню репліку').as_dict()]})
+                    continue
+                old_uk = ln.uk
+                ok, _ = accept(ln, fix, self.ctx, lines, stage='review', echo=e.get('src', ''))
+                if ok:
+                    ln.cands[-1]['why'] = str(e.get('issue') or '')[:200]
+                    self.reviewed += 1
+                else:
+                    ln.uk = old_uk
+
     def pending(self, lines):
         return [ln for ln in lines if ln.en.strip() and ln.kind != 'credits' and not ln.uk]
 
     def run(self, lines):
         sc = scenes(lines)
-        total = len(sc) + self.rounds + 1
+        total = len(sc) + self.rounds + 2
         for i, s in enumerate(sc):
             self.scene(s, lines)
             self.progress((i + 1) / total)
@@ -226,6 +310,10 @@ class Translator:
                 any(i['code'] in ('shift', 'echo', 'empty') for i in c['issues']),
                 sum(i['sev'] == 'block' for i in c['issues'])))
             ln.uk = best[0]['uk'] if best else ln.en
+        self.harden_pass(lines)
+        if self.review_on:
+            validate(lines, self.ctx)            # свіжі warn — рецензенту як «check»
+            self.review(lines)
         self.progress(1.0)
         return validate(lines, self.ctx)
 
@@ -235,7 +323,8 @@ def translate(lines, ctx, chat, system, **kw):
     t = Translator(chat, ctx, system, **kw)
     t0 = time.time()
     rep = t.run(lines)
-    rep['meta'].update(core='new', calls=t.calls, secs=round(time.time() - t0, 1),
+    rep['meta'].update(core='new', calls=t.calls, secs=round(time.time() - t0, 1), reviewed=t.reviewed,
+                       hardened=t.hardened, review=t.review_on,
                        accepted_first=sum(1 for ln in lines if ln.cands and ln.cands[0]['ok']),
                        sexual=[list(x) for x in ctx.sex_ranges or []])
     return rep

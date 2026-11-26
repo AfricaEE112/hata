@@ -1716,6 +1716,7 @@ def bench_job(core):
         lex = Lexicon.get(ai_dir('venv'))
         meta = {'core': core, 'at': int(time.time()), 'model': C.cfg.get('local_pin') or C.cfg.get('local_model') or '',
                 'translator': (tr_chain() or [('', '')])[0][0], 'harden': C.cfg.get('ai_harden', True),
+                'review': C.cfg.get('ai_review', True) if core == 'new' else False,
                 'dict': lex.ok}
         AI['model_used'] = ''
         TR_CTX.times = None
@@ -3126,23 +3127,10 @@ def translate_new(url, lines, src, progress=None):
         split_scenes(ls)
     ctx = tr_new_ctx()
     gl = lambda text: gloss_prompt(text, src)
+    hard = tr_harden if src == 'en' and tr_adult() and C.cfg.get('ai_harden', True) else None
     rep = pipeline.translate(ls, ctx, local_chat(url), LOCAL_SYSTEM_ADULT if tr_adult() else LOCAL_SYSTEM_STD,
                              hint=SPEAKER_HINT, ctx_text=getattr(TR_CTX, 'ctx', '') or '', gloss_text=gl,
-                             progress=progress)
-    if src == 'en' and tr_adult() and C.cfg.get('ai_harden', True):
-        from tr import accept, validate        # «жорсткіше для 18+» — лише пропозиції, приймає та сама перевірка
-        cur = [ln.uk for ln in ls]
-        hard = tr_harden(list(lines), list(cur))
-        took = 0
-        for ln, old_uk, new_uk in zip(ls, cur, hard):
-            if new_uk and new_uk != old_uk and ln.kind != 'credits':
-                if accept(ln, new_uk, ctx, ls, stage='harden')[0]:
-                    took += 1
-                else:
-                    ln.uk = old_uk
-        meta = rep['meta']
-        rep = validate(ls, ctx)
-        rep['meta'].update(meta, harden=took)
+                             progress=progress, review=C.cfg.get('ai_review', True), harden=hard)
     rep['meta'].update(model=AI.get('model_used') or '', src=src)
     TR_CTX.qa = rep
     TR_CTX.qa_all = [{'who': ln.who, 'to': ln.to, 'status': ln.status, 'tries': len(ln.cands),
@@ -3518,7 +3506,7 @@ def ai_status():
         it['title'] = r['title'] if r else '(файл зник)'
     return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True), 'harden': C.cfg.get('ai_harden', True), 'adultLocal': C.cfg.get('ai_adult_local', True), 'localPar': C.cfg.get('local_parallel') or 1,
             'localPin': C.cfg.get('local_pin') or '', 'localModels': C.cfg.get('local_models') or [],
-            'trCore': C.cfg.get('tr_core') or 'old',
+            'trCore': C.cfg.get('tr_core') or 'old', 'review': C.cfg.get('ai_review', True),
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
@@ -3736,6 +3724,8 @@ def ai_post(d):
                 C.cfg['local_pin'] = d['localPin'].strip()[:200]
             if d.get('trCore') in ('old', 'new'):
                 C.cfg['tr_core'] = d['trCore']
+            if isinstance(d.get('review'), bool):
+                C.cfg['ai_review'] = d['review']
             if d.get('source') in ('subs', 'audio'):
                 C.cfg['ai_source'] = d['source']
         save_config()
@@ -4679,7 +4669,7 @@ DEFAULTS = {
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
     'local_url': '', 'local_key': '', 'local_model': '',
-    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1, 'local_pin': '', 'local_models': [], 'tr_core': 'old',
+    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1, 'local_pin': '', 'local_models': [], 'tr_core': 'old', 'ai_review': True,
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},
