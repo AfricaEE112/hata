@@ -1717,6 +1717,7 @@ def bench_job(core):
                 'translator': (tr_chain() or [('', '')])[0][0], 'harden': C.cfg.get('ai_harden', True),
                 'dict': lex.ok}
         AI['model_used'] = ''
+        TR_CTX.times = None
         rep = trb.run(bench_translate_old, bench_gloss, progress=lambda f: BENCH.update(p=f), meta=meta,
                       should_stop=lambda: BENCH['stop'])
         if AI.get('model_used'):            # модель, яка справді перекладала (пін міг указувати на видалену)
@@ -3046,9 +3047,122 @@ def adult_local_only():
     return bool(tr_adult() and C.cfg.get('ai_adult_local', True) and (C.cfg.get('local_url') or '').strip())
 
 
+def local_chat(url):
+    """Виклик локальної моделі для нового ядра: chat(system, user, schema, temp) → текст відповіді.
+    ПК недоступний / токен — TrError(quota=True), як у старому ядрі: серію 18+ відкладемо (TrWait)."""
+    base, hdr = local_base(url), local_hdr()
+    model = local_pick_model(url, hdr)
+    AI['model_used'] = model
+    state = {'schema': True}
+
+    def chat(system, user, schema=None, temp=0.3):
+        body = {'model': model, 'temperature': temp, 'chat_template_kwargs': {'enable_thinking': False},
+                'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]}
+        for n in range(3):
+            if schema and state['schema']:
+                body['response_format'] = {'type': 'json_schema', 'json_schema': {'name': 'subs', 'strict': True,
+                                                                                  'schema': schema}}
+            else:
+                body.pop('response_format', None)
+            try:
+                res = http_json(base + '/chat/completions', body, hdr, timeout=900)
+                return res['choices'][0]['message'].get('content') or ''
+            except urllib.error.HTTPError as e:
+                b = getattr(e, 'body', '') or ''
+                if e.code == 400 and re.search(r'context|n_ctx|exceed|too long|too many tokens', b, re.I):
+                    return ''            # не влізло — ці репліки підуть на виправлення меншими групами
+                if e.code == 400 and state['schema']:
+                    state['schema'] = False
+                    continue
+                if e.code in (401, 403):
+                    raise TrError('локальний сервер не прийняв токен', quota=True)
+                if n == 2:
+                    raise TrError('локальна модель: помилка %d %s' % (e.code, b[:160]), quota=True)
+                time.sleep(5)
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                raise TrError('ПК з моделлю недоступний: %s' % getattr(e, 'reason', e), quota=True)
+            except (KeyError, IndexError, TypeError, ValueError):
+                return ''
+        return ''
+    return chat
+
+
+def tr_new_ctx():
+    """Контекст перевірок нового ядра з того, що зібрав ai_context / тест: персонажі зі статтю, глосарій, заборони."""
+    from tr import Ctx, Lexicon
+    Lexicon.get(ai_dir('venv'))
+    sets = getattr(TR_CTX, 'sets', None) or []
+    items = []
+    for sid in getattr(TR_CTX, 'gloss_sids', None) or []:
+        g = gloss_get(sid)
+        items += g['items'] + g.get('auto', [])
+    items += list(getattr(TR_CTX, 'auto_items', None) or [])
+    for k in sets:
+        items += gloss_sets().get(k, {}).get('items', [])
+    chars, seen = [], set()
+    for it in items:
+        if len(it) > 2 and it[2] == "ім'я" and it[0]:
+            en, uk = name_plain(it[0], it[1])
+            note = (it[3] if len(it) > 3 else '').strip().lower()
+            g = 'femn' if note.startswith('жін') else 'masc' if note.startswith('чол') else None
+            if en.lower() not in seen:
+                seen.add(en.lower())
+                chars.append({'en': en, 'uk': re.split(r'\s*/\s*', uk)[0], 'gender': g,
+                              'aliases': [it[0]] if it[0] != en else []})
+    forbid = [rx for k in sets for rx in gloss_sets().get(k, {}).get('forbid') or []]
+    return Ctx(chars=chars, gloss=items, forbid=forbid, sex_ranges=None)
+
+
+def translate_new(url, lines, src, progress=None):
+    """Нове ядро (tr/pipeline.py): номери реплік, єдина перевірка, адресні виправлення, звіт → TR_CTX.qa."""
+    from tr import pipeline, prepare
+    segs = [(i * 4.0, i * 4.0 + 3.0, t) for i, t in enumerate(lines)]
+    ls = prepare(segs)
+    if getattr(TR_CTX, 'times', None) and len(TR_CTX.times) == len(ls):    # справжні таймінги — для сцен
+        for ln, (a, b) in zip(ls, TR_CTX.times):
+            ln.start, ln.end = a, b
+        from tr.lines import split_scenes
+        split_scenes(ls)
+    ctx = tr_new_ctx()
+    gl = lambda text: gloss_prompt(text, src)
+    rep = pipeline.translate(ls, ctx, local_chat(url), LOCAL_SYSTEM_ADULT if tr_adult() else LOCAL_SYSTEM_STD,
+                             hint=SPEAKER_HINT, ctx_text=getattr(TR_CTX, 'ctx', '') or '', gloss_text=gl,
+                             progress=progress)
+    if src == 'en' and tr_adult() and C.cfg.get('ai_harden', True):
+        from tr import accept, validate        # «жорсткіше для 18+» — лише пропозиції, приймає та сама перевірка
+        cur = [ln.uk for ln in ls]
+        hard = tr_harden(list(lines), list(cur))
+        took = 0
+        for ln, old_uk, new_uk in zip(ls, cur, hard):
+            if new_uk and new_uk != old_uk and ln.kind != 'credits':
+                if accept(ln, new_uk, ctx, ls, stage='harden')[0]:
+                    took += 1
+                else:
+                    ln.uk = old_uk
+        meta = rep['meta']
+        rep = validate(ls, ctx)
+        rep['meta'].update(meta, harden=took)
+    rep['meta'].update(model=AI.get('model_used') or '', src=src)
+    TR_CTX.qa = rep
+    return [ln.uk for ln in ls]
+
+
+def write_uk(out, segs, uk):
+    """uk.srt + звіт перевірки qa.json (нове ядро); старий звіт прибирається, щоб не брехав про новий переклад."""
+    write_srt(os.path.join(out, 'uk.srt'), segs, uk)
+    qa = os.path.join(out, 'qa.json')
+    rep = getattr(TR_CTX, 'qa', None)
+    if rep:
+        with open(qa, 'w', encoding='utf-8') as f:
+            json.dump(rep, f, ensure_ascii=False, indent=1)
+    elif os.path.exists(qa):
+        os.remove(qa)
+
+
 def translate_uk(lines, src, progress=None):
     """Переклад українською першим перекладачем, у якого не скінчився ліміт. → (тексти, назва перекладача)."""
     errs = []
+    TR_CTX.qa = None
     chain = tr_chain()
     if adult_local_only():
         chain = [x for x in chain if x[0] == 'local']
@@ -3058,6 +3172,8 @@ def translate_uk(lines, src, progress=None):
             raise TrWait(str(e))
     for name, key in chain:
         try:
+            if name == 'local' and (C.cfg.get('tr_core') or 'old') == 'new':
+                return translate_new(key, lines, src, progress), name    # своє прибирання й перевірка всередині
             fn = {'local': local_translate, 'gemini': gemini_translate, 'deepl': deepl_translate,
                   'azure': azure_translate}[name]
             out = fn(key, lines, src, progress)
@@ -3191,8 +3307,9 @@ def ai_job_run(it):
             segs = read_srt(os.path.join(out, have[0]))
             ai_context(vid, r, [x['t'] for x in segs], have[0][:-4], st)
             ai_set(vid, state='translate', p=0)
+            TR_CTX.times = [(x['s'], x['e']) for x in segs]
             uk, via = translate_uk([x['t'] for x in segs], have[0][:-4], lambda f: ai_set(vid, p=f))
-            write_srt(os.path.join(out, 'uk.srt'), segs, uk)
+            write_uk(out, segs, uk)
             SUBS_CACHE.pop(vid, None)
             return ai_set(vid, state='done', p=1, err='', via=via)
         except TrWait as e:
@@ -3209,8 +3326,9 @@ def ai_job_run(it):
                 raise ValueError('замало реплік')
             ai_context(vid, r, [x['t'] for x in segs], 'en', st)
             ai_set(vid, state='translate', p=0)
+            TR_CTX.times = [(x['s'], x['e']) for x in segs]
             uk, via = translate_uk([x['t'] for x in segs], 'en', lambda f: ai_set(vid, p=f))
-            write_srt(os.path.join(out, 'uk.srt'), segs, uk)
+            write_uk(out, segs, uk)
             SUBS_CACHE.pop(vid, None)
             return ai_set(vid, state='done', p=1, err='', via=via)
         except ValueError:
@@ -3274,8 +3392,9 @@ def ai_job_run(it):
                 return ai_set(vid, state='done', p=1, err='Без перекладу: немає ключа перекладача — є субтитри мовою оригіналу')
             ai_context(vid, r, [x['t'] for x in segs], lang, st)
             ai_set(vid, state='translate', p=0)
+            TR_CTX.times = [(x['s'], x['e']) for x in segs]
             uk, via = translate_uk([x['t'] for x in segs], lang, lambda f: ai_set(vid, p=f))
-            write_srt(os.path.join(out, 'uk.srt'), segs, uk)
+            write_uk(out, segs, uk)
             SUBS_CACHE.pop(vid, None)
             return ai_set(vid, state='done', p=1, err='', via=via)
         SUBS_CACHE.pop(vid, None)
@@ -3383,7 +3502,7 @@ def ai_export_zip(sid='', ids=None, since=0):
             if vtt:
                 z.writestr(base + '.en.vtt', vtt)
             for f in sorted(os.listdir(d)):   # розпізнане Whisper (*.srt) і аналіз серії
-                if f == 'context.json' or (f.endswith('.srt') and f != 'uk.srt' and not vtt):
+                if f in ('context.json', 'qa.json') or (f.endswith('.srt') and f != 'uk.srt' and not vtt):
                     z.write(os.path.join(d, f), base + '.' + f)
             n += 1
     return buf.getvalue(), n
@@ -3396,6 +3515,7 @@ def ai_status():
         it['title'] = r['title'] if r else '(файл зник)'
     return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True), 'harden': C.cfg.get('ai_harden', True), 'adultLocal': C.cfg.get('ai_adult_local', True), 'localPar': C.cfg.get('local_parallel') or 1,
             'localPin': C.cfg.get('local_pin') or '', 'localModels': C.cfg.get('local_models') or [],
+            'trCore': C.cfg.get('tr_core') or 'old',
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
@@ -3466,7 +3586,7 @@ def ai_post(d):
             if not tr_chain():
                 return {'ok': False, 'error': 'Спершу налаштуй перекладача (локальну модель на ПК)'}
             BENCH.update(run=True, p=0.0, stop=False, err='')
-            threading.Thread(target=bench_job, args=('old',), daemon=True).start()
+            threading.Thread(target=bench_job, args=(C.cfg.get('tr_core') or 'old',), daemon=True).start()
     elif op == 'bench_stop':
         BENCH['stop'] = True
     elif op == 'bench_list':
@@ -3611,6 +3731,8 @@ def ai_post(d):
                 C.cfg['local_parallel'] = d['localPar']
             if isinstance(d.get('localPin'), str):
                 C.cfg['local_pin'] = d['localPin'].strip()[:200]
+            if d.get('trCore') in ('old', 'new'):
+                C.cfg['tr_core'] = d['trCore']
             if d.get('source') in ('subs', 'audio'):
                 C.cfg['ai_source'] = d['source']
         save_config()
@@ -4554,7 +4676,7 @@ DEFAULTS = {
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
     'local_url': '', 'local_key': '', 'local_model': '',
-    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1, 'local_pin': '', 'local_models': [],
+    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1, 'local_pin': '', 'local_models': [], 'tr_core': 'old',
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},

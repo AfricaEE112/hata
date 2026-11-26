@@ -59,13 +59,22 @@ class Ctx:
             return False
         return not any('Name' in str(p.tag) or 'Surn' in str(p.tag) for p in self.lex.parses(w))
 
+    GENERIC = {'man': 'masc', 'boy': 'masc', 'male': 'masc', 'чоловік': 'masc', 'хлопець': 'masc',
+               'woman': 'femn', 'girl': 'femn', 'female': 'femn', 'жінка': 'femn', 'дівчина': 'femn'}
+
     def char(self, name):
+        """Персонаж за іменем від аналізу чи моделі: «Aika», «Айка», «Aika (Sis)», «Kazuya-kun»; «man»/«woman» —
+        лише стать."""
         n = str(name or '').strip().lower()
-        if not n:
+        if not n or n == '?':
             return None
+        if n in self.GENERIC:
+            return {'en': n, 'uk': n, 'gender': self.GENERIC[n]}
+        keys = {n} | set(re.split(r'[\s()/,-]+', n)) - {''}
         for c in self.chars:
-            if n in {str(c.get('en') or '').lower(), str(c.get('uk') or '').lower()} | \
-                    {str(a).lower() for a in (c.get('aliases') or []) + (c.get('aliases_uk') or [])}:
+            names = {str(c.get('en') or '').lower(), str(c.get('uk') or '').lower()} | \
+                {str(a).lower() for a in (c.get('aliases') or []) + (c.get('aliases_uk') or [])}
+            if keys & (names - {''}):
                 return c
         return None
 
@@ -234,10 +243,16 @@ def check_line(ln, uk, ctx):
                 if j >= len(low):
                     continue
                 g2 = lex.gender(low[j])
-                if g2 and j + 1 < len(low) and not any(p.tag.POS == 'VERB' for p in lex.parses(low[j])) and \
-                        {p.tag.POS for p in lex.parses(low[j + 1])} & {'NOUN'} and \
-                        not {p.tag.POS for p in lex.parses(low[j + 1])} & {'ADJF', 'ADJS', 'PRTF', 'ADVB', 'VERB'}:
-                    g2 = None               # «я цілий тиждень…» — прикметник до іменника, а не до «я»
+                if g2 and not any(p.tag.POS == 'VERB' for p in lex.parses(low[j])):
+                    k = j + 1                   # «ти нестерпна розпещена дитина» — прикметники до іменника
+                    while k < len(low) and k <= j + 3:
+                        pos = {p.tag.POS for p in lex.parses(low[k])}
+                        if 'NOUN' in pos and not pos & {'ADJF', 'ADJS', 'PRTF', 'ADVB', 'VERB'}:
+                            g2 = None
+                            break
+                        if not pos & {'ADJF', 'PRTF'}:
+                            break
+                        k += 1
                 if g2 and g2 != g:
                     iss.append(Issue('gender_' + ('who' if pron == 'я' else 'to'), 'block',
                                      '%s — %s (%s), а «%s %s» — %s рід' % (

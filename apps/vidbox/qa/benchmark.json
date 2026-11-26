@@ -903,8 +903,7 @@
       "немовл",
       "малюк",
       "малят",
-      "дітей",
-      "діток"
+      "діт"
      ]
     }
    ],
@@ -1520,9 +1519,7 @@
    ],
    "lines": [
     {
-     "en": "I'm still good to go. What should we do?",
-     "who": "Kazuya",
-     "to": "Yumiko"
+     "en": "I'm still good to go. What should we do?"
     },
     {
      "en": "Just make sure to wear a rubber, okay?",

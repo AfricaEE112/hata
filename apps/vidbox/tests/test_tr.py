@@ -147,6 +147,8 @@ def test_gender():
     assert not blocks(check_line(L('I knew it'), 'Я так і знав!', c)), 'мовець невідомий — не судимо'
     assert not blocks(check_line(L('We knew it', who='Aika'), 'Ми так і знали!', c))
     assert not blocks(check_line(L('A week', who='Aika'), 'Я цілий тиждень не відчувала члена.', c))
+    assert not blocks(check_line(L('brat', to='Taku'), 'Яка ж ти нестерпна розпещена дитина!', c))
+    assert 'gender_to' in blocks(check_line(L('brat', to='Taku'), 'Ти така нестерпна!', c))
     assert 'gender_who' in blocks(check_line(L("I'm so happy", who='Taku'), 'Я така щаслива!', c))
 
 
@@ -252,6 +254,108 @@ def test_bench_scoring():
         raise RuntimeError('ПК вимкнений')
     rep = bench.run(boom, bench={'cases': [case]})
     assert rep['score'] == 0 and rep['cases'][0]['error'] == 'ПК вимкнений'
+
+
+# ---------------- конвеєр (фейкова модель) ----------------
+def _fake(script):
+    """script — список функцій (payload) → dict відповіді; кожен виклик моделі бере наступну."""
+    import json as _j
+    calls = []
+
+    def chat(system, user, sch, temp):
+        payload = _j.loads(user.rsplit('\n', 1)[1])
+        calls.append((payload, sch, temp))
+        return _j.dumps(script[min(len(calls) - 1, len(script) - 1)](payload), ensure_ascii=False)
+    return chat, calls
+
+
+def _it(n, src, uk, who='', to=''):
+    return {'n': n, 'src': src, 'who': who, 'to': to, 'uk': uk}
+
+
+def test_pipeline_fixes_everything():
+    from tr import pipeline
+    segs = [(0, 2, 'Hello, sis.'), (3, 5, 'Okay, fine.'), (6, 8, "She's pregnant again."),
+            (9, 11, 'I knew it!'), (12, 14, 'Me neither!'), (15, 17, 'Good night.'),
+            (30, 32, 'Translated by: someone')]
+    ls = prepare(segs)
+    c = ctx(sex_ranges=None)
+    scene = lambda p: {'sexual': False, 'lines': [
+        _it(0, 'Hello, sis', 'Привіт, сестричко.', 'Taku', 'Aika'),
+        _it(1, 'Okay, fine', 'Ладно, добре.', 'Aika', 'Taku'),            # русизм → autofix
+        _it(2, "She's pregnant", 'Вона знову завагірніла.', 'Taku', 'Aika'),  # вигадане слово
+        _it(3, 'I knew', 'Я так і знав!', 'Aika', 'Taku'),                # рід
+        _it(4, 'Me neither', 'Я так і знав!', 'Taku', 'Aika'),            # зсув/дубль
+        _it(5, 'Hello, sis', 'Добраніч.', 'Aika', 'Taku')]}               # echo не з цієї репліки
+    fix = lambda p: {'lines': [{2: _it(2, "She's pregnant", 'Вона знову вагітна.'),
+                                3: _it(3, 'I knew', 'Я так і знала!', 'Aika'),
+                                4: _it(4, 'Me neither', 'Я теж!', 'Taku'),
+                                5: _it(5, 'Good night', 'Добраніч.')}[x['n']] for x in p['lines']]}
+    chat, calls = _fake([scene, fix])
+    rep = pipeline.translate(ls, c, chat, 'SYS')
+    want = ['Привіт, сестричко.', 'Гаразд, добре.', 'Вона знову вагітна.', 'Я так і знала!', 'Я теж!', 'Добраніч.',
+            'Translated by: someone']
+    if not HAVE_DICT:                   # без словника описку й рід не видно — їх модель і не виправляє
+        want[2], want[3] = 'Вона знову завагірніла.', 'Я так і знав!'
+    assert [l.uk for l in ls] == want, [l.uk for l in ls]
+    assert rep['failed'] == 0 and rep['meta']['core'] == 'new' and rep['meta']['calls'] == 2
+    assert len(calls[0][0]['lines']) == 6, 'подяки не йдуть у модель'
+    fixed = {x['n']: x for x in calls[1][0]['lines']}
+    assert set(fixed) == ({2, 3, 4, 5} if HAVE_DICT else {4, 5})
+    assert 'переплутано' in fixed[4]['problem']
+    if HAVE_DICT:
+        assert 'завагірніла' in fixed[2]['problem'] and 'жінка' in fixed[3]['problem']
+        assert fixed[2]['rejected'] == ['Вона знову завагірніла.']
+    assert c.sex_ranges == [], 'сцена несексуальна — правило «кінчати» поза сценою діє'
+    assert calls[1][2] == 0.3 and rep['meta']['accepted_first'] == (2 if HAVE_DICT else 4)
+
+
+def test_pipeline_gives_up_gracefully():
+    from tr import pipeline
+    ls = prepare([(0, 2, 'Hello there.'), (3, 5, 'How are you?')])
+    junk = lambda p: {'lines': []}
+    chat, calls = _fake([junk])
+    rep = pipeline.translate(ls, ctx(), chat, 'SYS', rounds=3)
+    assert len(calls) == 4, 'сцена + 3 раунди виправлень'
+    assert [l.uk for l in ls] == ['Hello there.', 'How are you?'], 'нічого не прийшло — лишається оригінал'
+    assert rep['failed'] == 2 and [l['status'] for l in rep['lines']] == ['failed', 'failed']
+    temps = [x[2] for x in calls]
+    assert temps == [0.3, 0.3, 0.6, 0.9]
+
+
+def test_pipeline_best_candidate_and_errors():
+    from tr import pipeline
+    ls = prepare([(0, 2, 'I am so tired today.')])
+    bad = lambda p: {'lines': [_it(0, 'I am', 'Я сьогодні така втомлена, бояюсь.')]}
+    chat, calls = _fake([bad])
+    rep = pipeline.translate(ls, ctx(), chat, 'SYS', rounds=1)
+    assert ls[0].uk == 'Я сьогодні така втомлена, бояюсь.' and ls[0].status == 'failed', 'найкраща спроба, у звіт'
+    assert rep['lines'][0]['tries'] == 2
+
+    def down(system, user, sch, temp):
+        raise RuntimeError('ПК з моделлю недоступний')
+    try:
+        pipeline.translate(prepare([(0, 1, 'Hi.')]), ctx(), down, 'SYS')
+        assert False, 'помилка зв\'язку має йти вгору'
+    except RuntimeError as e:
+        assert 'недоступний' in str(e)
+
+
+def test_pipeline_marks_sexual_scenes():
+    from tr import pipeline
+    segs = [(i * 3, i * 3 + 2, "I'm coming! %d" % i) for i in range(6)] + \
+        [(100 + i * 3, 102 + i * 3, 'Thanks for finishing the cream %d.' % i) for i in range(6)]
+    ls = prepare(segs)
+
+    def s(p):
+        sex = p['lines'][0]['n'] == 0
+        return {'sexual': sex, 'lines': [_it(x['n'], x['en'][:5], ('Я кінчаю! %d' if sex else 'Дякую, що кінчив крем %d.')
+                                             % (x['n'] % 6)) for x in p['lines']]}
+    chat, calls = _fake([s])
+    c = ctx(sex_ranges=None)
+    pipeline.translate(ls, c, chat, 'SYS')
+    assert len(calls) == 2 and c.sex_ranges == [(0, 5)], c.sex_ranges
+    assert ls[0].status == 'ok' and ls[7].status == 'warn' and ls[7].issues[0].code == 'sex_context'
 
 
 if __name__ == '__main__':
