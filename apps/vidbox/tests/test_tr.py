@@ -181,6 +181,13 @@ def test_wrap_lines():
     assert '\n' in w and all(len(x.split()) > 1 for x in w.split('\n')), w
 
 
+def test_name_missing():
+    c = Ctx(chars=[{'en': 'Ayame', 'uk': 'Аяме', 'gender': 'femn'}])
+    assert 'name_missing' in codes(check_line(L('Nine-Tailed Fox Courtesan: Ayame'), 'Дев\'ятихвоста лисиця-куртизанка:', c))
+    assert 'name_missing' not in codes(check_line(L('Nine-Tailed Fox Courtesan: Ayame'), 'Дев\'ятихвоста лисиця-куртизанка: Аяме', c))
+    assert 'name_missing' not in codes(check_line(L('Hey, Ayame!'), 'Гей, Аяме!', c))
+
+
 def test_gender():
     if not HAVE_DICT:
         return
