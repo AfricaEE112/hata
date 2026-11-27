@@ -137,3 +137,24 @@ def scenes(lines):
     for ln in lines:
         out.setdefault(ln.scene, []).append(ln)
     return [out[k] for k in sorted(out)]
+
+
+def wrap(text, width=42):
+    """Довга репліка в один рядок → два рядки для екрана (≤ width, розрив біля середини: спершу після розділового знака,
+    інакше на пробілі). Уже розбиті й короткі не чіпаємо; задовга навіть у два рядки — лишається як є (у звіті too_long)."""
+    t = str(text or '').strip()
+    if '\n' in t or len(t) <= width:
+        return t
+    mid = len(t) / 2
+    best = None
+    for m in re.finditer(r' ', t):
+        i = m.start()
+        a, b = t[:i].rstrip(), t[i + 1:].lstrip()
+        if not a or not b or max(len(a), len(b)) > width + 6:
+            continue
+        punct = a[-1] in ',.;:!?…—–'
+        short = len(b.split()) == 1 or len(a.split()) == 1          # не лишати одне слово на рядку
+        score = abs(i - mid) - (8 if punct else 0) + (12 if short else 0)
+        if best is None or score < best[0]:
+            best = (score, a, b)
+    return '%s\n%s' % (best[1], best[2]) if best else t

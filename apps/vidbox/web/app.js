@@ -1859,8 +1859,8 @@ async function aiDoneDraw(post) {
       <button class="btn" data-dall="redo">Перекласти заново</button><button class="btn ghost" data-dall="delete">${I.trash}Видалити</button></div></div>
     <div class="srow"><div class="sl"><b>Завантажити архівом</b><small>Оригінальні субтитри (з яких перекладали), переклад і аналіз серії — одним .zip, по теках тайтлів. Зручно, щоб перевірити якість чи віддати на розбір.</small></div>
       <div class="sc"><button class="btn" data-zip="today">Зроблені сьогодні</button><button class="btn ghost" data-zip="all">Усі</button></div></div>
-    <div class="flist">${T.map((t, k) => `<div class="frow"><div><b>${esc(t.title)}</b><small style="color:var(--mute)">${t.n} з ${t.total} ${plural(t.total, 'серії', 'серій', 'серій')} · ${when(t)}</small></div>
-      <div style="display:flex;gap:6px"><a class="btn ghost icon" href="/api/aisubs/export?${t.sid ? 'sid=' + encodeURIComponent(t.sid) : 'ids=' + t.ids.join(',')}" download title="Завантажити оригінал і переклад архівом" aria-label="Завантажити">⤓</a><button class="btn ghost" data-dt="${k}" data-act="redo" title="Видалити й одразу перекласти заново">Заново</button>
+    <div class="flist">${T.map((t, k) => `<div class="frow"><div><b>${esc(t.title)}</b><small style="color:var(--mute)">${t.n} з ${t.total} ${plural(t.total, 'серії', 'серій', 'серій')} · ${when(t)}${t.doubt ? ` · <span style="color:var(--warn, #e9a23b)">⚠ ${t.doubt} ${plural(t.doubt, 'сумнівна', 'сумнівні', 'сумнівних')}</span>` : ''}</small><div id="aiEps${k}"></div></div>
+      <div style="display:flex;gap:6px;align-self:flex-start"><button class="btn ghost" data-eps="${k}" title="Серії, сумнівні репліки, ручна правка">Серії</button><a class="btn ghost icon" href="/api/aisubs/export?${t.sid ? 'sid=' + encodeURIComponent(t.sid) : 'ids=' + t.ids.join(',')}" download title="Завантажити оригінал і переклад архівом" aria-label="Завантажити">⤓</a><button class="btn ghost" data-dt="${k}" data-act="redo" title="Видалити й одразу перекласти заново">Заново</button>
       <button class="btn ghost icon" data-dt="${k}" data-act="delete" title="Видалити субтитри ШІ тайтлу" aria-label="Видалити">${I.trash}</button></div></div>`).join('')}</div>`;
   const go = async (b, what, n) => {
     if (!confirm(b.op === 'redo' ? `Видалити субтитри ШІ ${what} (${n} ${plural(n, 'серія', 'серії', 'серій')}) і одразу перекласти заново? Аналіз серії теж зробиться наново, а в тайтлах, що переробляються повністю, — і «Знайдено автоматично» в глосарії (твої записи лишаться).`
@@ -1874,6 +1874,12 @@ async function aiDoneDraw(post) {
     const t = T[+b.dataset.dt];
     go(Object.assign({op: b.dataset.act}, t.sid ? {sid: t.sid} : {ids: t.ids}), `«${t.title}»`, t.n);
   });
+  $$('[data-eps]', box).forEach(b => b.onclick = () => {
+    const k = +b.dataset.eps, t = T[k], el = $('#aiEps' + k);
+    if (el.innerHTML) { el.innerHTML = ''; b.textContent = 'Серії'; return; }
+    b.textContent = 'Сховати';
+    aiEpsDraw(post, el, t.sid ? {sid: t.sid} : {ids: t.ids});
+  });
   $$('[data-zip]', box).forEach(b => b.onclick = () => {
     const d = new Date(); d.setHours(0, 0, 0, 0);
     const a = document.createElement('a');
@@ -1884,6 +1890,47 @@ async function aiDoneDraw(post) {
     const v = $('#aiBefore').value, before = v ? new Date(v + 'T23:59:59').getTime() / 1000 : 0;
     const n = T.reduce((a, t) => a + (t.oldest < before ? t.n : 0), 0);
     go({op: b.dataset.dall, all: true, before}, v ? `усіх серій, зроблених до ${day(before)} включно` : 'усіх серій', n);
+  });
+}
+
+async function aiEpsDraw(post, el, which) {
+  const r = await post(Object.assign({op: 'done_eps'}, which));
+  if (!r.ok) return;
+  el.innerHTML = `<div class="flist" style="margin-top:8px">${(r.eps || []).map(e => `<div class="frow" style="flex-wrap:wrap"><div style="flex:1;min-width:200px"><small>${esc(e.title)}</small>
+      <small style="display:block;color:var(--mute)">${e.qa ? (e.doubt ? `<span style="color:var(--warn, #e9a23b)">⚠ ${e.doubt} ${plural(e.doubt, 'сумнівна', 'сумнівні', 'сумнівних')}</span>` : '✓ перевірку пройдено') : 'старе ядро — без звіту перевірки'}</small></div>
+      <div style="display:flex;gap:6px">${e.qa && e.doubt ? `<button class="btn ghost" data-qa="${esc(e.id)}">Глянути</button>` : ''}${e.prev ? `<button class="btn ghost" data-prev="${esc(e.id)}" title="Повернути переклад, що був до «Заново» (поточний стане попереднім)">Повернути попередній</button>` : ''}</div>
+      <div id="aiQa${esc(e.id)}" style="flex-basis:100%"></div></div>`).join('') || '<p class="note">Немає серій.</p>'}</div>`;
+  $$('[data-prev]', el).forEach(b => b.onclick = async () => {
+    if (!confirm('Повернути попередній переклад цієї серії? Поточний стане «попереднім» — його теж можна буде повернути.')) return;
+    const x = await post({op: 'restore', id: b.dataset.prev});
+    if (x.ok) { toast('Попередній переклад повернуто'); aiEpsDraw(post, el, which); }
+  });
+  $$('[data-qa]', el).forEach(b => b.onclick = () => {
+    const box = $('#aiQa' + b.dataset.qa);
+    if (box.innerHTML) { box.innerHTML = ''; return; }
+    aiQaDraw(post, box, b.dataset.qa, () => aiEpsDraw(post, el, which));
+  });
+}
+async function aiQaDraw(post, box, id, after) {
+  const r = await post({op: 'qa_get', id});
+  if (!r.ok) { box.innerHTML = `<p class="note">${esc(r.error || '')}</p>`; return; }
+  const L = r.lines || [];
+  box.innerHTML = `<p class="note">Правка пишеться прямо в субтитри серії; ще й запам'ятовується для навчання перекладу. «Слово правильне» додає слово у твій словник — більше не вважатиметься помилкою.</p>` +
+    L.map((l, k) => `<div class="qa-line" style="border-top:1px solid var(--line, #333);padding:8px 0">
+      <small style="color:var(--mute)">${esc(l.time || '')} · ${l.edited ? '✓ виправлено вручну' : l.status === 'failed' ? 'не пройшло перевірку' : 'попередження'}</small>
+      <div>${esc(l.en)}</div>
+      <textarea data-k="${k}" rows="2" style="width:100%;margin:4px 0">${esc(l.cur)}</textarea>
+      <small style="display:block;color:var(--red, #e66)">${esc((l.issues || []).map(i => i.msg).join('; '))}</small>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"><button class="btn" data-save="${k}">Зберегти</button>${(l.words || []).map(w => `<button class="btn ghost" data-word="${esc(w)}">«${esc(w)}» — слово правильне</button>`).join('')}</div></div>`).join('');
+  $$('[data-save]', box).forEach(b => b.onclick = async () => {
+    const l = L[+b.dataset.save], txt = $(`textarea[data-k="${b.dataset.save}"]`, box).value.trim();
+    if (!txt) return;
+    const x = await post({op: 'qa_edit', id, n: l.n, uk: txt});
+    if (x.ok) { toast('Збережено'); b.textContent = '✓ Збережено'; }
+  });
+  $$('[data-word]', box).forEach(b => b.onclick = async () => {
+    const x = await post({op: 'qa_word', id, word: b.dataset.word});
+    if (x.ok) { toast(`«${b.dataset.word}» — у словнику`); aiQaDraw(post, box, id, after); }
   });
 }
 

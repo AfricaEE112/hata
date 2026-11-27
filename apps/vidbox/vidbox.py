@@ -3091,10 +3091,28 @@ def local_chat(url):
     return chat
 
 
+def tr_user_dic():
+    return os.path.join(C.data, 'aisubs', 'uk_user.dic')
+
+
+def tr_lexicon():
+    from tr import Lexicon
+    lex = Lexicon.get(ai_dir('venv'))
+    p = tr_user_dic()
+    mt = os.path.getmtime(p) if os.path.exists(p) else 0
+    if getattr(lex, '_user_mt', None) != mt:        # «Слово правильне» з інтерфейсу — свій білий список
+        from tr.lexicon import _read_lines, norm_apos
+        for w in _read_lines(p):
+            w = norm_apos(w.lower())
+            (lex.extra_pre.append(w[:-1]) if w.endswith('*') else lex.extra.add(w))
+        lex._cache, lex._user_mt = {}, mt
+    return lex
+
+
 def tr_new_ctx():
     """Контекст перевірок нового ядра з того, що зібрав ai_context / тест: персонажі зі статтю, глосарій, заборони."""
-    from tr import Ctx, Lexicon
-    Lexicon.get(ai_dir('venv'))
+    from tr import Ctx
+    lex = tr_lexicon()
     sets = getattr(TR_CTX, 'sets', None) or []
     items = []
     for sid in getattr(TR_CTX, 'gloss_sids', None) or []:
@@ -3114,7 +3132,7 @@ def tr_new_ctx():
                 chars.append({'en': en, 'uk': re.split(r'\s*/\s*', uk)[0], 'gender': g,
                               'aliases': [it[0]] if it[0] != en else []})
     forbid = [rx for k in sets for rx in gloss_sets().get(k, {}).get('forbid') or []]
-    return Ctx(chars=chars, gloss=items, forbid=forbid, sex_ranges=None)
+    return Ctx(chars=chars, gloss=items, forbid=forbid, sex_ranges=None, lex=lex)
 
 
 def translate_new(url, lines, src, progress=None):
@@ -3142,9 +3160,12 @@ def translate_new(url, lines, src, progress=None):
 
 def write_uk(out, segs, uk):
     """uk.srt + звіт перевірки qa.json (нове ядро); старий звіт прибирається, щоб не брехав про новий переклад."""
+    rep = getattr(TR_CTX, 'qa', None)
+    if rep:                              # нове ядро: довгі репліки — у два рядки (≤ 42 символи)
+        from tr import wrap
+        uk = [wrap(x) for x in uk]
     write_srt(os.path.join(out, 'uk.srt'), segs, uk)
     qa = os.path.join(out, 'qa.json')
-    rep = getattr(TR_CTX, 'qa', None)
     if rep:
         with open(qa, 'w', encoding='utf-8') as f:
             json.dump(rep, f, ensure_ascii=False, indent=1)
@@ -3445,6 +3466,81 @@ def ai_done_files():
     return out
 
 
+def srt_blocks(path):
+    """Усі блоки SRT за номерами (і порожні теж) — щоб номер репліки збігався з n у звіті."""
+    out = []
+    with open(path, encoding='utf-8') as f:
+        for block in re.split(r'\n\s*\n', f.read().replace('\r', '')):
+            ls = block.strip('\n').split('\n')
+            i = next((k for k, l in enumerate(ls) if '-->' in l), -1)
+            if i < 0:
+                continue
+            out.append({'time': ls[i], 't': '\n'.join(ls[i + 1:]).strip()})
+    return out
+
+
+def srt_write_blocks(path, blocks):
+    with open(path + '.tmp', 'w', encoding='utf-8') as f:
+        for k, b in enumerate(blocks):
+            f.write('%d\n%s\n%s\n\n' % (k + 1, b['time'], b['t']))
+    os.replace(path + '.tmp', path)
+
+
+def ai_prev_dir(vid):
+    return os.path.join(C.data, 'aisubs', 'prev', vid)
+
+
+def ai_backup(vid):
+    """Перед «Заново» / видаленням: попередній переклад і звіт — у aisubs/prev/<id> (одна копія, найсвіжіша)."""
+    src = os.path.join(C.data, 'aisubs', vid)
+    if not os.path.exists(os.path.join(src, 'uk.srt')):
+        return False
+    dst = ai_prev_dir(vid)
+    shutil.rmtree(dst, ignore_errors=True)
+    os.makedirs(dst, exist_ok=True)
+    for f in ('uk.srt', 'qa.json', 'context.json'):
+        if os.path.exists(os.path.join(src, f)):
+            shutil.copy2(os.path.join(src, f), os.path.join(dst, f))
+    return True
+
+
+def qa_doubt(rep):
+    """Скільки реплік варто глянути: провалені + попередження, крім «невідоме ім'я» (там зазвичай усе гаразд)."""
+    if not rep:
+        return 0
+    return sum(1 for l in rep.get('lines') or [] if not l.get('edited') and (l.get('status') == 'failed' or any(
+        i.get('code') != 'unknown_name' for i in l.get('issues') or [])))
+
+
+def qa_load(vid):
+    try:
+        with open(os.path.join(C.data, 'aisubs', vid, 'qa.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def qa_save(vid, rep):
+    p = os.path.join(C.data, 'aisubs', vid, 'qa.json')
+    with open(p + '.tmp', 'w', encoding='utf-8') as f:
+        json.dump(rep, f, ensure_ascii=False, indent=1)
+    os.replace(p + '.tmp', p)
+
+
+def ai_done_eps(ids):
+    done = ai_done_files()
+    out = []
+    for vid in ids:
+        if vid not in done:
+            continue
+        r = DB.one('SELECT id, title, path FROM videos WHERE id=?', (vid,))
+        rep = qa_load(vid)
+        out.append({'id': vid, 'title': (r['title'] if r else vid), 'at': done[vid], 'qa': rep is not None,
+                    'doubt': qa_doubt(rep), 'prev': os.path.exists(os.path.join(ai_prev_dir(vid), 'uk.srt')),
+                    'path': r['path'] if r else ''})
+    return sorted(out, key=lambda e: e['path'])
+
+
 def ai_done_list():
     """Тайтли з готовими субтитрами ШІ: скільки серій з усіх, коли зроблено (найстаріше/найновіше). Не-аніме — «Інше»."""
     done = ai_done_files()
@@ -3456,12 +3552,14 @@ def ai_done_list():
         seen |= {r['id'] for r in rows}
         if mine:
             out.append({'sid': sid, 'title': anime_title(top) if top else 'Без папки', 'n': len(mine), 'total': len(rows),
-                        'oldest': min(mine), 'newest': max(mine)})
+                        'oldest': min(mine), 'newest': max(mine),
+                        'doubt': sum(qa_doubt(qa_load(r['id'])) for r in rows if r['id'] in done)})
     rest = [vid for vid in done if vid not in seen]
     if rest:
         rows = [DB.one('SELECT id, title FROM videos WHERE id=?', (vid,)) for vid in rest]
         out.append({'sid': '', 'ids': rest, 'title': 'Інше відео', 'n': len(rest), 'total': len(rest),
                     'names': [r['title'] for r in rows if r][:20],
+                    'doubt': sum(qa_doubt(qa_load(v)) for v in rest),
                     'oldest': min(done[v] for v in rest), 'newest': max(done[v] for v in rest)})
     return sorted(out, key=lambda t: -t['newest'])
 
@@ -3615,6 +3713,7 @@ def ai_post(d):
                 continue
             if vid in done:
                 n += 1
+                ai_backup(vid)           # попередній переклад можна повернути («Повернути попередній»)
             shutil.rmtree(os.path.join(C.data, 'aisubs', vid), ignore_errors=True)   # разом з аналізом серії
             SUBS_CACHE.pop(vid, None)
         with AI_LOCK:
@@ -3627,6 +3726,92 @@ def ai_post(d):
         if op == 'redo':
             AI_WAKE.set()
         return dict(ai_status(), ok=True, count=n, glossCleared=cleared)
+    elif op == 'done_eps':              # серії тайтлу з готовими субтитрами: скільки сумнівних, чи є попередній
+        ids = [x for x in d.get('ids') or [] if isinstance(x, str) and ID_RE.fullmatch(x)]
+        if d.get('sid'):
+            ser = anime_series().get(str(d['sid']))
+            ids += [r['id'] for r in (ser[1] if ser else [])]
+        return {'ok': True, 'eps': ai_done_eps(list(dict.fromkeys(ids)))}
+    elif op == 'qa_get':                # сумнівні репліки серії з поточним текстом
+        vid = str(d.get('id') or '')
+        rep = qa_load(vid) if ID_RE.fullmatch(vid) else None
+        if not rep:
+            return {'ok': False, 'error': 'Звіту перевірки для цієї серії немає (перекладено старим ядром)'}
+        segs = srt_blocks(os.path.join(C.data, 'aisubs', vid, 'uk.srt'))
+        lines_ = []
+        for l in rep.get('lines') or []:
+            if l.get('status') == 'ok' and not l.get('edited'):
+                continue
+            n = int(l.get('n', -1))
+            cur = segs[n]['t'] if 0 <= n < len(segs) else l.get('uk', '')
+            words = sorted({w for i in l.get('issues') or [] if i.get('code') in ('spelling', 'unknown_name')
+                            for w in i.get('words') or []})
+            lines_.append(dict(l, cur=cur, words=words))
+        return {'ok': True, 'lines': lines_, 'meta': rep.get('meta') or {}, 'doubt': qa_doubt(rep)}
+    elif op == 'qa_edit':               # ручна правка репліки → uk.srt; у звіті позначка «виправлено вручну»
+        vid, n, txt = str(d.get('id') or ''), d.get('n'), str(d.get('uk') or '').strip()
+        p = os.path.join(C.data, 'aisubs', vid, 'uk.srt')
+        if not ID_RE.fullmatch(vid) or not isinstance(n, int) or not txt or not os.path.exists(p):
+            return {'ok': False, 'error': 'Не вдалося зберегти'}
+        segs = srt_blocks(p)
+        if not 0 <= n < len(segs):
+            return {'ok': False, 'error': 'Немає такої репліки'}
+        old_t = segs[n]['t']
+        segs[n]['t'] = txt[:500]
+        srt_write_blocks(p, segs)
+        rep = qa_load(vid)
+        if rep:
+            for l in rep.get('lines') or []:
+                if l.get('n') == n:
+                    l.update(edited=True, uk=txt[:500], status='ok')
+            qa_save(vid, rep)
+        with open(os.path.join(C.data, 'aisubs', 'fixes.jsonl'), 'a', encoding='utf-8') as f:   # для навчання на правках
+            f.write(json.dumps({'id': vid, 'n': n, 'old': old_t, 'new': txt[:500], 'at': int(time.time())},
+                               ensure_ascii=False) + '\n')
+        SUBS_CACHE.pop(vid, None)
+        return {'ok': True, 'doubt': qa_doubt(rep)}
+    elif op == 'qa_word':               # «Слово правильне» → свій білий список словника
+        w = str(d.get('word') or '').strip().lower()
+        if not re.fullmatch(r"[а-яіїєґ'’ʼ-]{2,40}\*?", w):
+            return {'ok': False, 'error': 'Це не схоже на одне українське слово'}
+        os.makedirs(os.path.dirname(tr_user_dic()), exist_ok=True)
+        with open(tr_user_dic(), 'a', encoding='utf-8') as f:
+            f.write(w + '\n')
+        vid = str(d.get('id') or '')     # у звіті серії — прибрати проблеми, що були лише через це слово
+        rep = qa_load(vid) if ID_RE.fullmatch(vid) else None
+        if rep:
+            for l in rep.get('lines') or []:
+                l['issues'] = [i for i in l.get('issues') or [] if not (
+                    i.get('code') in ('spelling', 'unknown_name') and [x.lower() for x in i.get('words') or []] == [w])]
+                if not l['issues'] and l.get('status') != 'ok':
+                    l['status'] = 'ok'
+            qa_save(vid, rep)
+        return {'ok': True, 'doubt': qa_doubt(rep)}
+    elif op == 'restore':               # повернути попередній переклад серії (поточний стає «попереднім»)
+        vid = str(d.get('id') or '')
+        prev, cur = ai_prev_dir(vid), os.path.join(C.data, 'aisubs', vid)
+        if not ID_RE.fullmatch(vid) or not os.path.exists(os.path.join(prev, 'uk.srt')):
+            return {'ok': False, 'error': 'Попереднього перекладу немає'}
+        if AI['cur'] == vid:
+            return {'ok': False, 'error': 'Серія саме перекладається'}
+        tmp = prev + '.swap'
+        shutil.rmtree(tmp, ignore_errors=True)
+        os.makedirs(cur, exist_ok=True)
+        os.makedirs(tmp, exist_ok=True)
+        for f in ('uk.srt', 'qa.json', 'context.json'):
+            if os.path.exists(os.path.join(cur, f)):
+                shutil.move(os.path.join(cur, f), os.path.join(tmp, f))
+            if os.path.exists(os.path.join(prev, f)):
+                shutil.move(os.path.join(prev, f), os.path.join(cur, f))
+        shutil.rmtree(prev, ignore_errors=True)
+        if os.listdir(tmp):
+            os.replace(tmp, prev)
+        else:
+            shutil.rmtree(tmp, ignore_errors=True)
+        with AI_LOCK:                    # якщо серія чекала в черзі «заново» — прибрати, бо переклад повернуто
+            ai_save_queue([it for it in ai_queue() if it['id'] != vid or it['id'] == AI['cur']])
+        SUBS_CACHE.pop(vid, None)
+        return dict(ai_status(), ok=True)
     elif op == 'gloss_get':
         sid = str(d.get('sid') or '_')
         return dict(gloss_get(sid), ok=True, **gloss_sets_info(sid))
