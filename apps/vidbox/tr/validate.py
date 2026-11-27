@@ -268,8 +268,8 @@ def check_line(ln, uk, ctx):
             if k is False:
                 (maybe_name if w[:1].isupper() and (not first or en_names or title) else typo).append(w)
         if typo:
-            iss.append(Issue('spelling', 'block', 'слів %s немає в українській — це описка чи вигадане слово'
-                             % ', '.join('«%s»' % w for w in typo), tuple(typo)))
+            iss.append(Issue('spelling', 'block', '%s %s немає в українській — це описка чи вигадане слово'
+                             % ('слова' if len(typo) == 1 else 'слів', ', '.join('«%s»' % w for w in typo)), tuple(typo)))
         if maybe_name:
             iss.append(Issue('unknown_name', 'warn', 'невідомі слова з великої літери: %s (ім\'я? додай у персонажі)'
                              % ', '.join(maybe_name), tuple(maybe_name)))
@@ -284,6 +284,19 @@ def check_line(ln, uk, ctx):
         if parts and not any(re.search(r'(?i)\b%s' % re.escape(p[:4]), ln.en) for p in parts):
             iss.append(Issue('name_not_in_src', 'warn', 'в оригіналі немає імені %s — перевір, чи це той персонаж'
                              % (c.get('en') or c.get('uk')), (w,)))
+            break
+
+    # --- ім'я з оригіналу загубилось («Nine-Tailed Fox Courtesan: Ayame» → «Лисиця-куртизанка:») ---
+    for c in ctx.chars:
+        en_n = [p for p in re.findall(r'[A-Za-z]{3,}', str(c.get('en') or '')) if p[:1].isupper()]
+        uk_n = str(c.get('uk') or '').split()
+        if not en_n or not uk_n or not re.search(r'\b%s\b' % re.escape(en_n[0]), ln.en):
+            continue
+        stem = uk_n[0].lower()
+        stem = NAME_STEM.sub('', stem) if len(stem) > 4 else stem
+        if len(stem) >= 2 and not any(w.lower().startswith(stem) for w, _ in toks) and len(toks) >= 1:
+            iss.append(Issue('name_missing', 'warn', 'в оригіналі є ім\'я %s, а в перекладі його немає' % uk_n[0],
+                             (uk_n[0],)))
             break
 
     # --- рід: «я …» за мовцем, «ти …» за адресатом ---
