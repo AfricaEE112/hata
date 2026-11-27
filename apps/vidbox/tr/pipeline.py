@@ -9,7 +9,7 @@ import re
 import time
 
 from .lines import Issue, scenes
-from .validate import accept, check_all, sim, validate
+from .validate import SHIFT_MIN, accept, check_all, sim, validate
 
 PREV_CONTEXT = 8        # скільки вже перекладених попередніх реплік показувати моделі (узгодженість звертань)
 FIX_GROUP = 6           # скільки проблемних реплік в одному запиті виправлення
@@ -81,7 +81,7 @@ def _apply(got, by_n, ctx, lines, stage, allowed):
             except (TypeError, ValueError):
                 continue
             ua, ub = str(items[a].get('uk') or ''), str(items[b].get('uk') or '')
-            if na in by_n and nb in by_n and len(ua) >= 6 and sim(ua, ub) > 0.8 and \
+            if na in by_n and nb in by_n and len(ua) >= SHIFT_MIN and sim(ua, ub) > 0.8 and \
                     sim(by_n[na].en, by_n[nb].en) < 0.6:
                 dup.add(nb)
     for g in items:
@@ -116,6 +116,10 @@ def _problem(ln):
         return 'no translation was returned for this line'
     last = ln.cands[-1]
     msgs = [i['msg'] for i in last['issues'] if i['sev'] == 'block']
+    bad = sorted({w for c in ln.cands for i in c['issues'] if i['code'] in ('spelling', 'russism') for w in i['words']})
+    if bad:                     # модель вперто повторює ту саму форму — просимо обійти слово взагалі
+        msgs.append('не вживай %s у жодній формі — заміни іншим простим загальновживаним словом або перебудуй '
+                    'речення' % ', '.join('«%s»' % w for w in bad))
     return '; '.join(msgs) or 'rejected'
 
 

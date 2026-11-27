@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tr import Ctx, Lexicon, Line, accept, autofix, check_line, echo_ok, prepare, validate  # noqa: E402
 from tr.validate import check_all  # noqa: E402
+from tr import check_all as _ca  # noqa: E402,F401
 
 LEX = Lexicon.get()
 HAVE_DICT = LEX.ok
@@ -148,6 +149,25 @@ def test_gloss_fix_and_vocative():
     assert not blocks(check_line(L('Want some tacos?'), 'Тако хочеш?', tk)), 'нема імені в оригіналі — не судимо'
     ln = L('Wanna have a sip too?')
     assert accept(ln, 'Хочеш теж глотнути?', c, [ln])[0] and ln.uk == 'Хочеш теж ковтнути?'
+
+
+def test_night_feedback_27_11():
+    c = ctx()
+    # короткі однакові вигуки — не зсув; обірване слово — не описка; імена з оригіналу й титри — warn, не block
+    ls = [L("I'm about to cum...", n=0), L("I'm gonna cum!", n=1)]
+    assert accept(ls[0], 'Я зараз кінчу...', c, ls, echo="I'm about")[0]
+    assert accept(ls[1], 'Я зараз кінчу!', c, ls, echo="I'm gonna")[0]
+    assert not check_all(ls, c)
+    assert 'spelling' not in codes(check_line(L("I'm cumming! I'm cum—"), 'Я кінчаю! Я кінч—', c))
+    if HAVE_DICT:
+        iss = check_line(L("M-Matsuda-kun, you're here..."), 'М-Мацудо, ти прийшов...', c)
+        assert 'spelling' not in blocks(iss) and 'unknown_name' in codes(iss), iss
+        assert 'spelling' not in blocks(check_line(L('Shinonome'), 'Сінономе', c))
+        assert 'spelling' in blocks(check_line(L('I am a maidservant from her highness\'s home.'),
+                                               'Я служниця з дому її висоності.', c))
+    assert autofix('Н-ні, все гарааааааааааааааазд!') == 'Н-ні, все гарааазд!'
+    assert autofix('Розмазує слюну, я завагірнію') == 'Розмазує слину, я завагітнію'
+    assert prepare([(0, 1, 'Brought to you by AmateurSubs.com!')])[0].kind == 'credits'
 
 
 def test_gender():
@@ -294,28 +314,28 @@ def _it(n, src, uk, who='', to=''):
 
 def test_pipeline_fixes_everything():
     from tr import pipeline
-    segs = [(0, 2, 'Hello, sis.'), (3, 5, 'Okay, fine.'), (6, 8, "She's pregnant again."),
-            (9, 11, 'I knew it!'), (12, 14, 'Me neither!'), (15, 17, 'Good night.'),
+    segs = [(0, 2, 'Hello, sis.'), (3, 5, 'Okay, fine.'), (6, 8, "She's so thirsty again."),
+            (9, 11, 'I knew it all along!'), (12, 14, 'Me neither!'), (15, 17, 'Good night.'),
             (30, 32, 'Translated by: someone')]
     ls = prepare(segs)
     c = ctx(sex_ranges=None)
     scene = lambda p: {'sexual': False, 'lines': [
         _it(0, 'Hello, sis', 'Привіт, сестричко.', 'Taku', 'Aika'),
         _it(1, 'Okay, fine', 'Ладно, добре.', 'Aika', 'Taku'),            # русизм → autofix
-        _it(2, "She's pregnant", 'Вона знову завагірніла.', 'Taku', 'Aika'),  # вигадане слово
-        _it(3, 'I knew', 'Я так і знав!', 'Aika', 'Taku'),                # рід
-        _it(4, 'Me neither', 'Я так і знав!', 'Taku', 'Aika'),            # зсув/дубль
+        _it(2, "She's so", 'Вона знову така спрагшла.', 'Taku', 'Aika'),  # вигадане слово
+        _it(3, 'I knew', 'Я так і знав це від самого початку!', 'Aika', 'Taku'),  # рід
+        _it(4, 'Me neither', 'Я так і знав це від самого початку!', 'Taku', 'Aika'),  # дубль
         _it(5, 'Hello, sis', 'Добраніч.', 'Aika', 'Taku')]}               # echo не з цієї репліки
-    fix = lambda p: {'lines': [{2: _it(2, "She's pregnant", 'Вона знову вагітна.'),
-                                3: _it(3, 'I knew', 'Я так і знала!', 'Aika'),
+    fix = lambda p: {'lines': [{2: _it(2, "She's so", 'Вона знову така спрагла.'),
+                                3: _it(3, 'I knew', 'Я так і знала це від самого початку!', 'Aika'),
                                 4: _it(4, 'Me neither', 'Я теж!', 'Taku'),
                                 5: _it(5, 'Good night', 'Добраніч.')}[x['n']] for x in p['lines']]}
     chat, calls = _fake([scene, fix])
     rep = pipeline.translate(ls, c, chat, 'SYS', review=False)
-    want = ['Привіт, сестричко.', 'Гаразд, добре.', 'Вона знову вагітна.', 'Я так і знала!', 'Я теж!', 'Добраніч.',
+    want = ['Привіт, сестричко.', 'Гаразд, добре.', 'Вона знову така спрагла.', 'Я так і знала це від самого початку!', 'Я теж!', 'Добраніч.',
             'Translated by: someone']
     if not HAVE_DICT:                   # без словника описку й рід не видно — їх модель і не виправляє
-        want[2], want[3] = 'Вона знову завагірніла.', 'Я так і знав!'
+        want[2], want[3] = 'Вона знову така спрагшла.', 'Я так і знав це від самого початку!'
     assert [l.uk for l in ls] == want, [l.uk for l in ls]
     assert rep['failed'] == 0 and rep['meta']['core'] == 'new' and rep['meta']['calls'] == 2
     assert len(calls[0][0]['lines']) == 6, 'подяки не йдуть у модель'
@@ -323,8 +343,8 @@ def test_pipeline_fixes_everything():
     assert set(fixed) == ({2, 3, 4, 5} if HAVE_DICT else {4, 5})
     assert 'переплутано' in fixed[4]['problem']
     if HAVE_DICT:
-        assert 'завагірніла' in fixed[2]['problem'] and 'жінка' in fixed[3]['problem']
-        assert fixed[2]['rejected'] == ['Вона знову завагірніла.']
+        assert 'спрагшла' in fixed[2]['problem'] and 'жінка' in fixed[3]['problem']
+        assert fixed[2]['rejected'] == ['Вона знову така спрагшла.']
     assert c.sex_ranges == [], 'сцена несексуальна — правило «кінчати» поза сценою діє'
     assert calls[1][2] == 0.3 and rep['meta']['accepted_first'] == (2 if HAVE_DICT else 4)
 

@@ -16,6 +16,11 @@ PARTICLES = {'не', 'ні', 'вже', 'так', 'теж', 'також', 'ж', '
              'лише', 'тільки', 'все', 'усе', 'б', 'би', 'було', 'дійсно', 'зовсім', 'аж', 'ось', 'теж', 'взагалі',
              'точно', 'що', 'майже', 'досі', 'знову', 'знов', 'колись', 'одразу', 'відразу', 'нарешті', 'й', 'і', 'та'}
 INTERJ = set('аеєиіїоуюяхмгфвйнь')
+EN_COMMON = {'The', 'And', 'But', 'You', 'Your', 'This', 'That', 'What', 'When', 'Why', 'How', 'Who', 'Mom', 'Dad',
+             'Mommy', 'Daddy', 'Sis', 'Big', 'Little', 'Hey', 'Okay', 'Yes', 'Mister', 'Miss', 'Ma', 'Sir', 'Mr', 'Mrs',
+             'God', 'Gosh', 'Oh', 'Wow', 'Please', 'Sorry', 'Thank', 'Thanks', 'Good', 'Well', 'Now', 'Then', 'Not',
+             'Don', 'Can', 'Let', 'Wait', 'Stop', 'Come', 'Look', 'Huh', 'Uh', 'Um', 'Ah', 'Ugh', 'Man', 'Boss',
+             'Teacher', 'Sensei', 'Senpai', 'Master', 'Lady', 'Princess', 'Queen', 'King', 'Lord', 'Ma\'am'}
 LATIN_OK = {'ok', 'wi-fi', 'wifi', 'tv', 'sms', 'dj', 'vip', 'pc', 'cd', 'dvd', 'usb', 'id'}
 HONORIFIC = re.compile(r"(?i)-(сан|кун|чан|тян|сама|доно|семпай|сенпай)(у|а|ом|ові|і|е|ом)?$")
 SEX_STEMS = ('кінч', 'трах', 'дроч', 'сперм', 'мінет', 'кремпі', 'їба', 'єба')
@@ -183,7 +188,8 @@ def _tokens(text):
     out = []
     for m in WORD_RE.finditer(text):
         before = text[:m.start()].rstrip(' "«“(\'')
-        out.append((m.group(0), not before or before[-1] in '.!?…—–-\n'))
+        cut = text[m.end():m.end() + 1] in ('—', '–')        # обірване «Я кінч—»
+        out.append((m.group(0), not before or before[-1] in '.!?…—–-\n', cut))
     return out
 
 
@@ -196,7 +202,9 @@ def check_line(ln, uk, ctx):
     if not uk:
         return [Issue('empty', 'block', 'порожній переклад')] if ln.en.strip() else []
     lex = ctx.lex
-    toks = _tokens(uk)
+    toks3 = _tokens(uk)
+    toks = [(w, f) for w, f, _ in toks3]
+    cut = {w for w, _, c in toks3 if c}
     en_low = ln.en.lower()
 
     # --- мова: латиниця, інші абетки, російське ---
@@ -247,12 +255,18 @@ def check_line(ln, uk, ctx):
     # --- орфографія (словник) ---
     if lex.ok:
         typo, maybe_name = [], []
+        # у оригіналі є імена (Matsuda-kun, Yoshi) або це титр/назва («Shinonome», «Nine-Tailed») — невідоме слово
+        # з великої літери, найімовірніше, ім'я, а не описка
+        en_names = re.findall(r"\b[A-Z][a-z]{2,}(?=-(?:kun|san|chan|sama|senpai|sensei)\b)", ln.en) or \
+            [w for w in re.findall(r"(?<![.!?…]\s)(?<!^)\b[A-Z][a-z]{2,}", ln.en.strip()) if w not in EN_COMMON]
+        title = len(ln.en.split()) <= 4 and not re.search(r'[.!?,]', ln.en) and \
+            all(w[:1].isupper() for w in re.findall(r'[A-Za-z]+', ln.en))
         for w, first in toks:
-            if not is_cyr(w) or w in hon or w in rus:
+            if not is_cyr(w) or w in hon or w in rus or w in cut:
                 continue
             k = _word_ok(w, ctx)
             if k is False:
-                (maybe_name if w[:1].isupper() and not first else typo).append(w)
+                (maybe_name if w[:1].isupper() and (not first or en_names or title) else typo).append(w)
         if typo:
             iss.append(Issue('spelling', 'block', 'слів %s немає в українській — це описка чи вигадане слово'
                              % ', '.join('«%s»' % w for w in typo), tuple(typo)))
@@ -323,13 +337,18 @@ def check_line(ln, uk, ctx):
     return iss
 
 
-def shift_against(ln, uk, others):
+SHIFT_MIN = 20
+
+
+def shift_against(ln, uk, others, both_verified=False):
     """Кандидат схожий на переклад сусідньої репліки з іншим оригіналом — модель переплутала рядки."""
-    if len(uk) < 8:
+    if len(uk) < SHIFT_MIN:             # «Я кінчаю!» кілька разів поспіль — нормально, не зсув
         return None
     for o in others:
         if o is ln or not o.uk or abs(o.n - ln.n) > 4:
             continue
+        if both_verified and getattr(ln, 'echo_ok', False) and getattr(o, 'echo_ok', False):
+            continue                     # обидві прийняті з правильним src — модель була на своїх рядках
         if sim(uk, o.uk) > 0.8 and sim(ln.en, o.en) < 0.6:
             return Issue('shift', 'block', 'переклад повторює репліку %d («%s») — схоже, рядки переплутано'
                          % (o.n, o.uk[:40]), (str(o.n),))
@@ -350,6 +369,7 @@ def accept(ln, uk, ctx, lines, stage='', echo=None):
     ln.cands.append({'uk': uk, 'stage': stage, 'ok': ok, 'issues': [i.as_dict() for i in iss]})
     if ok:
         ln.uk, ln.issues = uk, [i for i in iss if i.sev == 'warn']
+        ln.echo_ok = echo is not None
         ln.status = 'warn' if ln.issues else 'ok'
     return ok, iss
 
@@ -359,7 +379,7 @@ def check_all(lines, ctx):
     out = {}
     for ln in lines:
         if ln.uk:
-            sh = shift_against(ln, ln.uk, lines[max(0, ln.n - 4):ln.n + 5])
+            sh = shift_against(ln, ln.uk, lines[max(0, ln.n - 4):ln.n + 5], both_verified=True)
             if sh:
                 out.setdefault(ln.n, []).append(sh)
     if ctx.lex.ok:                                  # «Папо!» і «тату» в одній серії
