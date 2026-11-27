@@ -50,8 +50,9 @@ def clean_src(t):
     return re.sub(r'[ \t]+', ' ', t.replace('\\N', '\n')).strip()
 
 
-CREDITS = re.compile(r'(?i)\b(translated by|translation by|subtitles by|subbed by|encoded by|encoding|typeset|'
-                     r'timing by|special thanks|upscaled by|raws? by|a [\w.-]+ project)\b')
+CREDITS = re.compile(r'(?i)\b(translated by|translation by|translation:|subtitles by|subbed by|encoded by|encoding|'
+                     r'typeset|timing by|special thanks|upscaled by|raws? by|a [\w.-]+ project|brought to you by|'
+                     r'proofread(ing)?\s*(by|:)|editing:|edited by|qc:|ts:)|[\w-]+subs\.(com|net|org)\b')
 
 
 def _kind(text, overlap):

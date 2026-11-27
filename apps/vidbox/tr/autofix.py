@@ -58,6 +58,7 @@ class AutoFix:
                 return re.sub('[A-Za-z]+', '', w).strip('-') or w
             return w
         t = WORD.sub(mixed, t)
+        t = re.sub(r'([а-яіїєґ])\1{4,}', r'\1\1\1', t, flags=re.I)      # «гарааааааааааа…» → «гараааз» не росте
         return re.sub(r'  +', ' ', t).strip()
 
 

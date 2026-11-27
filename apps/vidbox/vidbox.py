@@ -1823,7 +1823,7 @@ def read_vtt(data):
     def t(x):
         p = x.strip().split(':')
         return (int(p[0]) * 3600 + int(p[1]) * 60 + float(p[2])) if len(p) == 3 else int(p[0]) * 60 + float(p[1])
-    segs = []
+    segs, last = [], {}                  # last: текст → індекс останньої події з ним
     for block in re.split(r'\n\s*\n', data.decode('utf-8', 'replace').replace('\r', '')):
         lines = block.strip().split('\n')
         i = next((k for k, l in enumerate(lines) if '-->' in l), -1)
@@ -1838,9 +1838,11 @@ def read_vtt(data):
         if not txt:
             continue
         sg = {'s': t(a), 'e': t(b.strip().split()[0]), 't': txt}
-        if segs and segs[-1]['t'] == txt and sg['s'] - segs[-1]['e'] < 0.3:
-            segs[-1]['e'] = max(segs[-1]['e'], sg['e'])
+        k = last.get(txt)                # анімовані написи ASS: той самий текст покадрово, упереміш з іншими
+        if k is not None and sg['s'] - segs[k]['e'] < 0.3:
+            segs[k]['e'] = max(segs[k]['e'], sg['e'])
         else:
+            last[txt] = len(segs)
             segs.append(sg)
     return sorted(segs, key=lambda x: x['s'])
 
