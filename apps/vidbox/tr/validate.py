@@ -169,6 +169,33 @@ def _destutter(w):
     return w
 
 
+LAT2CYR = [('shch', 'щ'), ('sh', 'ш'), ('ch', 'ч'), ('ts', 'ц'), ('ya', 'я'), ('yu', 'ю'), ('yo', 'йо'), ('kh', 'х'),
+           ('zh', 'ж'), ('ph', 'ф'), ('th', 'т'), ('j', 'дж'), ('x', 'кс'), ('a', 'а'), ('b', 'б'), ('c', 'к'),
+           ('d', 'д'), ('e', 'е'), ('f', 'ф'), ('g', 'г'), ('h', 'х'), ('i', 'і'), ('k', 'к'), ('l', 'л'), ('m', 'м'),
+           ('n', 'н'), ('o', 'о'), ('p', 'п'), ('q', 'к'), ('r', 'р'), ('s', 'с'), ('t', 'т'), ('u', 'у'), ('v', 'в'),
+           ('w', 'в'), ('y', 'і'), ('z', 'з')]
+
+
+def translit(en):
+    t = en.lower()
+    for a, b in LAT2CYR:
+        t = t.replace(a, b)
+    return t
+
+
+def _term_of_src(w, en):
+    """Незнайоме слово — це англійське слово з оригіналу, записане кирилицею (unidemon → унідемон,
+    onahole → онахол): вигадана назва, а не описка."""
+    if not en:
+        return False
+    wl = norm_apos(w.lower())
+    for e in re.findall(r'[A-Za-z]{4,}', en):
+        tr = translit(e)
+        if len(tr) >= 4 and (sim(wl[:len(tr) + 2], tr) >= 0.75 or (tr[:5] in wl and len(tr) >= 5)):
+            return True
+    return False
+
+
 def _word_ok(w, ctx):
     """True — слово правильне; False — нема в словнику; None — судити не можна (нема словника)."""
     if _interj(w) or ctx.name_of(w) or norm_apos(w.lower()) in ctx._gloss_words:
@@ -261,12 +288,24 @@ def check_line(ln, uk, ctx):
             [w for w in re.findall(r"(?<![.!?…]\s)(?<!^)\b[A-Z][a-z]{2,}", ln.en.strip()) if w not in EN_COMMON]
         title = len(ln.en.split()) <= 4 and not re.search(r'[.!?,]', ln.en) and \
             all(w[:1].isupper() for w in re.findall(r'[A-Za-z]+', ln.en))
+        terms = []
         for w, first in toks:
             if not is_cyr(w) or w in hon or w in rus or w in cut:
                 continue
             k = _word_ok(w, ctx)
             if k is False:
-                (maybe_name if w[:1].isupper() and (not first or en_names or title) else typo).append(w)
+                if w[:1].isupper() and (not first or en_names or title):
+                    maybe_name.append(w)
+                    continue
+                parts = [p for p in w.split('-') if p]
+                bad_p = [p for p in parts if _word_ok(p, ctx) is False]
+                if bad_p and all(_term_of_src(p, ln.en) for p in bad_p):
+                    terms.append(w)          # «сестра-унідемон», «близнючки-унідемони»
+                    continue
+                typo.append(w)
+        if terms:
+            iss.append(Issue('term', 'warn', 'вигадані назви з оригіналу кирилицею: %s — перевір, чи так і задумано'
+                             % ', '.join('«%s»' % w for w in terms), tuple(terms)))
         if typo:
             iss.append(Issue('spelling', 'block', '%s %s немає в українській — це описка чи вигадане слово'
                              % ('слова' if len(typo) == 1 else 'слів', ', '.join('«%s»' % w for w in typo)), tuple(typo)))

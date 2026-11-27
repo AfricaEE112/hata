@@ -110,13 +110,19 @@ def _apply(got, by_n, ctx, lines, stage, allowed):
     return ok
 
 
-def _problem(ln):
-    """Чому останній кандидат відкинуто — текстом для підказки моделі."""
+def _problem(ln, lex=None):
+    """Чому останній кандидат відкинуто — текстом для підказки моделі (з підказками справжніх слів зі словника)."""
     if not ln.cands:
         return 'no translation was returned for this line'
     last = ln.cands[-1]
     msgs = [i['msg'] for i in last['issues'] if i['sev'] == 'block']
     bad = sorted({w for c in ln.cands for i in c['issues'] if i['code'] in ('spelling', 'russism') for w in i['words']})
+    if bad and lex is not None:  # схожі справжні слова — модель часто знає слово, але пише з помилкою
+        from .lexicon import suggest
+        hints = ['«%s» → %s' % (w, ' / '.join('«%s»' % x for x in sg)) for w in bad
+                 for sg in [suggest(lex, w)] if sg]
+        if hints:
+            msgs.append('можливо, малося на увазі (вибери за змістом або перефразуй): ' + '; '.join(hints))
     if bad:                     # модель вперто повторює ту саму форму — просимо обійти слово взагалі
         msgs.append('не вживай %s у жодній формі — заміни іншим простим загальновживаним словом або перебудуй '
                     'речення' % ', '.join('«%s»' % w for w in bad))
@@ -125,8 +131,10 @@ def _problem(ln):
 
 class Translator:
     def __init__(self, chat, ctx, system, hint='', ctx_text='', gloss_text=None, progress=None, rounds=3, log=None,
-                 review=True, harden=None):
+                 review=True, harden=None, state=None):
         self.chat, self.ctx, self.system = chat, ctx, system
+        self.state = state               # шлях progress.json — продовження після обриву (світло, ПК заснув)
+        self.resumed = 0
         self.review_on, self.harden = review, harden
         self.reviewed = self.hardened = 0
         self.hint, self.ctx_text = hint, ctx_text
@@ -193,7 +201,7 @@ class Translator:
                 tried = [c['uk'] for c in ln.cands if c['uk']][-2:]
                 if tried:
                     d['rejected'] = tried
-                d['problem'] = _problem(ln)
+                d['problem'] = _problem(ln, self.ctx.lex)
                 if ln.who:
                     d['who'] = ln.who
                 if ln.to:
@@ -288,17 +296,69 @@ class Translator:
     def pending(self, lines):
         return [ln for ln in lines if ln.en.strip() and ln.kind != 'credits' and not ln.uk]
 
+    # ---------- продовження після обриву ----------
+    def _key(self, lines):
+        import hashlib
+        return hashlib.sha1('\n'.join(ln.en for ln in lines).encode('utf-8')).hexdigest()[:16]
+
+    def save(self, lines, stage):
+        if not self.state:
+            return
+        import os
+        data = {'key': self._key(lines), 'stage': stage, 'at': time.time(),
+                'sex': [list(x) for x in self.ctx.sex_ranges] if self.ctx.sex_ranges is not None else None,
+                'lines': [{'n': ln.n, 'uk': ln.uk, 'who': ln.who, 'to': ln.to, 'echo': getattr(ln, 'echo_ok', False),
+                           'cands': ln.cands[-4:]} for ln in lines if ln.uk or ln.cands]}
+        try:
+            with open(self.state + '.tmp', 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(self.state + '.tmp', self.state)
+        except OSError:
+            pass
+
+    def load(self, lines):
+        """Уже прийняті переклади з минулої спроби тієї самої серії (той самий оригінал) — щоб не перекладати знову."""
+        if not self.state:
+            return 0
+        try:
+            with open(self.state, encoding='utf-8') as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return 0
+        if data.get('key') != self._key(lines):
+            return 0
+        by_n = {ln.n: ln for ln in lines}
+        k = 0
+        for d in data.get('lines') or []:
+            ln = by_n.get(d.get('n'))
+            if not ln:
+                continue
+            ln.who, ln.to, ln.cands = d.get('who', ''), d.get('to', ''), list(d.get('cands') or [])
+            if d.get('uk'):
+                ln.uk, ln.echo_ok = d['uk'], bool(d.get('echo'))
+                ln.status = 'ok'
+                k += 1
+        if data.get('sex') is not None:
+            self.ctx.sex_ranges = [tuple(x) for x in data['sex']]
+        return k
+
     def run(self, lines):
         sc = scenes(lines)
         total = len(sc) + self.rounds + 2
+        self.resumed = self.load(lines)
         for i, s in enumerate(sc):
+            work = [ln for ln in s if ln.en.strip() and ln.kind != 'credits']
+            if self.resumed and work and all(ln.uk or ln.cands for ln in work):
+                continue                 # цю сцену вже перекладено до обриву
             self.scene(s, lines)
+            self.save(lines, 'scene%d' % i)
             self.progress((i + 1) / total)
         for r in range(self.rounds):
             bad = self.pending(lines)
             if not bad:
                 break
             self.fix(bad, lines, FIX_TEMPS[min(r, len(FIX_TEMPS) - 1)], 'fix%d' % (r + 1))
+            self.save(lines, 'fix%d' % (r + 1))
             self.progress((len(sc) + r + 1) / total)
         # зсув між уже прийнятими репліками (A прийнято раніше, B — пізніше з тим самим текстом)
         cross = check_all(lines, self.ctx)
@@ -327,7 +387,13 @@ def translate(lines, ctx, chat, system, **kw):
     t = Translator(chat, ctx, system, **kw)
     t0 = time.time()
     rep = t.run(lines)
-    rep['meta'].update(core='new', calls=t.calls, secs=round(time.time() - t0, 1), reviewed=t.reviewed,
+    if t.state:
+        import os
+        try:
+            os.remove(t.state)               # готово — продовжувати нічого
+        except OSError:
+            pass
+    rep['meta'].update(core='new', calls=t.calls, secs=round(time.time() - t0, 1), reviewed=t.reviewed, resumed=t.resumed,
                        hardened=t.hardened, review=t.review_on,
                        accepted_first=sum(1 for ln in lines if ln.cands and ln.cands[0]['ok']),
                        sexual=[list(x) for x in ctx.sex_ranges or []])
