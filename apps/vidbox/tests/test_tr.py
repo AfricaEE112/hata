@@ -170,6 +170,17 @@ def test_night_feedback_27_11():
     assert prepare([(0, 1, 'Brought to you by AmateurSubs.com!')])[0].kind == 'credits'
 
 
+def test_wrap_lines():
+    from tr import wrap
+    assert wrap('Коротко.') == 'Коротко.'
+    t = 'Я хочу, щоб ти кінчив від моєї руки, прямо зараз, будь ласка!'
+    a, b = wrap(t).split('\n')
+    assert a.endswith(',') and len(a) <= 48 and len(b) <= 48, (a, b)
+    assert wrap('Вже\nрозбито на два рядки, не чіпаємо нічого тут взагалі') == 'Вже\nрозбито на два рядки, не чіпаємо нічого тут взагалі'
+    w = wrap('Це означає, що ми певний час економитимемо на купівлі гумок.')
+    assert '\n' in w and all(len(x.split()) > 1 for x in w.split('\n')), w
+
+
 def test_gender():
     if not HAVE_DICT:
         return
