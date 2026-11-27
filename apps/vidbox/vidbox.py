@@ -1719,7 +1719,7 @@ def bench_job(core):
                 'review': C.cfg.get('ai_review', True) if core == 'new' else False,
                 'dict': lex.ok}
         AI['model_used'] = ''
-        TR_CTX.times = None
+        TR_CTX.times = TR_CTX.state = TR_CTX.vid = None
         rep = trb.run(bench_translate_old, bench_gloss, progress=lambda f: BENCH.update(p=f), meta=meta,
                       should_stop=lambda: BENCH['stop'])
         if AI.get('model_used'):            # модель, яка справді перекладала (пін міг указувати на видалену)
@@ -3135,6 +3135,31 @@ def tr_new_ctx():
     return Ctx(chars=chars, gloss=items, forbid=forbid, sex_ranges=None, lex=lex)
 
 
+def tr_fix_examples(vid, k=12):
+    """Твої ручні правки в серіях того самого тайтлу (aisubs/fixes.jsonl) — приклади для моделі: як ти хочеш бачити
+    імена, звертання, терміни й тон. Найсвіжіші, без повторів."""
+    if not vid:
+        return []
+    r = DB.one('SELECT * FROM videos WHERE id=?', (vid,))
+    sid = video_sid(r) if r else ''
+    try:
+        with open(os.path.join(C.data, 'aisubs', 'fixes.jsonl'), encoding='utf-8') as f:
+            rows = [json.loads(x) for x in f if x.strip()]
+    except (OSError, ValueError):
+        return []
+    out, seen = [], set()
+    for x in reversed(rows):
+        if not x.get('en') or not x.get('new') or (sid and x.get('sid') != sid) or (not sid and x.get('id') != vid):
+            continue
+        if x['en'] in seen:
+            continue
+        seen.add(x['en'])
+        out.append(x)
+        if len(out) >= k:
+            break
+    return out
+
+
 def translate_new(url, lines, src, progress=None):
     """Нове ядро (tr/pipeline.py): номери реплік, єдина перевірка, адресні виправлення, звіт → TR_CTX.qa."""
     from tr import pipeline, prepare
@@ -3148,9 +3173,16 @@ def translate_new(url, lines, src, progress=None):
     ctx = tr_new_ctx()
     gl = lambda text: gloss_prompt(text, src)
     hard = tr_harden if src == 'en' and tr_adult() and C.cfg.get('ai_harden', True) else None
+    ctx_text = getattr(TR_CTX, 'ctx', '') or ''
+    ex = tr_fix_examples(getattr(TR_CTX, 'vid', None))
+    if ex:
+        ctx_text += ('\nThe viewer corrected earlier lines of this title by hand — follow the same choices (names, forms '
+                     'of address, terms, tone):\n' + '\n'.join('"%s" → not "%s", but "%s"' % (x['en'], x.get('old', ''),
+                                                                                          x['new']) for x in ex))
     rep = pipeline.translate(ls, ctx, local_chat(url), LOCAL_SYSTEM_ADULT if tr_adult() else LOCAL_SYSTEM_STD,
-                             hint=SPEAKER_HINT, ctx_text=getattr(TR_CTX, 'ctx', '') or '', gloss_text=gl,
-                             progress=progress, review=C.cfg.get('ai_review', True), harden=hard)
+                             hint=SPEAKER_HINT, ctx_text=ctx_text, gloss_text=gl, progress=progress,
+                             review=C.cfg.get('ai_review', True), harden=hard, state=getattr(TR_CTX, 'state', None))
+    rep['meta']['examples'] = len(ex)
     rep['meta'].update(model=AI.get('model_used') or '', src=src)
     TR_CTX.qa = rep
     TR_CTX.qa_all = [{'who': ln.who, 'to': ln.to, 'status': ln.status, 'tries': len(ln.cands),
@@ -3186,7 +3218,7 @@ def translate_uk(lines, src, progress=None):
             raise TrWait(str(e))
     for name, key in chain:
         try:
-            if name == 'local' and (C.cfg.get('tr_core') or 'old') == 'new':
+            if name == 'local' and (C.cfg.get('tr_core') or 'new') == 'new':
                 return translate_new(key, lines, src, progress), name    # своє прибирання й перевірка всередині
             fn = {'local': local_translate, 'gemini': gemini_translate, 'deepl': deepl_translate,
                   'azure': azure_translate}[name]
@@ -3322,6 +3354,8 @@ def ai_job_run(it):
             ai_context(vid, r, [x['t'] for x in segs], have[0][:-4], st)
             ai_set(vid, state='translate', p=0)
             TR_CTX.times = [(x['s'], x['e']) for x in segs]
+            TR_CTX.state = os.path.join(C.data, 'aisubs', vid, 'progress.json')
+            TR_CTX.vid = vid
             uk, via = translate_uk([x['t'] for x in segs], have[0][:-4], lambda f: ai_set(vid, p=f))
             write_uk(out, segs, uk)
             SUBS_CACHE.pop(vid, None)
@@ -3341,6 +3375,8 @@ def ai_job_run(it):
             ai_context(vid, r, [x['t'] for x in segs], 'en', st)
             ai_set(vid, state='translate', p=0)
             TR_CTX.times = [(x['s'], x['e']) for x in segs]
+            TR_CTX.state = os.path.join(C.data, 'aisubs', vid, 'progress.json')
+            TR_CTX.vid = vid
             uk, via = translate_uk([x['t'] for x in segs], 'en', lambda f: ai_set(vid, p=f))
             write_uk(out, segs, uk)
             SUBS_CACHE.pop(vid, None)
@@ -3407,6 +3443,8 @@ def ai_job_run(it):
             ai_context(vid, r, [x['t'] for x in segs], lang, st)
             ai_set(vid, state='translate', p=0)
             TR_CTX.times = [(x['s'], x['e']) for x in segs]
+            TR_CTX.state = os.path.join(C.data, 'aisubs', vid, 'progress.json')
+            TR_CTX.vid = vid
             uk, via = translate_uk([x['t'] for x in segs], lang, lambda f: ai_set(vid, p=f))
             write_uk(out, segs, uk)
             SUBS_CACHE.pop(vid, None)
@@ -3606,7 +3644,7 @@ def ai_status():
         it['title'] = r['title'] if r else '(файл зник)'
     return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True), 'harden': C.cfg.get('ai_harden', True), 'adultLocal': C.cfg.get('ai_adult_local', True), 'localPar': C.cfg.get('local_parallel') or 1,
             'localPin': C.cfg.get('local_pin') or '', 'localModels': C.cfg.get('local_models') or [],
-            'trCore': C.cfg.get('tr_core') or 'old', 'review': C.cfg.get('ai_review', True),
+            'trCore': C.cfg.get('tr_core') or 'new', 'review': C.cfg.get('ai_review', True),
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
@@ -3677,7 +3715,7 @@ def ai_post(d):
             if not tr_chain():
                 return {'ok': False, 'error': 'Спершу налаштуй перекладача (локальну модель на ПК)'}
             BENCH.update(run=True, p=0.0, stop=False, err='')
-            threading.Thread(target=bench_job, args=(C.cfg.get('tr_core') or 'old',), daemon=True).start()
+            threading.Thread(target=bench_job, args=(C.cfg.get('tr_core') or 'new',), daemon=True).start()
     elif op == 'bench_stop':
         BENCH['stop'] = True
     elif op == 'bench_list':
@@ -3765,9 +3803,11 @@ def ai_post(d):
                 if l.get('n') == n:
                     l.update(edited=True, uk=txt[:500], status='ok')
             qa_save(vid, rep)
-        with open(os.path.join(C.data, 'aisubs', 'fixes.jsonl'), 'a', encoding='utf-8') as f:   # для навчання на правках
-            f.write(json.dumps({'id': vid, 'n': n, 'old': old_t, 'new': txt[:500], 'at': int(time.time())},
-                               ensure_ascii=False) + '\n')
+        en_t = next((l.get('en', '') for l in (rep or {}).get('lines') or [] if l.get('n') == n), '')
+        vr = DB.one('SELECT * FROM videos WHERE id=?', (vid,))
+        with open(os.path.join(C.data, 'aisubs', 'fixes.jsonl'), 'a', encoding='utf-8') as f:   # навчання на правках
+            f.write(json.dumps({'id': vid, 'sid': video_sid(vr) if vr else '', 'n': n, 'en': en_t, 'old': old_t,
+                                'new': txt[:500], 'at': int(time.time())}, ensure_ascii=False) + '\n')
         SUBS_CACHE.pop(vid, None)
         return {'ok': True, 'doubt': qa_doubt(rep)}
     elif op == 'qa_word':               # «Слово правильне» → свій білий список словника
@@ -4856,7 +4896,7 @@ DEFAULTS = {
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
     'local_url': '', 'local_key': '', 'local_model': '',
-    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1, 'local_pin': '', 'local_models': [], 'tr_core': 'old', 'ai_review': True,
+    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1, 'local_pin': '', 'local_models': [], 'tr_core': 'new', 'ai_review': True,
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},

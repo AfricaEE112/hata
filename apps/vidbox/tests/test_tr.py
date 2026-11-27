@@ -464,6 +464,43 @@ def test_pipeline_reviewer_and_harden():
     assert hardened == [['Ц-це називається серцебиття!', 'Ти кінчиш замовлення?', 'Привіт.']], 'жорсткіше — до рецензента'
 
 
+def test_pipeline_resume_after_break():
+    import tempfile, os as _os
+    from tr import pipeline
+    segs = [(i * 3, i * 3 + 2, 'Scene one line %d.' % i) for i in range(6)] + \
+        [(100 + i * 3, 102 + i * 3, 'Scene two line %d.' % i) for i in range(6)]
+    words = ['дім', 'ліс', 'сад', 'кіт', 'пес', 'дуб', 'мак', 'сир', 'суп', 'чай', 'хліб', 'мед']
+    ans = lambda p: {'sexual': False, 'lines': [_it(x['n'], x['en'][:9], 'Це %s, рядок номер %d.' % (words[x['n']], x['n']))
+                                                for x in p['lines']]}
+    state = _os.path.join(tempfile.mkdtemp(), 'progress.json')
+    calls = []
+
+    def flaky(system, user, sch, temp):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError('ПК заснув')
+        import json as _j
+        return _j.dumps(ans(_j.loads(user.rsplit('\n', 1)[1])), ensure_ascii=False)
+    ls = prepare(segs)
+    try:
+        pipeline.translate(ls, ctx(sex_ranges=None), flaky, 'SYS', review=False, state=state)
+        assert False
+    except RuntimeError:
+        pass
+    assert _os.path.exists(state), 'після першої сцени стан збережено'
+    ls2 = prepare(segs)
+    chat, calls2 = _fake([ans])
+    rep = pipeline.translate(ls2, ctx(sex_ranges=None), chat, 'SYS', review=False, state=state)
+    assert len(calls2) == 1, 'перша сцена — з минулої спроби, перекладається лише друга'
+    assert rep['meta']['resumed'] == 6 and rep['failed'] == 0 and not _os.path.exists(state)
+    assert ls2[0].uk == 'Це дім, рядок номер 0.' and ls2[11].uk == 'Це мед, рядок номер 11.'
+    ls3 = prepare([(0, 1, 'Other episode.')])      # інша серія — чужий стан не підхоплюється
+    open(state, 'w').write('{"key": "x", "lines": [{"n": 0, "uk": "Чуже"}]}')
+    chat, _ = _fake([lambda p: {'sexual': False, 'lines': [_it(0, 'Other episode', 'Інша серія.')]}])
+    pipeline.translate(ls3, ctx(), chat, 'SYS', review=False, state=state)
+    assert ls3[0].uk == 'Інша серія.'
+
+
 if __name__ == '__main__':
     fails = 0
     for name, fn in sorted(globals().items()):
