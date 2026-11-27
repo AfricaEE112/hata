@@ -110,13 +110,19 @@ def _apply(got, by_n, ctx, lines, stage, allowed):
     return ok
 
 
-def _problem(ln):
-    """Чому останній кандидат відкинуто — текстом для підказки моделі."""
+def _problem(ln, lex=None):
+    """Чому останній кандидат відкинуто — текстом для підказки моделі (з підказками справжніх слів зі словника)."""
     if not ln.cands:
         return 'no translation was returned for this line'
     last = ln.cands[-1]
     msgs = [i['msg'] for i in last['issues'] if i['sev'] == 'block']
     bad = sorted({w for c in ln.cands for i in c['issues'] if i['code'] in ('spelling', 'russism') for w in i['words']})
+    if bad and lex is not None:  # схожі справжні слова — модель часто знає слово, але пише з помилкою
+        from .lexicon import suggest
+        hints = ['«%s» → %s' % (w, ' / '.join('«%s»' % x for x in sg)) for w in bad
+                 for sg in [suggest(lex, w)] if sg]
+        if hints:
+            msgs.append('можливо, малося на увазі (вибери за змістом або перефразуй): ' + '; '.join(hints))
     if bad:                     # модель вперто повторює ту саму форму — просимо обійти слово взагалі
         msgs.append('не вживай %s у жодній формі — заміни іншим простим загальновживаним словом або перебудуй '
                     'речення' % ', '.join('«%s»' % w for w in bad))
@@ -193,7 +199,7 @@ class Translator:
                 tried = [c['uk'] for c in ln.cands if c['uk']][-2:]
                 if tried:
                     d['rejected'] = tried
-                d['problem'] = _problem(ln)
+                d['problem'] = _problem(ln, self.ctx.lex)
                 if ln.who:
                     d['who'] = ln.who
                 if ln.to:

@@ -132,3 +132,37 @@ class Lexicon:
             elif t.number == 'sing':
                 gs.add('?')
         return gs.pop() if len(gs) == 1 and '?' not in gs else None
+
+
+UK_ABC = "абвгґдеєжзиіїйклмнопрстуфхцчшщьюя'"
+
+
+def _edits1(w):
+    splits = [(w[:i], w[i:]) for i in range(len(w) + 1)]
+    return {a + b[1:] for a, b in splits if b} | \
+        {a + b[1] + b[0] + b[2:] for a, b in splits if len(b) > 1} | \
+        {a + c + b[1:] for a, b in splits if b for c in UK_ABC} | \
+        {a + c + b for a, b in splits for c in UK_ABC}
+
+
+def suggest(lex, word, limit=3):
+    """Справжні слова, що відрізняються від `word` на одну правку (вставка, пропуск, заміна, перестановка літер);
+    для коротких — на дві. Для підказки моделі: «висоності» → «високості», «завагірніла» → «завагітніла»."""
+    if not lex.ok:
+        return []
+    w = norm_apos(word.lower())
+    if len(w) < 4:
+        return []
+    known = lambda x: x != w and lex.morph.word_is_known(x)
+    e1 = _edits1(w)
+    out = sorted({x for x in e1 if known(x)}, key=lambda x: (abs(len(x) - len(w)), x))
+    if not out and len(w) <= 8:
+        out = sorted({y for x in e1 for y in _edits1(x) if known(y)}, key=lambda x: (abs(len(x) - len(w)), x))
+    res = []
+    for x in out:
+        x = x[:1].upper() + x[1:] if word[:1].isupper() else x
+        if x not in res:
+            res.append(x)
+        if len(res) >= limit:
+            break
+    return res

@@ -3509,7 +3509,7 @@ def qa_doubt(rep):
     if not rep:
         return 0
     return sum(1 for l in rep.get('lines') or [] if not l.get('edited') and (l.get('status') == 'failed' or any(
-        i.get('code') != 'unknown_name' for i in l.get('issues') or [])))
+        i.get('code') not in ('unknown_name', 'term') for i in l.get('issues') or [])))
 
 
 def qa_load(vid):
@@ -3744,7 +3744,7 @@ def ai_post(d):
                 continue
             n = int(l.get('n', -1))
             cur = segs[n]['t'] if 0 <= n < len(segs) else l.get('uk', '')
-            words = sorted({w for i in l.get('issues') or [] if i.get('code') in ('spelling', 'unknown_name')
+            words = sorted({w for i in l.get('issues') or [] if i.get('code') in ('spelling', 'unknown_name', 'term')
                             for w in i.get('words') or []})
             lines_.append(dict(l, cur=cur, words=words))
         return {'ok': True, 'lines': lines_, 'meta': rep.get('meta') or {}, 'doubt': qa_doubt(rep)}

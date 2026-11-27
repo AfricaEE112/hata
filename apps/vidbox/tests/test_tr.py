@@ -188,6 +188,26 @@ def test_name_missing():
     assert 'name_missing' not in codes(check_line(L('Hey, Ayame!'), 'Гей, Аяме!', c))
 
 
+def test_suggest_and_terms():
+    if not HAVE_DICT:
+        return
+    from tr.lexicon import suggest
+    assert 'високості' in suggest(LEX, 'висоності') and suggest(LEX, 'завагірніла') == ['завагітніла']
+    assert suggest(LEX, 'Застужуся')[0] == 'Застуджуся'
+    c = ctx()
+    iss = check_line(L("I'm Mari, one of the unidemon twins."), 'Я Марі, одна з близнючок-унідемонів.', c)
+    assert 'spelling' not in blocks(iss) and 'term' in codes(iss), iss
+    iss = check_line(L('Please use me like an onahole!'), 'Використовуй мене як онахол!', c)
+    assert 'spelling' not in blocks(iss)
+    assert 'spelling' in blocks(check_line(L('a nice spot'), 'Моя чудовишня точка', ctx()))
+    assert autofix('з дому її висоності') == 'з дому її високості'
+    from tr import pipeline
+    ln = L('x')
+    ln.cands = [{'uk': 'Я з дому її висошості.', 'issues': [{'code': 'spelling', 'sev': 'block',
+                 'msg': 'слова «висошості» немає', 'words': ['висошості']}]}]
+    assert '«високості»' in pipeline._problem(ln, LEX)
+
+
 def test_gender():
     if not HAVE_DICT:
         return
