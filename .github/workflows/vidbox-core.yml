@@ -35,5 +35,5 @@ jobs:
         run: python -m py_compile apps/vidbox/vidbox.py
       - name: ffmpeg для тесту HereSphere
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-      - name: "HereSphere (VR) — вхід, каталог, картка, субтитри, прогрес"
+      - name: HereSphere (VR): вхід, каталог, картка, субтитри, прогрес
         run: python apps/vidbox/tests/test_heresphere.py
