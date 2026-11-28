@@ -1478,6 +1478,8 @@ LANG2 = {'eng': 'en', 'ukr': 'uk', 'rus': 'ru', 'jpn': 'ja', 'ger': 'de', 'deu':
          'spa': 'es', 'ita': 'it', 'pol': 'pl', 'chi': 'zh', 'zho': 'zh', 'kor': 'ko', 'por': 'pt', 'cze': 'cs',
          'ces': 'cs', 'bel': 'be', 'tur': 'tr', 'ara': 'ar', 'hin': 'hi', 'tha': 'th', 'vie': 'vi', 'ind': 'id'}
 SUBS_CACHE = {}       # id відео → (mtime, список)
+LANG_NAMES = {'uk': 'Українська', 'en': 'Англійська', 'ru': 'Російська', 'ja': 'Японська', 'de': 'Німецька', 'fr': 'Французька',
+              'es': 'Іспанська', 'it': 'Італійська', 'pl': 'Польська', 'zh': 'Китайська', 'ko': 'Корейська'}
 
 
 def sub_lang(x):
@@ -1534,6 +1536,25 @@ def subs_list(r):
         t['n'] = n
     SUBS_CACHE[r['id']] = (mt, out)
     return out
+
+
+def vtt_to_srt(data):
+    """WebVTT (з нашого кешу) → SRT: нумерація, кома в часі, без заголовка й стилів."""
+    text = data.decode('utf-8', 'replace').replace('\r', '')
+    out, n = [], 0
+    for block in re.split(r'\n{2,}', text):
+        lines = [l for l in block.split('\n') if l.strip()]
+        i = next((k for k, l in enumerate(lines) if '-->' in l), None)
+        if i is None:
+            continue
+        a, _, b = lines[i].partition('-->')
+        fix = lambda x: (x.strip().split(' ')[0] if x.strip().count(':') == 2 else '00:' + x.strip().split(' ')[0]).replace('.', ',')
+        body = [re.sub(r'</?c[^>]*>|</?v[^>]*>', '', l) for l in lines[i + 1:]]
+        if not body:
+            continue
+        n += 1
+        out.append('%d\n%s --> %s\n%s' % (n, fix(a), fix(b), '\n'.join(body)))
+    return ('\n\n'.join(out) + '\n').encode('utf-8')
 
 
 def subs_vtt(r, n):
@@ -5037,6 +5058,169 @@ def on_ping(d):
     return {'ok': True}
 
 
+# ───────────────────────────── HereSphere (VR-плеєр на Quest) ─────────────────────────────
+# HereSphere бере каталог із сервера за своїм протоколом (JSON, заголовок HereSphere-JSON-Version: 1):
+#   POST /heresphere            → розділи бібліотеки, кожен — список посилань на відео;
+#   POST /heresphere/<id>       → картка відео: назва, опис, обкладинка, тривалість (мс), джерела, субтитри, теги;
+#   POST /heresphere/event/<id> → події плеєра (0 відкрив, 1 грає, 2 пауза, 3 закрив; time — позиція) → наш прогрес.
+# Вхід: HereSphere сам питає ім'я й пароль і шле їх у тілі кожного запиту (ім'я — будь-яке, пароль — від VidBox).
+# Посилання на відео, обкладинки й субтитри несуть ?k=<токен>, бо плеєр HereSphere тіла з паролем не шле.
+# Відео — плоске (projection perspective, mono): HereSphere показує його на великому екрані в залі.
+
+HS_PLAY = {}          # id → [час початку (utc), позиція на початку, накопичено секунд, сесія]
+
+
+def hs_base(h):
+    proto = 'https' if (h.headers.get('X-Forwarded-Proto') or '').lower() == 'https' else 'http'
+    return '%s://%s' % (proto, h.headers.get('Host') or 'localhost:%d' % C.cfg.get('port', 8800))
+
+
+def hs_k():
+    t = auth_token()
+    return ('?k=' + t) if t else ''
+
+
+def hs_url(base, path, extra=''):
+    k = hs_k()
+    return base + path + (k + ('&' + extra if extra else '') if k else ('?' + extra if extra else ''))
+
+
+def hs_anime_map():
+    """id відео → (sid, назва тайтлу, епізод-словник) для всіх серій аніме."""
+    out = {}
+    st = stats()['data']
+    for sid, (top, rows) in anime_series().items():
+        info, eps = anime_info(sid, top, rows, st)
+        for e in eps:
+            out[e['id']] = (sid, info['title'], e)
+    return out
+
+
+def hs_index(base):
+    am = hs_anime_map()
+    rows = DB.q('SELECT id, title, folder, added, position, position_at, duration, root FROM videos WHERE missing=0')
+    url = lambda vid: hs_url(base, '/heresphere/' + vid)
+    lib = []
+    cont = [r for r in rows if (r['position'] or 0) > 5 and not (r['duration'] and r['position'] >= r['duration'] * 0.9)]
+    cont.sort(key=lambda r: -(r['position_at'] or 0))
+    # наступна серія аніме, якщо попередню додивились
+    st = stats()['data']
+    nxt = []
+    for sid, (top, rws) in anime_series().items():
+        info, _ = anime_info(sid, top, rws, st)
+        c = info.get('cont')
+        if c and not (c.get('pos') or 0) > 5:
+            nxt.append((info.get('lastAt') or 0, c['id']))
+    ids = [r['id'] for r in cont] + [i for _, i in sorted(nxt, reverse=True)]
+    ids = list(dict.fromkeys(ids))[:60]
+    if ids:
+        lib.append({'name': 'Продовжити перегляд', 'list': [url(i) for i in ids]})
+    new = sorted(rows, key=lambda r: -(r['added'] or 0))[:80]
+    if new:
+        lib.append({'name': 'Нове', 'list': [url(r['id']) for r in new]})
+    titles = {}
+    for vid, (sid, title, e) in am.items():
+        titles.setdefault((title, sid), []).append((e['ep'] or 0, vid))
+    for (title, sid), eps in sorted(titles.items(), key=lambda x: nat_key(x[0][0])):
+        lib.append({'name': 'Аніме · ' + title, 'list': [url(v) for _, v in sorted(eps)]})
+    folders = {}
+    for r in rows:
+        if r['id'] not in am:
+            folders.setdefault(r['folder'] or 'Відео', []).append(r)
+    for f, rs in sorted(folders.items(), key=lambda x: nat_key(x[0])):
+        rs.sort(key=lambda r: nat_key(r['title'] or ''))
+        lib.append({'name': f, 'list': [url(r['id']) for r in rs]})
+    return {'access': 1, 'library': lib}
+
+
+def hs_video(base, r):
+    am = hs_anime_map().get(r['id'])
+    desc, tags, thumb = '', [], None
+    if am:
+        sid, title_s, e = am
+        title = e['title']
+        meta = anime_meta_public(sid) or {}
+        desc = re.sub(r'<[^>]+>', '', meta.get('desc') or '')[:1500]
+        tags.append({'name': 'Аніме:' + title_s})
+        tags += [{'name': 'Жанр:' + g} for g in (meta.get('genres') or [])[:6]]
+        if e.get('ep'):
+            tags.append({'name': 'Серія:%d' % e['ep']})
+    else:
+        title = r['title']
+        tags.append({'name': 'Папка:' + (r['folder'] or '')})
+    if r['thumb']:
+        thumb = hs_url(base, '/thumb/' + r['id'])
+    elif am:
+        thumb = hs_url(base, '/anime/cover/' + am[0])
+    h = r['height'] or 0
+    media = [{'name': 'Оригінал%s' % (' %dp' % h if h else ''), 'sources': [
+        {'resolution': h or 1080, 'height': h or 0, 'width': r['width'] or 0, 'size': r['size'] or 0,
+         'url': hs_url(base, '/stream/' + r['id'], 'raw=1')}]}]
+    pp = prepared_path(r['id'])
+    if os.path.exists(pp):
+        media.insert(0, {'name': 'Підготовлена копія (MP4)', 'sources': [
+            {'resolution': h or 1080, 'height': h or 0, 'width': r['width'] or 0, 'size': os.path.getsize(pp), 'url': hs_url(base, '/stream/' + r['id'])}]})
+    elif needs_prepare(r) and C.ffmpeg:
+        # AV1 і рідкісні кодеки Quest 2 сам не тягне — перекодування на льоту (перемотка в межах завантаженого)
+        media.append({'name': 'Перекодоване на льоту', 'sources': [
+            {'resolution': hh, 'height': hh, 'url': hs_url(base, '/live/' + r['id'], 'h=%d' % hh)} for hh in (1080, 720) if hh in LIVE_KBPS and (not h or hh <= max(h, 720))]})
+    subs = []
+    for t in subs_list(r):
+        name = ('%s%s' % (LANG_NAMES.get(t['lang'], t['lang'] or 'субтитри'), ' (ШІ)' if t.get('ai') else (' · ' + t['label'] if t.get('label') else ''))).strip()
+        subs.append({'name': name, 'language': t['lang'] or 'und', 'url': hs_url(base, '/subs/%s/%d.srt' % (r['id'], t['n']))})
+    return {'access': 1, 'title': title, 'description': desc, 'thumbnailImage': thumb or '',
+            'dateAdded': time.strftime('%Y-%m-%d', time.localtime(r['added'] or time.time())),
+            'duration': round((r['duration'] or 0) * 1000), 'isFavorite': (r['vote'] or 0) > 0,
+            'projection': 'perspective', 'stereo': 'mono', 'tags': tags, 'media': media, 'subtitles': subs,
+            'eventServer': hs_url(base, '/heresphere/event/' + r['id']),
+            'writeFavorite': True, 'writeRating': False, 'writeTags': False, 'writeHSP': False}
+
+
+def hs_event(vid, d):
+    """Подія HereSphere → прогрес і сесія перегляду, як /api/ping із сайту чи апки."""
+    r = DB.one('SELECT duration FROM videos WHERE id=?', (vid,))
+    if not r:
+        return
+    dur = r['duration'] or 0
+    try:
+        t = float(d.get('time') or 0)
+    except (TypeError, ValueError):
+        t = 0.0
+    t = t / 1000.0                       # у протоколі HereSphere час — у мілісекундах (як і duration)
+    if dur:
+        t = min(t, dur)
+    ev = d.get('event')
+    if not HS_PLAY.get('_said'):         # раз за запуск — для перевірки наживо, що одиниці правильні
+        HS_PLAY['_said'] = True
+        print('HereSphere: перша подія %s, позиція %.1f с з %.0f (сире time=%s)' % (ev, t, dur, d.get('time')), flush=True)
+    now = time.time()
+    p = HS_PLAY.get(vid)
+    if ev == 1:                           # грає
+        if not p:
+            p = HS_PLAY[vid] = [now, t, 0.0, 'hs-%s-%d' % (vid[:8], int(now))]
+        else:
+            p[0] = now
+        on_ping({'id': vid, 'sid': p[3], 'pos': t, 'dur': dur, 'watched': p[2], 'start': p[1]})
+    elif ev in (2, 3):                    # пауза / закрив
+        if p:
+            if p[0]:
+                p[2] += max(0.0, now - p[0])
+                p[0] = 0
+            on_ping({'id': vid, 'sid': p[3], 'pos': t, 'dur': dur, 'watched': p[2], 'start': p[1],
+                     'ended': bool(dur and t >= dur * 0.95)})
+            if ev == 3:
+                HS_PLAY.pop(vid, None)
+        elif t > 0:
+            on_ping({'id': vid, 'sid': 'hs-%s-%d' % (vid[:8], int(now)), 'pos': t, 'dur': dur, 'watched': 0, 'start': t})
+
+
+HS_PAGE = """<!doctype html><meta charset="utf-8"><title>VidBox для HereSphere</title>
+<body style="font:18px system-ui;background:#111;color:#eee;padding:40px;max-width:720px">
+<h2>VidBox ↔ HereSphere</h2><p>Цю адресу треба відкрити в самому HereSphere (вбудований браузер), не у звичайному.
+HereSphere покаже бібліотеку VidBox: «Продовжити перегляд», «Нове», аніме за тайтлами й теки.
+Якщо попросить вхід — ім'я будь-яке, пароль — від VidBox.</p></body>"""
+
+
 def video_stats(vid):
     s = stats()['data'].get(vid, {})
     return {'score': s.get('score', 30), 'views': s.get('views', 0), 'avg': s.get('avg'),
@@ -5588,7 +5772,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
             tok = c['vb'].value if 'vb' in c else ''
         except http.cookies.CookieError:
             tok = ''
+        if not tok:              # HereSphere й інші плеєри: токен у посиланні (?k=)
+            tok = (urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('k') or [''])[0]
         return hmac.compare_digest(tok, auth_token())
+
+    def heresphere(self, method, path):
+        """Протокол HereSphere (див. hs_index): вхід паролем із тіла запиту або ?k=, далі каталог, картки, події."""
+        extra = {'HereSphere-JSON-Version': '1'}
+        if method == 'GET' and path in ('/heresphere', '/heresphere/') and 'json' not in (self.headers.get('Accept') or ''):
+            return self.send_bytes(HS_PAGE.encode(), 'text/html; charset=utf-8', extra=extra)
+        d = self.json_body() if method == 'POST' else {}
+        ok = self.authed()
+        if not ok and d.get('password'):
+            ok = hmac.compare_digest(pw_hash(str(d['password'])), C.cfg.get('password_hash') or '')
+            if not ok:
+                return self.send_json({'access': -1, 'library': [{'name': 'Неправильний пароль VidBox', 'list': []}]}, extra=extra)
+        if not ok:
+            return self.send_json({'access': 0, 'library': [{'name': 'Потрібен вхід: ім\'я будь-яке, пароль — від VidBox', 'list': []}]}, extra=extra)
+        base = hs_base(self)
+        if path in ('/heresphere', '/heresphere/'):
+            return self.send_json(hs_index(base), extra=extra)
+        m = re.fullmatch(r'/heresphere/event/(\w+)', path)
+        if m and ID_RE.fullmatch(m.group(1)):
+            hs_event(m.group(1), d)
+            return self.send_json({'ok': True}, extra=extra)
+        m = re.fullmatch(r'/heresphere/(\w+)', path)
+        r = self.video_row(m.group(1)) if m else None
+        if not r:
+            return self.send_json({'error': 'not found'}, 404, extra)
+        if d.get('isFavorite') is not None:
+            DB.x('UPDATE videos SET vote=? WHERE id=?', (1 if d['isFavorite'] else 0, r['id']))
+            DB.bump()
+            r = self.video_row(r['id'])
+        return self.send_json(hs_video(base, r), extra=extra)
 
     def send_live(self, r, qs, head):
         """Потік fragmented MP4 з перекодуванням на льоту (?h=1080|720|480&t=секунди).
@@ -5732,6 +5948,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.redirect('/', {'Set-Cookie': cookie})
                 html = LOGIN_HTML.replace('{err}', '<p class="err">Неправильний пароль</p>')
                 return self.send_bytes(html.encode(), 'text/html; charset=utf-8', 401)
+            if path == '/heresphere' or path.startswith('/heresphere/'):
+                return self.heresphere(method, path)
             if not self.authed():
                 if path.startswith(('/api/', '/stream/', '/thumb/', '/live/', '/dlfile/', '/manga/', '/anime/', '/subs/')):
                     return self.send_json({'error': 'auth'}, 401)
@@ -5771,6 +5989,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.send_json({'subs': [dict({k: t[k] for k in ('n', 'lang', 'label', 'def', 'forced')}, ai=bool(t.get('ai')), ext=t['src'][0] == 'f') for t in subs_list(r)],
                                            'ai': next(({'state': it['state'], 'p': it.get('p', 0), 'err': it.get('err', '')} for it in ai_queue() if it['id'] == r['id']), None),
                                            'aiReady': ai_ready()})
+                m = re.fullmatch(r'/subs/(\w+)/(\d{1,3})\.srt', path)
+                if m:                    # SRT для HereSphere й інших плеєрів
+                    r = self.video_row(m.group(1))
+                    data = r and subs_vtt(r, int(m.group(2)))
+                    return self.send_bytes(vtt_to_srt(data or b''), 'application/x-subrip; charset=utf-8', cache='no-store')
                 m = re.fullmatch(r'/subs/(\w+)/(\d{1,3})\.vtt', path)
                 if m:
                     r = self.video_row(m.group(1))
