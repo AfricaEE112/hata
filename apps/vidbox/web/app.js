@@ -1721,7 +1721,7 @@ async function drawAiSet(st) {
   if (!box) return;
   st = st || await api('/api/aisubs').catch(() => null);
   if (!st || !st.queue || !$('#aiBody')) return;
-  const busy = st.install === 'run' || (st.bench && st.bench.run) || st.queue.some(x => !['done', 'error'].includes(x.state));
+  const busy = st.install === 'run' || st.refixCur || (st.bench && st.bench.run) || st.queue.some(x => !['done', 'error'].includes(x.state));
   box.innerHTML = `<p class="note" style="margin-top:0">VidBox сам слухає відео (Whisper — прямо на цьому комп’ютері) і робить субтитри, а українською їх перекладає вибраний перекладач (локальна модель на ПК, Gemini, DeepL або Azure). Серія на 24 хв — орієнтовно 15–20 хв з англійських субтитрів і 30–50 хв, якщо треба розпізнавати звук; усе у фоні з низьким пріоритетом. Запустити — у плеєрі (кнопка CC → «Українські (ШІ)») або на сторінці аніме для всіх серій.</p>` +
     (!st.linux ? `<p class="warn">Поки працює лише на Linux (на Хаті).</p>`
     : !st.ready ? (st.install === 'run' ? `<p class="note">⏳ ${esc(st.log || 'Встановлюю…')} Це кілька хвилин.</p>`
@@ -1750,6 +1750,8 @@ async function drawAiSet(st) {
         <div class="sc"><div class="seg" id="aiCore"><button data-core="new" class="${st.trCore !== 'old' ? 'on' : ''}">нове</button><button data-core="old" class="${st.trCore === 'old' ? 'on' : ''}">старе (запасне)</button></div></div></div>
       ${st.trCore !== 'old' ? `<div class="srow"><div class="sl"><b>Рецензент змісту</b><small>Лише в новому ядрі. Після перекладу модель ще раз читає пари «оригінал → переклад» і виправляє помилки сенсу, яких не бачать правила: CPR — «штучне дихання», а не «серцебиття»; «finish the order» — не «кінчити»; не той мовець чи ім'я. Кожне виправлення проходить ту саму перевірку. ≈ +10–20 % часу.</small></div>
         <div class="sc"><div class="seg" id="aiRev"><button data-rv="1" class="${st.review !== false ? 'on' : ''}">так</button><button data-rv="0" class="${st.review === false ? 'on' : ''}">ні</button></div></div></div>` : ''}
+      ${st.trCore !== 'old' ? `<div class="srow"><div class="sl"><b>Довиправляти сумнівне</b><small>Коли черга порожня, VidBox сам бере готові серії з «⚠ сумнівними»: перевіряє їх наново поточними правилами (хибні позначки зникають), а репліки, що не проходять, перекладає ще раз незалежно — з нуля, без минулої невдалої спроби. Твої ручні правки не чіпає; попередня версія зберігається («Повернути попередній»). ≈ 1–2 хв на серію.${st.refixCur ? `<br><span style="color:var(--acc)">Зараз довиправляю: ${esc(st.refixCur)}</span>` : ''}</small></div>
+        <div class="sc"><div class="seg" id="aiRefix"><button data-rf="1" class="${st.refix !== false ? 'on' : ''}">авто</button><button data-rf="0" class="${st.refix === false ? 'on' : ''}">ні</button></div></div></div>` : ''}
       <div class="srow"><div class="sl"><b>Перевірити модель</b><small>Сталий тест якості: ${st.bench && st.bench.last ? st.bench.last.total : 210} реплік із 19 сцен, де раніше траплялися помилки (зсув рядків, вигадані слова, рід, «Дайкі» замість Daisuke, CPR, «finish the order»…). Оцінка — частка реплік без помилок; її видно в історії, тож можна порівнювати моделі, налаштування й нові версії перекладу. ≈ 15–25 хв на ПК; черга на цей час чекає.</small></div>
         <div class="sc">${st.bench && st.bench.run ? '<button class="btn ghost" id="aiBenchStop">Зупинити</button>' : '<button class="btn" id="aiBenchRun">Запустити</button>'}<button class="btn ghost" id="aiBenchHist">Історія</button></div></div>
       <div id="aiBench">${aiBenchLine(st.bench)}</div>
@@ -1777,6 +1779,7 @@ async function drawAiSet(st) {
   });
   $$('#aiCore [data-core]').forEach(b => b.onclick = async () => { drawAiSet(await post({op: 'save', trCore: b.dataset.core})); toast(b.dataset.core === 'new' ? 'Нове ядро: наступні серії й тест — ним' : 'Старе ядро'); });
   $$('#aiRev [data-rv]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', review: b.dataset.rv === '1'})));
+  $$('#aiRefix [data-rf]').forEach(b => b.onclick = async () => drawAiSet(await post({op: 'save', refix: b.dataset.rf === '1'})));
   if ($('#aiBenchRun')) $('#aiBenchRun').onclick = async () => {
     if (!confirm('Запустити тест якості? ≈ 15–25 хв, ПК з моделлю має бути ввімкнений. Черга перекладу на цей час чекає.')) return;
     drawAiSet(await post({op: 'bench'}));
@@ -1860,7 +1863,7 @@ async function aiDoneDraw(post) {
     <div class="srow"><div class="sl"><b>Завантажити архівом</b><small>Оригінальні субтитри (з яких перекладали), переклад і аналіз серії — одним .zip, по теках тайтлів. Зручно, щоб перевірити якість чи віддати на розбір.</small></div>
       <div class="sc"><button class="btn" data-zip="today">Зроблені сьогодні</button><button class="btn ghost" data-zip="all">Усі</button></div></div>
     <div class="flist">${T.map((t, k) => `<div class="frow" style="flex-wrap:wrap"><div><b>${esc(t.title)}</b><small style="color:var(--mute)">${t.n} з ${t.total} ${plural(t.total, 'серії', 'серій', 'серій')} · ${when(t)}${t.doubt ? ` · <span style="color:var(--warn, #e9a23b)">⚠ ${t.doubt} ${plural(t.doubt, 'сумнівна', 'сумнівні', 'сумнівних')}</span>` : ''}</small></div>
-      <div style="display:flex;gap:6px;align-self:flex-start"><button class="btn ghost" data-eps="${k}" title="Серії, сумнівні репліки, ручна правка">Серії</button><a class="btn ghost icon" href="/api/aisubs/export?${t.sid ? 'sid=' + encodeURIComponent(t.sid) : 'ids=' + t.ids.join(',')}" download title="Завантажити оригінал і переклад архівом" aria-label="Завантажити">${I.download}</a><button class="btn ghost" data-dt="${k}" data-act="redo" title="Видалити й одразу перекласти заново">Заново</button>
+      <div style="display:flex;gap:6px;align-self:flex-start">${t.doubt ? `<button class="btn ghost" data-rfx="${k}" title="Перекласти сумнівні репліки ще раз, незалежно">Довиправити</button>` : ''}<button class="btn ghost" data-eps="${k}" title="Серії, сумнівні репліки, ручна правка">Серії</button><a class="btn ghost icon" href="/api/aisubs/export?${t.sid ? 'sid=' + encodeURIComponent(t.sid) : 'ids=' + t.ids.join(',')}" download title="Завантажити оригінал і переклад архівом" aria-label="Завантажити">${I.download}</a><button class="btn ghost" data-dt="${k}" data-act="redo" title="Видалити й одразу перекласти заново">Заново</button>
       <button class="btn ghost icon" data-dt="${k}" data-act="delete" title="Видалити субтитри ШІ тайтлу" aria-label="Видалити">${I.trash}</button></div>
       <div id="aiEps${k}" style="flex-basis:100%"></div></div>`).join('')}</div>`;
   const go = async (b, what, n) => {
@@ -1874,6 +1877,11 @@ async function aiDoneDraw(post) {
   $$('[data-dt]', box).forEach(b => b.onclick = () => {
     const t = T[+b.dataset.dt];
     go(Object.assign({op: b.dataset.act}, t.sid ? {sid: t.sid} : {ids: t.ids}), `«${t.title}»`, t.n);
+  });
+  $$('[data-rfx]', box).forEach(b => b.onclick = async () => {
+    const t = T[+b.dataset.rfx];
+    const x = await post(Object.assign({op: 'refix'}, t.sid ? {sid: t.sid} : {ids: t.ids}));
+    if (x.ok) { toast(x.n ? `Довиправлю ${x.n} ${plural(x.n, 'серію', 'серії', 'серій')}, коли черга звільниться` : 'Немає серій із сумнівними'); b.disabled = true; }
   });
   $$('[data-eps]', box).forEach(b => b.onclick = () => {
     const k = +b.dataset.eps, t = T[k], el = $('#aiEps' + k);
