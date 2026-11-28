@@ -188,7 +188,7 @@ class Translator:
         _apply(got, by_n, self.ctx, lines, 'scene', set(by_n))
 
     # ---------- 2. адресні виправлення ----------
-    def fix(self, bad, lines, temp, stage):
+    def fix(self, bad, lines, temp, stage, fresh=False):
         by_n = {ln.n: ln for ln in bad}
         for i in range(0, len(bad), FIX_GROUP):
             grp = bad[i:i + FIX_GROUP]
@@ -199,16 +199,26 @@ class Translator:
             items = []
             for ln in grp:
                 d = _item(ln)
-                tried = [c['uk'] for c in ln.cands if c['uk']][-2:]
-                if tried:
-                    d['rejected'] = tried
-                d['problem'] = _problem(ln, self.ctx.lex)
+                if not fresh:            # незалежна спроба — без минулих невдач, щоб модель не «прилипала» до них
+                    tried = [c['uk'] for c in ln.cands if c['uk']][-2:]
+                    if tried:
+                        d['rejected'] = tried
+                    d['problem'] = _problem(ln, self.ctx.lex)
                 if ln.who:
                     d['who'] = ln.who
                 if ln.to:
                     d['to'] = ln.to
                 items.append(d)
             text = '\n'.join(ln.en for ln in grp)
+            if fresh:
+                user = ('Translate each item of "lines" into correct, natural spoken Ukrainian, from scratch. Use only '
+                        'real, common Ukrainian words (no invented words, no Russian, no English left over); keep names '
+                        'and the tone of the scene. Return JSON {"lines": [{"n", "src", "who", "to", "uk"}, …]} — one '
+                        'item per input item, the same n. %s\n"around" are neighbouring lines for context only.\n%s\n%s'
+                        % (RULES, self._head(text), json.dumps({'around': ctx_lines, 'lines': items}, ensure_ascii=False)))
+                got = self.ask(user, schema(len(grp)), temp)
+                _apply(got, by_n, self.ctx, lines, stage, ns)
+                continue
             user = ('These subtitle lines failed automatic checks. Translate each item again into correct, natural '
                     'Ukrainian, fixing exactly the "problem" (it is written in Ukrainian); "rejected" are earlier '
                     'attempts that must not be repeated. Use only real Ukrainian words (no invented words, no Russian, '
@@ -381,6 +391,32 @@ class Translator:
             self.review(lines)
         self.progress(1.0)
         return validate(lines, self.ctx)
+
+
+def refix(lines, ctx, chat, system, skip=(), **kw):
+    """Довиправлення готової серії: `lines` з уже записаним `uk`. Перевіряє все поточними правилами; що не проходить —
+    перекладає незалежно з нуля, потім ще раз з підказкою причини. Що так і не вийшло — лишається як було.
+    Повертає (звіт, скільки виправлено)."""
+    t = Translator(chat, ctx, system, review=False, **kw)
+    validate(lines, ctx)
+    bad = [ln for ln in lines if ln.status == 'failed' and ln.en.strip() and ln.kind not in KEEP and ln.n not in skip]
+    old = {ln.n: ln.uk for ln in bad}
+    for ln in bad:
+        ln.uk = ''
+    if bad:
+        t.fix(bad, lines, 0.5, 'refix', fresh=True)
+        more = t.pending(lines)
+        if more:
+            t.fix(more, lines, 0.8, 'refix2')
+    fixed = 0
+    for ln in bad:
+        if ln.uk:
+            fixed += 1
+        else:
+            ln.uk = old[ln.n]                # не вийшло — лишається попередній текст
+    rep = validate(lines, ctx)
+    rep['meta'].update(core='new', calls=t.calls)
+    return rep, fixed
 
 
 def translate(lines, ctx, chat, system, **kw):

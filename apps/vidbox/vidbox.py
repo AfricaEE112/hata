@@ -3485,13 +3485,128 @@ def ai_loop():
         while ai_ready() and not BENCH['run']:     # під час тесту якості черга чекає — модель одна
             now = time.time()
             it = next((x for x in ai_queue() if x['state'] == 'queued' and (x.get('wait') or 0) <= now), None)
-            if not it:
-                break
+            if not it:                   # черга порожня — довиправити сумнівне в готових серіях (по одній)
+                rid = ai_refix_next()
+                if not rid:
+                    break
+                AI['refix_cur'] = rid
+                try:
+                    if ai_refix_one(rid) is None:
+                        AI.setdefault('refix_skip', set()).add(rid)
+                except TrError as e:     # ПК недоступний — відкласти на 10 хв
+                    print('Довиправлення відкладено:', e, flush=True)
+                    AI['refix_pause'] = time.time() + 600
+                except Exception:
+                    traceback.print_exc()
+                    AI.setdefault('refix_skip', set()).add(rid)
+                finally:
+                    AI['refix_cur'] = None
+                continue
             AI['cur'] = it['id']
             ai_job(it)
             AI['cur'] = None
             with AI_LOCK:
                 ai_save_queue([x for x in ai_queue() if not x.get('cancel')])
+
+
+REFIX_VER = 1     # зміниш правила перевірки суттєво — збільш, і готові серії перевіряться ще раз
+
+
+def ai_source_segs(vid, r):
+    """Оригінал, з якого перекладали серію: розпізнаний текст у aisubs/<id> або англійські субтитри з відео."""
+    out = os.path.join(C.data, 'aisubs', vid)
+    have = [f for f in (os.listdir(out) if os.path.isdir(out) else []) if f.endswith('.srt') and f != 'uk.srt']
+    if have:
+        return read_srt(os.path.join(out, have[0])), have[0][:-4]
+    n = ai_text_source(r)
+    if n is None:
+        return None, None
+    return read_vtt(subs_vtt(r, n) or b''), 'en'
+
+
+def ai_refix_one(vid):
+    """Довиправлення готової серії новим ядром: перевірити поточними правилами, сумнівне — перекласти незалежно."""
+    from tr import pipeline, prepare, wrap
+    rep_old = qa_load(vid) or {}
+    r = DB.one('SELECT * FROM videos WHERE id=?', (vid,))
+    uk_p = os.path.join(C.data, 'aisubs', vid, 'uk.srt')
+    mark = lambda why: (rep_old.setdefault('meta', {}).update(refix_ver=REFIX_VER, refix=why), qa_save(vid, rep_old))
+    if not r or not os.path.exists(r['path']) or not os.path.exists(uk_p):
+        return None                      # диск відпав — спробуємо пізніше
+    segs, src = ai_source_segs(vid, r)
+    blocks = srt_blocks(uk_p)
+    if not segs or len(segs) != len(blocks):
+        return mark('оригінал не збігається з перекладом — перекладіть заново')
+    TR_CTX.gloss_sids = [x for x in ('_', video_sid(r)) if x]
+    TR_CTX.sets = gloss_title_sets(video_sid(r))[0]
+    TR_CTX.ctx, TR_CTX.auto_items, TR_CTX.qa = '', [], None
+    TR_CTX.times = [(x['s'], x['e']) for x in segs]
+    TR_CTX.vid, TR_CTX.state = vid, None
+    ai_context(vid, r, [x['t'] for x in segs], src, lambda **kw: None)     # аналіз — з кешу context.json
+    ls = prepare([(x['s'], x['e'], x['t']) for x in segs])
+    prev = {l.get('n'): l for l in rep_old.get('lines') or []}
+    for ln, b in zip(ls, blocks):
+        ln.uk = b['t'].replace('\n', ' ').strip()
+        p_ = prev.get(ln.n) or {}
+        ln.who, ln.to = p_.get('who', ''), p_.get('to', '')
+    keep = {n for n, l in prev.items() if l.get('edited')}                  # твої правки не чіпаємо
+    url = next((k for n, k in tr_chain() if n == 'local'), None)
+    if not url:
+        return None
+    ctx_text = TR_CTX.ctx or ''
+    ex = tr_fix_examples(vid)
+    if ex:
+        ctx_text += '\nThe viewer corrected earlier lines of this title by hand — follow the same choices:\n' + \
+            '\n'.join('"%s" → "%s"' % (x['en'], x['new']) for x in ex)
+    before = qa_doubt(rep_old)
+    rep, fixed = pipeline.refix(ls, tr_new_ctx(), local_chat(url),
+                                LOCAL_SYSTEM_ADULT if tr_adult() else LOCAL_SYSTEM_STD, skip=keep, hint=SPEAKER_HINT,
+                                ctx_text=ctx_text, gloss_text=lambda text: gloss_prompt(text, src))
+    for l in rep['lines']:               # позначки ручних правок — зберегти
+        if l['n'] in keep:
+            l.update(edited=True, status='ok', issues=[])
+    changed = [ln for ln, b in zip(ls, blocks) if ln.uk != b['t'].replace('\n', ' ').strip()]
+    if changed:
+        ai_backup(vid)
+        for ln in changed:
+            blocks[ln.n]['t'] = wrap(ln.uk)
+        srt_write_blocks(uk_p, blocks)
+        SUBS_CACHE.pop(vid, None)
+    rep['meta'].update({k: v for k, v in (rep_old.get('meta') or {}).items() if k not in ('dict_ok', 'dict_why')})
+    rep['meta'].update(refix_ver=REFIX_VER, refix='довиправлено %d з %d' % (fixed, before), refix_at=int(time.time()))
+    qa_save(vid, rep)
+    print('Довиправлення %s: було %d сумнівних, виправлено %d, лишилось %d' % (vid, before, fixed, qa_doubt(rep)),
+          flush=True)
+    return rep
+
+
+def ai_refix_label():
+    vid = AI.get('refix_cur')
+    if not vid:
+        return ''
+    r = DB.one('SELECT title FROM videos WHERE id=?', (vid,))
+    return r['title'] if r else vid
+
+
+def ai_refix_next():
+    """Наступна серія для довиправлення: спершу попрошені кнопкою, потім — з сумнівними й старою версією перевірки."""
+    if time.time() < AI.get('refix_pause', 0):
+        return None
+    req = AI.setdefault('refix_req', [])
+    while req:
+        vid = req.pop(0)
+        if os.path.exists(os.path.join(C.data, 'aisubs', vid, 'qa.json')):
+            return vid
+    if not C.cfg.get('ai_refix', True) or (C.cfg.get('tr_core') or 'new') != 'new':
+        return None
+    skip = AI.setdefault('refix_skip', set())
+    for vid in sorted(ai_done_files()):
+        if vid in skip:
+            continue
+        rep = qa_load(vid)
+        if rep and (rep.get('meta') or {}).get('refix_ver') != REFIX_VER and qa_doubt(rep) > 0:
+            return vid
+    return None
 
 
 def ai_done_files():
@@ -3645,6 +3760,7 @@ def ai_status():
     return {'ready': ai_ready(), 'install': AI['install'], 'log': AI['log'], 'model': C.cfg.get('ai_model') or AI_MODELS[0], 'speed': C.cfg.get('ai_speed') or 'normal', 'source': C.cfg.get('ai_source') or 'subs', 'context': C.cfg.get('ai_context', True), 'harden': C.cfg.get('ai_harden', True), 'adultLocal': C.cfg.get('ai_adult_local', True), 'localPar': C.cfg.get('local_parallel') or 1,
             'localPin': C.cfg.get('local_pin') or '', 'localModels': C.cfg.get('local_models') or [],
             'trCore': C.cfg.get('tr_core') or 'new', 'review': C.cfg.get('ai_review', True),
+            'refix': C.cfg.get('ai_refix', True), 'refixCur': ai_refix_label(),
             'deepl': bool((C.cfg.get('deepl_key') or '').strip()), 'gemini': bool((C.cfg.get('gemini_key') or '').strip()),
             'azure': bool((C.cfg.get('azure_key') or '').strip()), 'azureRegion': C.cfg.get('azure_region') or '',
             'geminiModel': C.cfg.get('gemini_model') or '', 'local': bool((C.cfg.get('local_url') or '').strip()),
@@ -3770,6 +3886,18 @@ def ai_post(d):
             ser = anime_series().get(str(d['sid']))
             ids += [r['id'] for r in (ser[1] if ser else [])]
         return {'ok': True, 'eps': ai_done_eps(list(dict.fromkeys(ids)))}
+    elif op == 'refix':                 # «Довиправити»: серії тайтлу з сумнівними — у чергу довиправлення
+        ids = [x for x in d.get('ids') or [] if isinstance(x, str) and ID_RE.fullmatch(x)]
+        if d.get('sid'):
+            ser = anime_series().get(str(d['sid']))
+            ids += [r['id'] for r in (ser[1] if ser else [])]
+        ids = [v for v in dict.fromkeys(ids) if qa_doubt(qa_load(v)) > 0]
+        req = AI.setdefault('refix_req', [])
+        req.extend(v for v in ids if v not in req)
+        AI.setdefault('refix_skip', set()).difference_update(ids)
+        AI['refix_pause'] = 0
+        AI_WAKE.set()
+        return dict(ai_status(), ok=True, n=len(ids))
     elif op == 'qa_get':                # сумнівні репліки серії з поточним текстом
         vid = str(d.get('id') or '')
         rep = qa_load(vid) if ID_RE.fullmatch(vid) else None
@@ -3953,6 +4081,8 @@ def ai_post(d):
                 C.cfg['tr_core'] = d['trCore']
             if isinstance(d.get('review'), bool):
                 C.cfg['ai_review'] = d['review']
+            if isinstance(d.get('refix'), bool):
+                C.cfg['ai_refix'] = d['refix']
             if d.get('source') in ('subs', 'audio'):
                 C.cfg['ai_source'] = d['source']
         save_config()
@@ -4896,7 +5026,7 @@ DEFAULTS = {
     # субтитри ШІ: ключі перекладачів і вибір (без них у DEFAULTS load_config їх відкидав — ключі зникали після перезапуску)
     'deepl_key': '', 'gemini_key': '', 'gemini_model': '', 'azure_key': '', 'azure_region': '', 'tr_main': 'gemini',
     'local_url': '', 'local_key': '', 'local_model': '',
-    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1, 'local_pin': '', 'local_models': [], 'tr_core': 'new', 'ai_review': True,
+    'ai_model': 'large-v3-turbo', 'ai_speed': 'normal', 'ai_source': 'subs', 'ai_context': True, 'ai_harden': True, 'ai_adult_local': True, 'local_parallel': 1, 'local_pin': '', 'local_models': [], 'tr_core': 'new', 'ai_review': True, 'ai_refix': True,
     'cache_gb': 30, 'frames_cache_gb': 3, 'sprites': True,
     'autoplay_next': True, 'next_delay': 8, 'resume': True,
     'ui': {'sort': 'score', 'dir': 'desc', 'group': 'all'},

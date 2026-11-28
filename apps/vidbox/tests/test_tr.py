@@ -522,6 +522,34 @@ def test_pipeline_resume_after_break():
     assert ls3[0].uk == 'Інша серія.'
 
 
+def test_refix_ready_episode():
+    from tr import pipeline
+    ls = prepare([(0, 2, 'She is so thirsty.'), (3, 5, 'Hello there.'), (6, 8, 'I am tired.'), (9, 11, 'Bye now.')])
+    for l, u in zip(ls, ['Вона така спрагшла.', 'Привіт.', 'Я так втомлений, бояюсь.', 'Бувай.']):
+        l.uk = u
+    seen = []
+
+    def fresh(p):
+        seen.append(p)
+        return {'lines': [_it(x['n'], x['en'][:7], {0: 'Вона так хоче пити.', 2: 'Я втомився, спрагшла.'}[x['n']])
+                          for x in p['lines']]}
+    chat, calls = _fake([fresh, lambda p: {'lines': []}])
+    rep, fixed = pipeline.refix(ls, ctx(), chat, 'SYS', skip={2} if not HAVE_DICT else set())
+    if not HAVE_DICT:
+        assert fixed == 0 and not calls, 'без словника нема провалів — модель не кличемо'
+        return
+    assert 'rejected' not in seen[0]['lines'][0] and 'problem' not in seen[0]['lines'][0], 'незалежно, без минулих спроб'
+    assert ls[0].uk == 'Вона так хоче пити.' and fixed == 1
+    assert ls[2].uk == 'Я так втомлений, бояюсь.', 'не вийшло — лишається як було'
+    assert ls[1].uk == 'Привіт.' and len(calls) == 2
+    # ручна правка (skip) не чіпається
+    ls2 = prepare([(0, 2, 'She is so thirsty.')])
+    ls2[0].uk = 'Вона така спрагшла.'
+    chat, calls = _fake([fresh])
+    rep, fixed = pipeline.refix(ls2, ctx(), chat, 'SYS', skip={0})
+    assert not calls and ls2[0].uk == 'Вона така спрагшла.'
+
+
 if __name__ == '__main__':
     fails = 0
     for name, fn in sorted(globals().items()):
