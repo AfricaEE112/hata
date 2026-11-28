@@ -1,0 +1,10 @@
+manga progress: {'cid': '454e47341dc73173', 'label': 'Глава 1', 'page': 3, 'pages': 4}
+З субтитрами           views=2  pos=6.1     prep=True ready=False
+old clip               views=1  pos=0.0     prep=True ready=False
+Кліп 1                 views=1  pos=0.0     prep=False ready=False
+Фрактал                views=2  pos=0.0     prep=True ready=False
+Концерт                views=1  pos=0.0     prep=True ready=False
+Захід сонця            views=3  pos=12.0    prep=False ready=False
+Серія 01               views=1  pos=420.0   prep=False ready=False
+Серія 02               views=0  pos=0.0     prep=False ready=False
+Фільм на вечір         views=1  pos=1300.0  prep=False ready=False
