@@ -1,0 +1,16 @@
+Nov 28 12:26:23 ip-10-0-142-194 systemd[1]: Started gazda.service - Hata: gazda — системні дії для панелі (root, білий список).
+Nov 28 12:26:24 ip-10-0-142-194 python3[4826]: gazda сторож: правило udev для USB-дисків записано
+Nov 28 12:26:24 ip-10-0-142-194 python3[4826]: gazda слухає /run/hata/gazda.sock
+Nov 28 12:26:24 ip-10-0-142-194 systemd[1]: Started hata-screen.service - Hata: статус і QR-код на екрані ноутбука (tty1).
+Nov 28 12:26:24 ip-10-0-142-194 systemd[1]: Started hata.service - Hata: панель домашнього сервера.
+Nov 28 12:26:24 ip-10-0-142-194 systemd[1]: hata-screen.service: Deactivated successfully.
+Nov 28 12:26:24 ip-10-0-142-194 python3[4902]: Hata: панель на порту 80
+Nov 28 12:26:27 ip-10-0-142-194 systemd[1]: hata-screen.service: Scheduled restart job, restart counter is at 1.
+Nov 28 12:26:27 ip-10-0-142-194 systemd[1]: Started hata-screen.service - Hata: статус і QR-код на екрані ноутбука (tty1).
+Nov 28 12:26:27 ip-10-0-142-194 python3[4944]: hata-screen: старт, stdout=/dev/tty1
+Nov 28 12:27:13 ip-10-0-142-194 systemd[1]: Started vidbox.service - Hata: VidBox — домашній відеосервер.
+Nov 28 12:27:13 ip-10-0-142-194 systemd[1]: Stopping vidbox.service - Hata: VidBox — домашній відеосервер...
+Nov 28 12:27:13 ip-10-0-142-194 systemd[1]: vidbox.service: Deactivated successfully.
+Nov 28 12:27:13 ip-10-0-142-194 systemd[1]: Stopped vidbox.service - Hata: VidBox — домашній відеосервер.
+Nov 28 12:27:13 ip-10-0-142-194 systemd[1]: Started vidbox.service - Hata: VidBox — домашній відеосервер.
+Nov 28 12:27:18 ip-10-0-142-194 python3[4902]: Копії: готово — 2026-11-28 12-27, 15 файлів
