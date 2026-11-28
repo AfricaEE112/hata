@@ -29,7 +29,7 @@ class Line:
     start: float
     end: float
     en: str
-    kind: str = 'dialog'    # 'dialog' | 'sign' (напис, табличка) | 'song' | 'credits' (подяки — не перекладаємо)
+    kind: str = 'dialog'    # 'dialog' | 'sign' | 'song' | 'credits' (подяки) | 'jp' (японська, ромадзі) — останні два не перекладаємо
     scene: int = 0
     cont: bool = False      # речення продовжується в наступній репліці
     who: str = ''           # мовець (ім'я персонажа з аналізу або від моделі)
@@ -55,9 +55,27 @@ CREDITS = re.compile(r'(?i)\b(translated by|translation by|translation:|subtitle
                      r'proofread(ing)?\s*(by|:)|editing:|edited by|qc:|ts:)|[\w-]+subs\.(com|net|org)\b')
 
 
+JP_SCRIPT = re.compile(r'[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]')
+ROMAJI_WORD = re.compile(r"^(?:(?:[kgsztdnhbpmyrwfjv]|sh|ch|ts|ky|gy|ny|hy|my|ry|by|py)?[aiueo]|n|-)+$", re.I)
+ENGLISH_HINT = re.compile(r"(?i)\b(the|you|and|is|are|my|your|this|that|will|with|of|to|in|it|me|be|so|on)\b")
+
+
+def is_japanese(text):
+    """Рядок японською (кана/кандзі) або ромадзі (karaoke пісні: «iki o tometa kono sekai») — не перекладаємо."""
+    if JP_SCRIPT.search(text):
+        return True
+    words = re.findall(r"[A-Za-z'-]+", text)
+    if len(words) < 2 or ENGLISH_HINT.search(text):
+        return False
+    good = sum(1 for w in words if ROMAJI_WORD.match(w.replace("'", '')))
+    return good / len(words) >= 0.85
+
+
 def _kind(text, overlap):
     if CREDITS.search(text):
         return 'credits'
+    if is_japanese(text):
+        return 'jp'
     if '♪' in text or '♫' in text:
         return 'song'
     letters = [c for c in text if c.isalpha()]

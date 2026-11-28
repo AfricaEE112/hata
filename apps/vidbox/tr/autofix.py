@@ -58,6 +58,10 @@ class AutoFix:
                 return re.sub('[A-Za-z]+', '', w).strip('-') or w
             return w
         t = WORD.sub(mixed, t)
+        t = t.replace('ьё', 'ьо').replace('ЬЁ', 'ЬО')               # «Хьёдо» → «Хьодо»: ё не українська
+        t = re.sub(r'([бвгґджзклмнпрстфхцчшщ])ё', r'\1ьо', t)
+        t = re.sub(r'([БВГҐДЖЗКЛМНПРСТФХЦЧШЩ])ё', r'\1ьо', t)
+        t = t.replace('ё', 'йо').replace('Ё', 'Йо').replace('ььо', 'ьо')
         t = re.sub(r'([а-яіїєґ])\1{4,}', r'\1\1\1', t, flags=re.I)      # «гарааааааааааа…» → «гараааз» не росте
         return re.sub(r'  +', ' ', t).strip()
 
