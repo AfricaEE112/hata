@@ -3639,6 +3639,33 @@ def srt_write_blocks(path, blocks):
     os.replace(path + '.tmp', path)
 
 
+def vtt_shift(data, off):
+    """WebVTT зі зсувом на -off секунд: репліки, що вже скінчились до початку потоку, прибираються."""
+    def ts(x):
+        p = x.strip().replace(',', '.').split(':')
+        return sum(float(v) * 60 ** k for k, v in enumerate(reversed(p)))
+
+    def fmt(t):
+        t = max(0.0, t)
+        return '%02d:%02d:%06.3f' % (t // 3600, t // 60 % 60, t % 60)
+    out = ['WEBVTT', '']
+    for block in re.split(r'\n\s*\n', data.decode('utf-8', 'replace').replace('\r', '')):
+        ls = block.strip('\n').split('\n')
+        i = next((k for k, l in enumerate(ls) if '-->' in l), -1)
+        if i < 0:
+            continue
+        a, rest = ls[i].split('-->', 1)
+        b, *tail = rest.strip().split(' ', 1)
+        try:
+            st, en = ts(a) - off, ts(b) - off
+        except ValueError:
+            continue
+        if en <= 0:
+            continue
+        out += ['%s --> %s%s' % (fmt(st), fmt(en), (' ' + tail[0]) if tail else '')] + ls[i + 1:] + ['']
+    return '\n'.join(out).encode('utf-8')
+
+
 def ai_prev_dir(vid):
     return os.path.join(C.data, 'aisubs', 'prev', vid)
 
@@ -5750,6 +5777,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if not r:
                         return self.send_json({'error': 'not found'}, 404)
                     data = subs_vtt(r, int(m.group(2)))
+                    try:                 # потік на льоту (1080/720/480) починається з місця перемотки — зсуваємо час
+                        off = float((qs.get('offset') or ['0'])[0])
+                    except ValueError:
+                        off = 0.0
+                    if data and off > 0:
+                        data = vtt_shift(data, off)
                     # не вдалося перетворити — порожній WebVTT, щоб плеєр в апці не падав через субтитри
                     return self.send_bytes(data or b'WEBVTT\n\n', 'text/vtt; charset=utf-8',
                                            cache='no-store')   # субтитри ШІ можна переробити під тим самим номером
