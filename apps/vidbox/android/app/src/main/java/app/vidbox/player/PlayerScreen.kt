@@ -219,11 +219,12 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
 
     fun load(url: String, startMs: Long) {
         lastUrl = url
-        // live починається не з нуля файлу — там окремі субтитри розійшлися б у часі; з файлу на телефоні — без ПК
-        val ext = if (source == "raw" || source == "copy") extSubs.orEmpty() else emptyList()
+        // live (1080/720/480) починається з місця перемотки — сервер зсуває субтитри на offset; з файлу на телефоні — без ПК
+        val ext = if (source == "raw" || source == "copy" || source == "live") extSubs.orEmpty() else emptyList()
+        val shift = if (source == "live" && offset > 0) "?offset=" + String.format(java.util.Locale.US, "%.3f", offset / 1000.0) else ""
         val item = MediaItem.Builder().setUri(url).setMediaId(v.id)
             .setSubtitleConfigurations(ext.map { s ->
-                MediaItem.SubtitleConfiguration.Builder(Uri.parse(vm.api.url("/subs/${v.id}/${s.n}.vtt")))
+                MediaItem.SubtitleConfiguration.Builder(Uri.parse(vm.api.url("/subs/${v.id}/${s.n}.vtt") + shift))
                     .setMimeType(MimeTypes.TEXT_VTT).setId("ext${s.n}")
                     .setLanguage(s.lang.ifEmpty { null }).setLabel(if (s.ai) "ШІ" else s.label.ifEmpty { null }).build()
             })
@@ -246,13 +247,6 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
         load(vm.api.streamUrl(v, raw = false), atMs)
     }
 
-    LaunchedEffect(v.id) {
-        val got = runCatching { vm.api.extSubs(v.id) }.getOrDefault(emptyList())
-        extSubs = got
-        // відео вже почало грати без них — перезавантажуємо з тієї ж позиції
-        if (got.isNotEmpty() && lastUrl.isNotEmpty() && (source == "raw" || source == "copy")) load(lastUrl, player.currentPosition)
-    }
-
     /** Потік з потрібною висотою кадру; перемотка = новий потік з іншого місця. */
     fun playLive(h: Int, atMs: Long) {
         source = "live"
@@ -260,6 +254,16 @@ private fun PlayerBody(vm: AppVM, route: Player, activity: MainActivity, v: Vide
         val at = atMs.coerceIn(0L, maxOf(0L, (v.dur * 1000).toLong() - 1000))
         offset = at
         load(vm.api.liveUrl(v, h, at / 1000.0), 0)
+    }
+
+    LaunchedEffect(v.id) {
+        val got = runCatching { vm.api.extSubs(v.id) }.getOrDefault(emptyList())
+        extSubs = got
+        // відео вже почало грати без них — перезавантажуємо з тієї ж позиції
+        if (got.isNotEmpty() && lastUrl.isNotEmpty()) when (source) {
+            "raw", "copy" -> load(lastUrl, player.currentPosition)
+            "live" -> playLive(liveH, absPos())    // потік на льоту не перемотується — новий з того ж місця
+        }
     }
 
     /** Висота для live: не більша за висоту самого відео. */
