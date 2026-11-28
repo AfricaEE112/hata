@@ -215,7 +215,9 @@ def _tokens(text):
     out = []
     for m in WORD_RE.finditer(text):
         before = text[:m.start()].rstrip(' "«“(\'')
-        cut = text[m.end():m.end() + 1] in ('—', '–')        # обірване «Я кінч—»
+        nxt = re.match(r'(?:\.\.\.|…)\s*([^\W\d_]+)', text[m.end():])
+        cut = text[m.end():m.end() + 1] in ('—', '–') or bool(    # обірване «Я кінч—», «Поче... Почекайте»
+            nxt and nxt.group(1).lower().startswith(m.group(0).lower()) and nxt.group(1).lower() != m.group(0).lower())
         out.append((m.group(0), not before or before[-1] in '.!?…—–-\n', cut))
     return out
 
@@ -224,7 +226,7 @@ def check_line(ln, uk, ctx):
     """Проблеми одного кандидата `uk` для репліки `ln` (без сусідів)."""
     iss = []
     uk = str(uk or '').strip()
-    if ln.kind == 'credits':
+    if ln.kind in ('credits', 'jp'):
         return []
     if not uk:
         return [Issue('empty', 'block', 'порожній переклад')] if ln.en.strip() else []
@@ -352,8 +354,8 @@ def check_line(ln, uk, ctx):
                 j = i + 1
                 while j < len(low) and low[j] in PARTICLES:
                     j += 1
-                if j >= len(low):
-                    continue
+                if j >= len(low) or (toks[j][0][:1].isupper() and j > 0):
+                    continue             # «Я — Моріока.» — ім'я, а не прикметник
                 g2 = lex.gender(low[j])
                 if g2 and not any(p.tag.POS == 'VERB' for p in lex.parses(low[j])):
                     k = j + 1                   # «ти нестерпна розпещена дитина» — прикметники до іменника
@@ -449,7 +451,7 @@ def validate(lines, ctx):
     """Фінальна перевірка всього файлу. Оновлює ln.issues/ln.status і повертає звіт (dict для qa.json)."""
     cross = check_all(lines, ctx)
     for ln in lines:
-        if not ln.en.strip() or ln.kind == 'credits':
+        if not ln.en.strip() or ln.kind in ('credits', 'jp'):
             ln.status, ln.issues = 'ok', []
             continue
         iss = (check_line(ln, ln.uk, ctx) if ln.uk else [Issue('empty', 'block', 'немає перекладу')]) + cross.get(ln.n, [])
@@ -472,7 +474,7 @@ def report(lines, ctx, meta=None):
     return {
         'version': 1,
         'meta': dict(meta or {}, dict_ok=ctx.lex.ok, dict_why=ctx.lex.why),
-        'total': sum(1 for ln in lines if ln.en.strip() and ln.kind != 'credits'),
+        'total': sum(1 for ln in lines if ln.en.strip() and ln.kind not in ('credits', 'jp')),
         'failed': sum(1 for ln in bad if ln.status == 'failed'),
         'warn': sum(1 for ln in bad if ln.status == 'warn'),
         'codes': codes,

@@ -208,6 +208,27 @@ def test_suggest_and_terms():
     assert '«високості»' in pipeline._problem(ln, LEX)
 
 
+def test_karaoke_and_night_28_11():
+    ls = prepare([(0, 3, '息を止めたこの世界'), (0, 3, 'iki o tometa kono sekai'), (0, 3, 'In this world where breath stopped'),
+                  (5, 6, 'OTAKU & NEKOMUSUME & BISHOUJO'), (8, 9, 'Hoshino-san, are you okay?'), (10, 11, 'Sayonara!')])
+    assert [l.kind for l in ls[:4]] == ['jp', 'jp', 'dialog', 'jp'], [l.kind for l in ls]
+    assert ls[4].kind == 'dialog'
+    c = ctx()
+    assert not check_line(ls[0], '', c), 'японське не перекладаємо'
+    assert autofix('Я Хьёдо Томоє, Ёсіно') == 'Я Хьодо Томоє, Йосіно'
+    if HAVE_DICT:
+        assert 'spelling' not in codes(check_line(L('Wait!'), 'Поче... Почекайте! Це справді нормально?', c))
+        assert not blocks(check_line(L("I'm Morioka.", who='Taku'), 'Я — Моріока.', c))
+        assert not blocks(check_line(L('She is a dark elf!'), 'Вона темна ельфійка! Заплідни мене!', c))
+    from tr import pipeline
+    chat, calls = _fake([lambda p: {'sexual': False, 'lines': [_it(x['n'], x['en'][:9], 'У цьому світі, де зупинився подих')
+                                                                for x in p['lines']]}])
+    ls = prepare([(0, 3, '息を止めたこの世界'), (0, 3, 'iki o tometa kono sekai'), (0, 3, 'In this world where breath stopped')])
+    rep = pipeline.translate(ls, ctx(), chat, 'SYS', review=False)
+    assert [l.uk for l in ls] == ['息を止めたこの世界', 'iki o tometa kono sekai', 'У цьому світі, де зупинився подих']
+    assert rep['failed'] == 0 and len(calls[0][0]['lines']) == 1
+
+
 def test_gender():
     if not HAVE_DICT:
         return

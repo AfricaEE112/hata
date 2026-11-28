@@ -11,6 +11,7 @@ import time
 from .lines import Issue, scenes
 from .validate import SHIFT_MIN, accept, check_all, sim, validate
 
+KEEP = ('credits', 'jp')   # лишаються як в оригіналі: подяки фансабу, японська й ромадзі (караоке)
 PREV_CONTEXT = 8        # скільки вже перекладених попередніх реплік показувати моделі (узгодженість звертань)
 FIX_GROUP = 6           # скільки проблемних реплік в одному запиті виправлення
 FIX_TEMPS = (0.3, 0.6, 0.9)
@@ -64,7 +65,7 @@ def _item(ln):
 
 def _done(lines, upto, k=PREV_CONTEXT):
     """Останні k уже прийнятих реплік перед номером upto — як приклади звертань і термінів."""
-    out = [{'n': ln.n, 'en': ln.en, 'uk': ln.uk} for ln in lines[:upto] if ln.uk and ln.kind != 'credits']
+    out = [{'n': ln.n, 'en': ln.en, 'uk': ln.uk} for ln in lines[:upto] if ln.uk and ln.kind not in KEEP]
     return out[-k:]
 
 
@@ -160,9 +161,9 @@ class Translator:
 
     # ---------- 1. переклад сцени ----------
     def scene(self, sc, lines):
-        work = [ln for ln in sc if ln.en.strip() and ln.kind != 'credits']
+        work = [ln for ln in sc if ln.en.strip() and ln.kind not in KEEP]
         for ln in sc:
-            if ln.kind == 'credits':
+            if ln.kind in KEEP:
                 ln.uk, ln.status = ln.en, 'ok'
         if not work:
             return
@@ -220,7 +221,7 @@ class Translator:
 
     # ---------- 3. «жорсткіше» (пропозиції ззовні, напр. tr_harden у VidBox) ----------
     def harden_pass(self, lines):
-        work = [ln for ln in lines if ln.uk and ln.kind != 'credits']
+        work = [ln for ln in lines if ln.uk and ln.kind not in KEEP]
         if not self.harden or not work:
             return
         cur = [ln.uk for ln in work]
@@ -236,7 +237,7 @@ class Translator:
     def review(self, lines):
         """Модель перечитує пари оригінал → переклад і повертає лише репліки зі справжніми помилками сенсу.
         Виправлення приймається, лише якщо проходить accept і схоже на свій переклад більше, ніж на сусідні."""
-        work = [ln for ln in lines if ln.uk and ln.en.strip() and ln.kind != 'credits']
+        work = [ln for ln in lines if ln.uk and ln.en.strip() and ln.kind not in KEEP]
         for i in range(0, len(work), REVIEW_BATCH):
             grp = work[i:i + REVIEW_BATCH]
             by_n = {ln.n: ln for ln in grp}
@@ -294,7 +295,7 @@ class Translator:
                     ln.uk = old_uk
 
     def pending(self, lines):
-        return [ln for ln in lines if ln.en.strip() and ln.kind != 'credits' and not ln.uk]
+        return [ln for ln in lines if ln.en.strip() and ln.kind not in KEEP and not ln.uk]
 
     # ---------- продовження після обриву ----------
     def _key(self, lines):
@@ -347,7 +348,7 @@ class Translator:
         total = len(sc) + self.rounds + 2
         self.resumed = self.load(lines)
         for i, s in enumerate(sc):
-            work = [ln for ln in s if ln.en.strip() and ln.kind != 'credits']
+            work = [ln for ln in s if ln.en.strip() and ln.kind not in KEEP]
             if self.resumed and work and all(ln.uk or ln.cands for ln in work):
                 continue                 # цю сцену вже перекладено до обриву
             self.scene(s, lines)
